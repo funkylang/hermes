@@ -549,7 +549,9 @@ class CLIChatTurnMixin:
         # (appending it to `response` duplicated it on redraw).
         if _show_interrupt_marker:
             with _suspend_output_history():
-                _cprint(f"\n{_DIM}{t('cli.chat.interrupted_marker')}{_RST}")
+                from cli import datetime as _datetime
+                _ts_suffix = f"{_DIM} {_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
+                _cprint(f"\n{_DIM}── [Interrupted — processing new message]{_RST}{_ts_suffix}")
         # Focus view: "⋯ N tool lines hidden" after the answer; resets the counter.
         try:
             self._emit_focus_recovery_line()
@@ -649,14 +651,14 @@ class CLIChatTurnMixin:
 
     def _chat_print_reasoning_box(self, turn):
         """Collapsed reasoning box when show_reasoning is on and streaming did not already show it."""
-        from cli import _DIM, _RST, _cprint
+        from cli import _DIM, _RST, _cprint, datetime
         # _reasoning_shown_this_turn, not _reasoning_stream_started: the latter resets at
         # intermediate turn boundaries (tool loops) and re-rendered the box after the answer.
         if self.show_reasoning and turn.result and not self._reasoning_shown_this_turn:
             reasoning = turn.result.get("last_reasoning")
             if reasoning:
                 w = self._scrollback_box_width()
-                r_label = f" {t('cli.chat.reasoning_label')} "
+                r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if getattr(self, "show_timestamps", False) else " Reasoning "
                 r_top = f"{_DIM}┌─{r_label}{'─' * max(w - 3 - len(r_label), 0)}┐{_RST}"
                 r_bot = f"{_DIM}└{'─' * (w - 2)}┘{_RST}"
                 # First 10 lines unless the user opted into /reasoning full.

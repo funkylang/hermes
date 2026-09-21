@@ -1505,7 +1505,9 @@ class CLITuiMixin:
                     accepted = False
                 if accepted:
                     preview = text[:80] + ("..." if len(text) > 80 else "")
-                    _cprint(f"  {_ACCENT}{t('cli.tui.steered', preview=preview)}{_RST}")
+                    from cli import datetime as _datetime
+                    _ts_suffix = f" {_DIM}{_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
+                    _cprint(f"  {_ACCENT}⏩ Steered: '{preview}'{_RST}{_ts_suffix}")
                 else:
                     _effective_mode = "queue"
         if _effective_mode == "queue":
@@ -1525,7 +1527,9 @@ class CLITuiMixin:
                     redirected = False
             if redirected:
                 preview = text[:80] + ("..." if len(text) > 80 else "")
-                _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
+                from cli import datetime as _datetime
+                _ts_suffix = f" {_DIM}{_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
+                _cprint(f"  {_ACCENT}↪ Redirected current turn: '{preview}'{_RST}{_ts_suffix}")
             else:
                 self._interrupt_queue.put(payload)
                 try:
