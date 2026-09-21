@@ -716,9 +716,9 @@ class CLIInfoMixin:
                 print("  No prompt info item with that number yet — run /pi or /pi all first.")
                 return
             form = "human-readable" if mode == "human" else "raw wire JSON"
-            self._emit_pi_line(f"  ── Prompt #{seq} · item {args[0]} ({form}) ──")
+            self._emit_pi_line(f"── Prompt #{seq} · item {args[0]} ({form}) ──")
             for line in text.splitlines():
-                self._emit_pi_line(f"  {line}")
+                self._emit_pi_line(line)
             self._emit_pi_line("")
             return
 
@@ -726,7 +726,7 @@ class CLIInfoMixin:
         text = manifest.render(last_only=not show_all)
         self._emit_pi_line("")
         for line in text.splitlines():
-            self._emit_pi_line(f"  {line}")
+            self._emit_pi_line(line)
         self._emit_pi_line("")
 
     def _set_pi_redirect(self, cmd_original: str = ""):
@@ -795,11 +795,6 @@ class CLIInfoMixin:
                 self.agent._pi_display_mode = self._pi_display_mode
             except Exception:
                 pass
-        cur = getattr(self, "_pi_display_mode", "off")
-        hint = ("human-readable text" if cur == "human"
-                else "raw wire JSON (as sent)")
-        # Confirmation stays on screen so the user sees the change took effect.
-        print(f"  /pi drill-down: {hint}")
 
     def _show_usage(self):
         """Rate limits + session token usage (when a live agent exists) + Nous credits.
