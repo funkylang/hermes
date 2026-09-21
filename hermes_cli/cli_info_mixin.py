@@ -716,18 +716,64 @@ class CLIInfoMixin:
                 print("  No prompt info item with that number yet — run /pi or /pi all first.")
                 return
             form = "human-readable" if mode == "human" else "raw wire JSON"
-            print(f"  ── Prompt #{seq} · item {args[0]} ({form}) ──")
+            self._emit_pi_line(f"  ── Prompt #{seq} · item {args[0]} ({form}) ──")
             for line in text.splitlines():
-                print(f"  {line}")
-            print()
+                self._emit_pi_line(f"  {line}")
+            self._emit_pi_line("")
             return
 
         show_all = bool(args) and args[0] == "all"
         text = manifest.render(last_only=not show_all)
-        print()
+        self._emit_pi_line("")
         for line in text.splitlines():
-            print(f"  {line}")
-        print()
+            self._emit_pi_line(f"  {line}")
+        self._emit_pi_line("")
+
+    def _set_pi_redirect(self, cmd_original: str = ""):
+        """`/redirect [path | off]` — route /pi command output to a file or another fd.
+
+        off (default): /pi prints to the terminal as usual. A path (file, or e.g.
+        /dev/pts/0) is recorded and re-opened with O_APPEND before every write, so
+        deleting the target mid-session just means the next write re-creates it —
+        nothing is silently lost to a deleted inode."""
+        arg = cmd_original.split(maxsplit=1)[1].strip() if len(cmd_original.split(maxsplit=1)) > 1 else ""
+        if not arg:
+            print("  Usage: /redirect <path> | off")
+            return
+
+        # 'off' clears any existing redirect.
+        if arg.lower() == "off":
+            self._pi_redirect_path = None
+            print("  /pi output: terminal (no redirect)")
+            return
+
+        expanded = os.path.expanduser(arg)
+        # Validate the target opens now so typos surface immediately; we re-open per write later.
+        try:
+            fd = os.open(expanded, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            os.close(fd)
+            self._pi_redirect_path = expanded
+            print(f"  /pi output → {expanded}")
+        except OSError as e:
+            self._pi_redirect_path = None
+            print(f"  Could not redirect to {expanded}: {e}")
+
+    def _emit_pi_line(self, line: str = "") -> None:
+        """Route one /pi output line: to the /redirect target when set, else the terminal.
+
+        The target is re-opened (append) for every line — if the user deleted or
+        rotated the file mid-session, the next write re-creates it fresh."""
+        path = getattr(self, "_pi_redirect_path", None)
+        if path is not None:
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+                with os.fdopen(fd, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+                return
+            except OSError:
+                # Target became unwritable (bad path, permissions): fall back to screen.
+                self._pi_redirect_path = None
+        print(line)
 
     def _set_json_display_mode(self, cmd_original: str = ""):
         """`/json [off|human]` — drill-down form for /pi <line>.

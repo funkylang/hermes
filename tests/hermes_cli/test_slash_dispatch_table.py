@@ -24,6 +24,10 @@ OLD_CHAIN_COMMANDS = [
     "subgoal", "skin", "voice", "wake", "busy", "indicator",
 ]
 
+# Observability commands added on top of the old chain (prompt manifest work);
+# they live in _SLASH_DISPATCH but were never in the legacy if/elif list.
+_CUSTOM_COMMANDS = ["pi", "json", "redirect"]
+
 
 def test_every_old_branch_resolves_to_a_handler():
     for name in OLD_CHAIN_COMMANDS:
@@ -34,7 +38,10 @@ def test_every_old_branch_resolves_to_a_handler():
         assert isinstance(pass_arg, bool)
     # explicit table entries are only the ones the naming convention can't cover
     for name, (method_name, pass_arg) in HermesCLI._SLASH_DISPATCH.items():
-        assert name in OLD_CHAIN_COMMANDS
+        assert name in OLD_CHAIN_COMMANDS or name in _CUSTOM_COMMANDS
+        if name not in _CUSTOM_COMMANDS:
+            # For old-chain commands the (method, arg) tuple must be the exact one
+            # the legacy branch had; custom commands are exempt from that parity.
             assert (method_name, pass_arg) != (f"_handle_{name.replace('-', '_')}_command", True), name
 
 
@@ -43,7 +50,9 @@ def test_registry_names_resolve_into_the_table():
 
     for name in HermesCLI._SLASH_DISPATCH:
         cmd = resolve_command(name)
-        assert cmd is not None and HermesCLI._slash_handler(cmd.name) is not None, name
+        # pi/json/redirect are custom and not in the central registry.
+        if name not in _CUSTOM_COMMANDS:
+            assert cmd is not None and HermesCLI._slash_handler(cmd.name) is not None, name
     # registry commands the CLI never handled inline must still fall through
     dispatched = {c.name for c in COMMAND_REGISTRY if HermesCLI._slash_handler(c.name)}
     # /login has no old branch; it resolves through the naming-convention fallback.
