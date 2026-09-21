@@ -3028,8 +3028,12 @@ class _StreamingCall(StreamingWaitMonitor):
         inference: 30s, or capped at 60s when configured."""
         cfg = get_provider_request_timeout(self.agent.provider, self.agent.model)
         base = cfg if cfg is not None else env_float("HERMES_API_TIMEOUT", 1800.0)
+        # Local endpoints (Ollama, llama.cpp, vLLM) prefill for minutes on large
+        # contexts — the connect/pool timeout must survive until first token.
+        is_local = bool(self.agent.base_url and is_local_endpoint(self.agent.base_url))
         if cfg is not None:
-            return base, cfg, min(base, 60.0)
+            conn_cap = base if is_local else min(base, 60.0)
+            return base, cfg, conn_cap
         read = env_float("HERMES_STREAM_READ_TIMEOUT", 120.0)
         stale = self._stream_stale_timeout
         if read == 120.0 and self.agent.base_url and is_local_endpoint(self.agent.base_url):
@@ -3040,7 +3044,8 @@ class _StreamingCall(StreamingWaitMonitor):
             # tolerates that, so the raw read timeout must not fire first.
             read = stale
             logger.debug("Cloud reasoning stream — read timeout raised to %.0fs to match stale-stream detector", read)
-        return base, read, 30.0
+        conn_cap = base if is_local else 30.0
+        return base, read, conn_cap
 
     @staticmethod
     def _choiceless_chunk(chunk, finish_reason):
