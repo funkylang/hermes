@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from utils import safe_json_loads
 from agent.i18n import t
 from agent.redact import redact_sensitive_text
+from agent.path_display import display_path
 from agent.tool_result_classification import file_mutation_result_landed, is_guardrail_refusal
 
 logger = logging.getLogger(__name__)
@@ -415,7 +416,8 @@ def _preview_shell(key: str):
 
 def _preview_read_file(args: dict, max_len: int) -> str | None:
     path = args.get("path") or args.get("file") or args.get("filepath")
-    label = (Path(str(path).replace("\\", "/")).name or str(path)) if path is not None else None
+    # ~-shortened so same-named files stay distinguishable in the feed.
+    label = display_path(path) if path is not None else None
     return None if label is None else _tail_trunc(f"{label} {_read_file_line_label(args)}".strip(), max_len) or None
 
 
@@ -983,8 +985,11 @@ def _trim_error(msg: str) -> str:
     msg = msg.strip()
     if "File not found:" in msg:
         tail = msg.partition("File not found:")[2].strip()
-        if "/" in tail:
-            msg = t("display.failure.file_not_found", name=tail.rsplit("/", 1)[-1])
+        if "/" in tail or "\\" in tail:
+            msg = f"File not found: {display_path(tail)}"
+    # ~-shorten every home-relative path, not just the first (e.g. stale-write
+    # refusals repeat the path); saves chars for the cap below.
+    msg = " ".join(display_path(tok) if tok.startswith("/") else tok for tok in msg.split())
     return _tail_trunc(msg, _ERROR_SUFFIX_MAX_LEN)
 
 
@@ -1048,8 +1053,8 @@ def _cute_trunc(s) -> str:
 
 
 def _cute_path(p) -> str:
-    """Head-truncate a path to the configured preview cap, keeping the filename end."""
-    p = str(p)
+    """~-shorten then head-truncate a path to the configured preview cap (keeps the tail)."""
+    p = display_path(str(p))
     limit = _tool_preview_max_len
     if not limit or len(p) <= limit:
         return p
