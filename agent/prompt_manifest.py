@@ -16,10 +16,14 @@ Model:
   - After the response arrives, ``fill_usage`` stamps that record's provider
     token counts.
 
-In-memory only (per process), bounded to the last MAX_RECORDS records.
-Full prompt TEXT is kept for drill-down (``get_line``) but capped at
-MAX_TEXT_CHARS total — when the cap is hit the OLDEST records lose their text
-first; char counts and provider token usage always survive.
+In-memory only (per process).  Only the LAST prompt per agent is kept; each
+new send replaces the previous record.  Prompt TEXT for drill-down is stored
+once, not per record: system-prompt tiers and tool schemas are session-stable
+(rebuilt only on compression), so the manifest keeps one canonical copy of
+each; records reference it by id and keep char counts only.  Conversation-
+message text is stored per-record but capped at MAX_TEXT_CHARS — when the cap
+is hit, OLDEST messages lose their text first.  Tier/schema text and provider
+token usage always survive.
 
 Read side: ``render()`` numbers every content line; ``get_line(n)`` resolves a
 number from the last render to that component's full text.
@@ -42,12 +46,14 @@ from typing import Any, Dict, List, Optional, Tuple
 class ComponentNode:
     """One named prompt component. Char count; no token estimation.
 
-    Drill-down text lives per-record (``PromptRecord.system_texts``) so the
-    evictor can drop it from old records without shared-state games.
+    Drill-down text is stored on the node itself (``text``); records hold
+    a reference to it, so identical tiers share one text copy across every
+    record and across agents that register the same shared id.
     """
 
     description: str
     chars: int
+    text: str = ""
 
 
 @dataclass
@@ -257,16 +263,18 @@ def _wire_message_node(msg: Any) -> Optional[MessageNode]:
 
 @dataclass
 class PromptRecord:
-    """What one API call's prompt consisted of, plus its provider token counts."""
+    """What one API call's prompt consisted of, plus its provider token counts.
+
+    System tiers and tool schemas carry only char counts here; their drill-down
+    text lives on the canonical objects (``ComponentNode.text`` / the manifest's
+    tool-schema store) so it is stored once per agent, never per record.
+    """
 
     seq: int
     built_at: float = field(default_factory=time.time)
-    system_components: List[ComponentNode] = field(default_factory=list)  # ordered snapshot
+    system_components: List[ComponentNode] = field(default_factory=list)  # refs to canonical nodes
     messages: List[MessageNode] = field(default_factory=list)             # in send order (no system)
-    system_texts: List[str] = field(default_factory=list)   # tier text, parallel to components
     tool_schemas_chars: int = 0
-    tool_schemas_text: str = ""  # full JSON, pretty (human drill-down)
-    tool_schemas_raw: str = ""   # compact JSON as sent (off mode drill-down)
     label: str = ""
     # Filled after the API response lands (None until then):
     prompt_tokens: Optional[int] = None
@@ -287,17 +295,23 @@ class PromptManifest:
     instrumentation must not break a turn.
     """
 
-    MAX_RECORDS = 200          # bounded memory; oldest dropped first
-    MAX_TEXT_CHARS = 4_000_000  # cap on stored drill-down text; oldest loses it
+    MAX_RECORDS = 1            # only the LAST prompt per agent is kept
+    MAX_TEXT_CHARS = 4_000_000  # cap on per-record message drill-down text
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._records: List[PromptRecord] = []
+        self._next_seq = 1     # monotonic prompt number for the "Prompt #N" header
         self._shared_components: Dict[str, ComponentNode] = {}
+        # Canonical system-tier nodes (cid -> node); replaced wholesale on each
+        # build so drill-down always shows the CURRENT tier text.
+        self._system_by_cid: Dict[str, ComponentNode] = {}
         # Persistent system-component list (set at build, referenced by sends):
         self._current_system: List[ComponentNode] = []
-        # Parallel drill-down text for those tiers:
-        self._current_system_texts: List[str] = []
+        # Canonical tool-schema drill-down text (stored once; refreshed only
+        # when the serialized payload actually changes).
+        self._tools_raw: str = ""
+        self._tools_pretty: str = ""
         # line number (last render) -> (record_seq, kind, index), for get_line()
         # kind in {stats_tokens, stats_ratio, sys, tools, msg}; index = item pos
         self._line_to_seq: Dict[int, Tuple[int, str, int]] = {}
@@ -326,16 +340,21 @@ class PromptManifest:
         """Store the system prompt's ordered tier components for this agent.
 
         Called from ``build_system_prompt`` after the tiers are assembled.
-        Every subsequent send snapshots these until they are replaced (a
-        rebuild after compression).  Blank tiers are dropped; *texts* (same
-        order) is kept per-record for /pi drill-down.
+        Blank tiers are dropped; *texts* (same order) become the canonical
+        drill-down text, stored ONCE here (attached to the nodes) and shared
+        by every record until a rebuild replaces them — not copied per send.
         """
         with self._lock:
-            keep = [i for i, c in enumerate(components or []) if c and c.chars > 0]
-            self._current_system = [(components or [])[i] for i in keep]
-            self._current_system_texts = [
-                (texts or [""] * len(components or []))[i] for i in keep
-            ]
+            comps = list(components or [])
+            keep = [i for i, c in enumerate(comps) if c and c.chars > 0]
+            kept_nodes = []
+            for i in keep:
+                node = comps[i]
+                text = texts[i] if isinstance(texts, list) and i < len(texts) else ""
+                node = ComponentNode(node.description, node.chars, text or node.text)
+                self._system_by_cid[f"sys|{node.description}"] = node
+                kept_nodes.append(node)
+            self._current_system = kept_nodes
 
     def _tool_schema_chars(self, tools: Any) -> Tuple[int, str]:
         """(char count, wire form) of the tool-schema payload (compact JSON, as sent)."""
@@ -370,25 +389,32 @@ class PromptManifest:
         Pass ``api_messages`` in its final wire form (post-sanitization) and the
         tools list being sent.  Returns the record so callers can later
         :meth:`fill_usage` it; the record is already stored.  Never raises.
+
+        Only the LAST prompt per agent is kept (MAX_RECORDS = 1): each send
+        replaces the previous record, and its per-record message text is what
+        fills MAX_TEXT_CHARS.
         """
         try:
             with self._lock:
                 messages = [n for n in (_wire_message_node(m) for m in (api_messages or [])) if n]
                 tool_chars, tool_raw = self._tool_schema_chars(tools_for_api)
+                # Canonical tool-schema text is stored once and refreshed only
+                # when the serialized payload actually changes.
+                if tool_raw != self._tools_raw:
+                    self._tools_raw = tool_raw
+                    self._tools_pretty = self._tool_schema_text(tools_for_api)
                 record = PromptRecord(
-                    seq=len(self._records) + 1,
+                    seq=self._next_seq,
                     built_at=time.time(),
                     system_components=list(self._current_system),
-                    system_texts=list(self._current_system_texts),
                     messages=messages,
                     tool_schemas_chars=tool_chars,
-                    tool_schemas_text=self._tool_schema_text(tools_for_api),
-                    tool_schemas_raw=tool_raw,
                     label=label or "",
                 )
                 self._records.append(record)
                 if len(self._records) > self.MAX_RECORDS:
                     del self._records[:len(self._records) - self.MAX_RECORDS]
+                self._next_seq += 1
                 self._trim_text_budget()
                 return record
         except Exception:
@@ -422,55 +448,44 @@ class PromptManifest:
                 + rec.tool_schemas_chars)
 
     def _record_text_chars(self, rec: PromptRecord) -> int:
-        n = (len(rec.tool_schemas_text or "") + len(rec.tool_schemas_raw or "")
-             + sum(len(t) for t in rec.system_texts))
+        """Chars of drill-down text stored per-record (message texts only;
+        tier/schema text is canonical and shared, never evicted)."""
+        n = 0
         for m in rec.messages:
             n += (len(m.content or "") + len(m.tool_text or "")
                   + len(m.raw_content or "") + len(m.raw_tool_text or ""))
         return n
 
     def _trim_text_budget(self) -> None:
-        """Evict stored text from the OLDEST records until under budget.
+        """Evict stored message text from the OLDEST messages until under budget.
 
-        Char counts and provider token usage always remain; only drill-down
-        text goes, oldest records first (their tier/system text before their
-        message texts).  Caller holds ``self._lock``.
+        Char counts and provider token usage always remain; tier/schema drill-down
+        text is canonical (stored once) and never evicted.  Only per-record
+        message texts go, oldest messages first.  Caller holds ``self._lock``.
         """
         while True:
             total = sum(self._record_text_chars(r) for r in self._records)
             if total <= self.MAX_TEXT_CHARS:
                 return
             stripped_any = False
-            # Pass 1: per-record tier + schema text (the repetitive bulk),
-            # oldest records first.
-            for rec in reversed(self._records):
-                if any(rec.system_texts) or rec.tool_schemas_text or rec.tool_schemas_raw:
-                    rec.system_texts = [""] * len(rec.system_texts)
-                    rec.tool_schemas_text = ""
-                    rec.tool_schemas_raw = ""
-                    stripped_any = True
-            if sum(self._record_text_chars(r) for r in self._records) <= self.MAX_TEXT_CHARS:
-                return
-            # Pass 2: message texts, oldest records first.
-            for rec in reversed(self._records):
-                if any((m.content or m.tool_text) or (m.raw_content or m.raw_tool_text)
-                       for m in rec.messages):
-                    for m in rec.messages:
+            # Messages of each record (only one kept), oldest first.
+            for rec in self._records:
+                for m in rec.messages:
+                    if any((m.content or m.tool_text) or (m.raw_content or m.raw_tool_text)):
                         m.content, m.tool_text = "", ""
                         m.raw_content, m.raw_tool_text = "", ""
-                    stripped_any = True
+                        stripped_any = True
             if not stripped_any:
                 return  # nothing left to strip; accept over-budget
 
     # -- drill-down -------------------------------------------------------
 
     def get_line(self, line_no: int, display_mode: str = "off") -> Optional[Tuple[int, str]]:
-        """Resolve a numbered output line (from /pi or /pi all) to prompt text.
+        """Resolve a numbered output line (from /pi) to prompt text.
 
         Returns ``(seq, full_text)`` or None if unknown.  Numbers refer to the
-        lines shown by the most recent ``render()`` call — so run /pi or
-        /pi all first, then use its numbers.  Walks the same line ordering
-        ``render()`` uses.
+        lines shown by the most recent ``render()`` call — so run /pi first,
+        then use its numbers.  Walks the same line ordering ``render()`` uses.
 
         ``display_mode`` (set via /json): "off" (default) shows message contents
         in their raw wire form (exactly as sent); "human" decodes tool-result
@@ -490,17 +505,18 @@ class PromptManifest:
 
             if kind == "sys":
                 comp = rec.system_components[idx]
-                t = rec.system_texts[idx] if idx < len(rec.system_texts) else ""
+                t = comp.text or ""
                 if not t:
-                    return seq, f"[{comp.description}] text not available (evicted to save memory)"
+                    return seq, f"[{comp.description}] text not available (not captured)"
                 return seq, f"[{comp.description} ({len(t):,} chars)]\n\n{t}"
 
             if kind == "tools":
-                raw = rec.tool_schemas_raw or ""
-                pretty = rec.tool_schemas_text or ""
+                with self._lock:
+                    raw = self._tools_raw
+                    pretty = self._tools_pretty
                 t = self._content_for_mode(pretty, raw, display_mode)
                 if not t:
-                    return seq, "[tool schemas] text not available (evicted to save memory)"
+                    return seq, "[tool schemas] text not available (not captured)"
                 form = "wire form" if display_mode != "human" else "pretty-printed JSON"
                 return seq, f"[tool schemas ({len(t):,} chars, {form})]\n\n{t}"
 
@@ -529,8 +545,8 @@ class PromptManifest:
 
     # -- display (slash command) -----------------------------------------
 
-    def render(self, last_only: bool = True) -> str:
-        """Numbered text output of the manifest: latest prompt (default) or all.
+    def render(self) -> str:
+        """Numbered text output of the manifest's single stored prompt.
 
         Every content line is prefixed with its global line number; pass that
         number to ``get_line`` (via /pi <no>) for the component's full text.
@@ -542,11 +558,10 @@ class PromptManifest:
             if not records:
                 return "Prompt manifest: no API calls recorded in this session yet."
 
-            chosen = [records[-1]] if last_only else records
             out: List[str] = []
             line_map: Dict[int, Tuple[int, str, int]] = {}
             n = 0
-            for rec in chosen:
+            for rec in records:
                 sys_chars = sum(c.chars for c in rec.system_components)
                 msg_chars = sum(m.chars + m.tool_chars for m in rec.messages)
                 tot_chars = self._record_totals(rec)

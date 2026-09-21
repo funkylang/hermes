@@ -695,13 +695,12 @@ class CLIInfoMixin:
         print()
 
     def _show_prompt_info(self, cmd_original: str = ""):
-        """`/pi [all | <line-number>]` — prompt info (observability).
+        """`/pi [<line-number>]` — prompt info (observability).
 
         No arg: shows what the most recent API call's prompt was made of, per
-        component in chars plus the provider's real token total. `/pi all`:
-        every recorded call. `/pi N`: full text of numbered item N from the
-        previous view; its form follows the /json display mode. Read-only;
-        never breaks prompt caching."""
+        component in chars plus the provider's real token total. `/pi N`: full
+        text of numbered item N from the previous view; its form follows the
+        /json display mode. Read-only; never breaks prompt caching."""
         if not self.agent:
             print("  (._.) No active agent -- send a message first.")
             return
@@ -713,7 +712,7 @@ class CLIInfoMixin:
             mode = getattr(self.agent, "_pi_display_mode", "off")
             seq, text = (manifest.get_line(int(args[0]), display_mode=mode) or (None, None))
             if text is None:
-                print("  No prompt info item with that number yet — run /pi or /pi all first.")
+                print("  No prompt info item with that number yet — run /pi first.")
                 return
             form = "human-readable" if mode == "human" else "raw wire JSON"
             self._emit_pi_line(f"── Prompt #{seq} · item {args[0]} ({form}) ──")
@@ -722,8 +721,7 @@ class CLIInfoMixin:
             self._emit_pi_line("")
             return
 
-        show_all = bool(args) and args[0] == "all"
-        text = manifest.render(last_only=not show_all)
+        text = manifest.render()
         self._emit_pi_line("")
         for line in text.splitlines():
             self._emit_pi_line(line)

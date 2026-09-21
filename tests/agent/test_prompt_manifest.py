@@ -45,7 +45,7 @@ def test_render_numbers_lines_and_get_line_resolves_them():
     manifest.fill_usage(rec.seq, prompt_tokens=100, completion_tokens=5,
                         cache_read_tokens=None, latency_ms=10.0)
 
-    rendered = manifest.render(last_only=True)
+    rendered = manifest.render()
     assert "[1]" in rendered
     assert "tokens: prompt=100" in rendered
 
@@ -57,22 +57,46 @@ def test_render_numbers_lines_and_get_line_resolves_them():
     assert "hello" in text
 
 
+def test_only_last_prompt_is_kept():
+    """MAX_RECORDS=1: each send replaces the previous; prompt numbers stay monotonic."""
+    manifest = _make_manifest()
+    r1 = manifest.record_send([{"role": "user", "content": "first"}])
+    r2 = manifest.record_send([{"role": "user", "content": "second"}])
+    assert r1 is not None and r2 is not None
+    assert len(manifest._records) == 1
+    kept = manifest._records[-1]
+    # It is the SECOND send, but its seq reflects its position in the stream.
+    assert kept.seq == r2.seq > r1.seq
+    rendered = manifest.render()
+    assert f"Prompt #{r2.seq}" in rendered
+    assert "Prompt #" + str(r1.seq) not in rendered
+
+
 def test_get_line_survives_evicted_text():
+    # Tier text is canonical (stored once) so it can never be evicted;
+    # over-budget MESSAGE text gets dropped from drill-down instead.
     manifest = TinyTextManifest()
     manifest.set_system_components(
         [ComponentNode("core instructions", len("CORE" * 10))],
         texts=["CORE" * 10],
     )
-    manifest.record_send([{"role": "user", "content": "hi"}])
-    manifest.record_send([{"role": "user", "content": "second message"}])
+    rec = manifest.record_send([{"role": "user", "content": "x" * 50}])
+    assert rec is not None
 
-    rendered = manifest.render(last_only=True)
-    assert "[1]" in rendered
+    # Message text over budget → evicted from the record.
+    assert not rec.messages[0].content
 
-    got = manifest.get_line(1)  # sys tier of the latest record — text evicted
-    assert got is not None
-    _, text = got
-    assert "text not available" in text
+    rendered = manifest.render()
+    # Item 1 = system tier — still has its full canonical text.
+    got_sys = manifest.get_line(1)
+    assert got_sys is not None
+    assert "CORE" * 10 in got_sys[1]
+
+    # Item 2 = the user message — its text was evicted; drill-down stays graceful.
+    got_msg = manifest.get_line(2)
+    assert got_msg is not None
+    assert "role=user" in got_msg[1]
+    assert "(no content)" in got_msg[1]
 
 
 def test_char_counts_ignore_evicted_text():
@@ -159,7 +183,7 @@ def test_get_line_display_mode_off_vs_human():
     raw = json.dumps({"content": "1|line one\n2|line two"})
     rec = manifest.record_send([{"role": "tool", "name": "read_file", "content": raw}])
     assert rec is not None
-    rendered = manifest.render(last_only=True)
+    rendered = manifest.render()
 
     # Find the message line number.
     msg_line_no = None
@@ -190,7 +214,7 @@ def test_get_line_tool_call_args_wire_form_off():
          "tool_calls": [{"function": {"name": "read_file", "arguments": args_str}}]},
     ])
     assert rec is not None
-    rendered = manifest.render(last_only=True)
+    rendered = manifest.render()
     msg_line_no = None
     for i, line in enumerate(rendered.splitlines(), start=1):
         if "[msg]" in line:
