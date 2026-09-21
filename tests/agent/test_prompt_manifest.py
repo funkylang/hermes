@@ -1,8 +1,8 @@
 """Tests for agent/prompt_manifest.py — prompt manifest instrumentation.
 
-Covers the node/record model, render numbering + get_line resolution, text
-budget eviction, and JSON envelope decoding of tool-result content for
-readable /pi drill-downs.
+Covers the node/record model (single stored prompt, canonical tier/schema
+text), render numbering + get_line resolution, and JSON envelope decoding of
+tool-result content for readable /pi drill-downs.
 """
 
 import json
@@ -27,12 +27,6 @@ def _make_manifest() -> PromptManifest:
         texts=["CORE" * 10],
     )
     return manifest
-
-
-class TinyTextManifest(PromptManifest):
-    """Manifest with a tiny text budget so eviction runs deterministically."""
-
-    MAX_TEXT_CHARS = 10
 
 
 def test_render_numbers_lines_and_get_line_resolves_them():
@@ -72,42 +66,30 @@ def test_only_last_prompt_is_kept():
     assert "Prompt #" + str(r1.seq) not in rendered
 
 
-def test_get_line_survives_evicted_text():
-    # Tier text is canonical (stored once) so it can never be evicted;
-    # over-budget MESSAGE text gets dropped from drill-down instead.
-    manifest = TinyTextManifest()
-    manifest.set_system_components(
-        [ComponentNode("core instructions", len("CORE" * 10))],
-        texts=["CORE" * 10],
-    )
-    rec = manifest.record_send([{"role": "user", "content": "x" * 50}])
+def test_message_text_stored_verbatim_no_eviction():
+    # Drill-down text is never evicted: every stored message keeps its text,
+    # and tier text is canonical (stored once). 1-2 MB per agent is fine.
+    manifest = _make_manifest()
+    rec = manifest.record_send([{"role": "user", "content": "x" * 50000}])
     assert rec is not None
+    assert rec.messages[0].content == "x" * 50000
 
-    # Message text over budget → evicted from the record.
-    assert not rec.messages[0].content
+    manifest.render()  # establishes the item numbers for get_line()
+    got_msg = manifest.get_line(2)  # the user message line
+    assert got_msg is not None
+    assert "x" * 50000 in got_msg[1]
 
-    rendered = manifest.render()
-    # Item 1 = system tier — still has its full canonical text.
-    got_sys = manifest.get_line(1)
+    got_sys = manifest.get_line(1)  # system tier — canonical text intact
     assert got_sys is not None
     assert "CORE" * 10 in got_sys[1]
 
-    # Item 2 = the user message — its text was evicted; drill-down stays graceful.
-    got_msg = manifest.get_line(2)
-    assert got_msg is not None
-    assert "role=user" in got_msg[1]
-    assert "(no content)" in got_msg[1]
 
-
-def test_char_counts_ignore_evicted_text():
-    manifest = TinyTextManifest()
+def test_char_counts_reflect_wire_sizes():
+    manifest = _make_manifest()
     rec = manifest.record_send([{"role": "user", "content": "abcd"}])
     assert rec is not None
-    # Second, larger send pushes the first record's stored text out of budget.
-    manifest.record_send([{"role": "user", "content": "much longer text here now"}])
-
-    # Provider-agnostic totals still reflect wire sizes, not stored text.
-    assert manifest._record_totals(rec) == len("abcd")
+    # Totals reflect the wire sizes of all components.
+    assert manifest._record_totals(rec) == (len("CORE" * 10) + len("abcd"))
 
 
 def test_record_send_never_raises_on_odd_inputs():

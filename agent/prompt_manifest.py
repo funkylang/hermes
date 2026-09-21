@@ -21,9 +21,8 @@ new send replaces the previous record.  Prompt TEXT for drill-down is stored
 once, not per record: system-prompt tiers and tool schemas are session-stable
 (rebuilt only on compression), so the manifest keeps one canonical copy of
 each; records reference it by id and keep char counts only.  Conversation-
-message text is stored per-record but capped at MAX_TEXT_CHARS — when the cap
-is hit, OLDEST messages lose their text first.  Tier/schema text and provider
-token usage always survive.
+message text is stored verbatim per record (single record kept ⇒ bounded by
+the context window; no eviction).
 
 Read side: ``render()`` numbers every content line; ``get_line(n)`` resolves a
 number from the last render to that component's full text.
@@ -296,7 +295,6 @@ class PromptManifest:
     """
 
     MAX_RECORDS = 1            # only the LAST prompt per agent is kept
-    MAX_TEXT_CHARS = 4_000_000  # cap on per-record message drill-down text
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -391,8 +389,7 @@ class PromptManifest:
         :meth:`fill_usage` it; the record is already stored.  Never raises.
 
         Only the LAST prompt per agent is kept (MAX_RECORDS = 1): each send
-        replaces the previous record, and its per-record message text is what
-        fills MAX_TEXT_CHARS.
+        replaces the previous record.
         """
         try:
             with self._lock:
@@ -415,7 +412,6 @@ class PromptManifest:
                 if len(self._records) > self.MAX_RECORDS:
                     del self._records[:len(self._records) - self.MAX_RECORDS]
                 self._next_seq += 1
-                self._trim_text_budget()
                 return record
         except Exception:
             logger = logging.getLogger(__name__)
@@ -439,44 +435,13 @@ class PromptManifest:
             logger = logging.getLogger(__name__)
             logger.debug("prompt_manifest.fill_usage failed", exc_info=True)
 
-    # -- text budget ------------------------------------------------------
+    # -- sizes ------------------------------------------------------------
 
     @staticmethod
     def _record_totals(rec: PromptRecord) -> int:
         return (sum(c.chars for c in rec.system_components)
                 + sum(m.chars + m.tool_chars for m in rec.messages)
                 + rec.tool_schemas_chars)
-
-    def _record_text_chars(self, rec: PromptRecord) -> int:
-        """Chars of drill-down text stored per-record (message texts only;
-        tier/schema text is canonical and shared, never evicted)."""
-        n = 0
-        for m in rec.messages:
-            n += (len(m.content or "") + len(m.tool_text or "")
-                  + len(m.raw_content or "") + len(m.raw_tool_text or ""))
-        return n
-
-    def _trim_text_budget(self) -> None:
-        """Evict stored message text from the OLDEST messages until under budget.
-
-        Char counts and provider token usage always remain; tier/schema drill-down
-        text is canonical (stored once) and never evicted.  Only per-record
-        message texts go, oldest messages first.  Caller holds ``self._lock``.
-        """
-        while True:
-            total = sum(self._record_text_chars(r) for r in self._records)
-            if total <= self.MAX_TEXT_CHARS:
-                return
-            stripped_any = False
-            # Messages of each record (only one kept), oldest first.
-            for rec in self._records:
-                for m in rec.messages:
-                    if any((m.content or m.tool_text) or (m.raw_content or m.raw_tool_text)):
-                        m.content, m.tool_text = "", ""
-                        m.raw_content, m.raw_tool_text = "", ""
-                        stripped_any = True
-            if not stripped_any:
-                return  # nothing left to strip; accept over-budget
 
     # -- drill-down -------------------------------------------------------
 
