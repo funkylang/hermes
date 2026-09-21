@@ -122,6 +122,14 @@ def build_api_request(
         api_kwargs = agent._build_api_kwargs(api_messages)
     else:
         api_kwargs = agent._build_api_kwargs(api_messages, tools_for_api=tools_for_api)
+    # Prompt manifest (observability): snapshot what this request sends.
+    try:
+        from agent.prompt_manifest import get_or_create_manifest
+
+        _pm_rec = get_or_create_manifest(agent).record_send(api_messages, tools_for_api)
+        agent._pm_current_seq = getattr(_pm_rec, "seq", None)
+    except Exception:
+        pass  # observability must never break the request path
     # Messages were scrubbed above; this walk covers the rest of the payload (tool descriptions,
     # extra_body, kwargs strings) — see sanitize_outbound_kwargs for the #50959 rationale.
     sanitize_outbound_kwargs(agent, api_kwargs)

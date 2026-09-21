@@ -1,0 +1,620 @@
+"""Per-agent prompt manifest: what each API call's prompt was made of.
+
+Tracks prompt components by character count at assembly time (system-prompt
+tiers, tool schemas, conversation messages).  Tokens are NEVER estimated per
+component — provider usage (prompt/completion/cache tokens) is recorded per
+prompt at the send points, so the manifest always shows the real token total
+of each call alongside its char-based breakdown.
+
+Model:
+  - A ``PromptManifest`` lives on one agent (``agent._prompt_manifest``).
+  - System-prompt tiers are stored ONCE per agent via ``set_system_components``
+    at build time and referenced by every subsequent send until a rebuild.
+  - Each API call calls ``record_send`` with the wire messages + tool schemas;
+    that snapshots those plus the current system components into a
+    ``PromptRecord`` and returns it.
+  - After the response arrives, ``fill_usage`` stamps that record's provider
+    token counts.
+
+In-memory only (per process), bounded to the last MAX_RECORDS records.
+Full prompt TEXT is kept for drill-down (``get_line``) but capped at
+MAX_TEXT_CHARS total — when the cap is hit the OLDEST records lose their text
+first; char counts and provider token usage always survive.
+
+Read side: ``render()`` numbers every content line; ``get_line(n)`` resolves a
+number from the last render to that component's full text.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+
+# ── Nodes ────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ComponentNode:
+    """One named prompt component. Char count; no token estimation.
+
+    Drill-down text lives per-record (``PromptRecord.system_texts``) so the
+    evictor can drop it from old records without shared-state games.
+    """
+
+    description: str
+    chars: int
+
+
+@dataclass
+class MessageNode:
+    """One conversation message attached to the prompt."""
+
+    role: str
+    chars: int
+    tool_chars: int = 0   # char cost of tool_calls on an assistant message
+    content: str = ""     # readable (decoded) message text (for drill-down)
+    tool_text: str = ""   # tool_calls as readable text (for drill-down)
+    raw_content: str = ""  # wire form exactly as sent (no decoding)
+    raw_tool_text: str = ""  # tool_calls JSON exactly as sent
+
+
+def _message_content_chars(content: Any) -> int:
+    """Character count of an OpenAI-format message's content (string or parts)."""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if isinstance(part, str):
+                total += len(part)
+            elif isinstance(part, dict):
+                total += len(str(part.get("text", "")))
+        return total
+    return 0
+
+
+def _maybe_decode_json_text(value: Any) -> Any:
+    """Unwrap a JSON-encoded string into its native form when it looks like one.
+
+    Several tools (read_file, search_files, terminal) return their result as a
+    JSON *string* in the wire message content, so drill-downs would otherwise
+    show ``\\n`` escapes on one long line instead of readable text.  When the
+    payload parses as a JSON dict, every field is rendered equally (nothing
+    dropped, nothing preferred); unparseable input passes through untouched.
+    Char counts are computed separately and stay faithful to the wire form.
+    """
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    # Cheap pre-filter: must start and end with matching brackets.
+    if len(stripped) < 2 or not (
+        (stripped[0] == "{" and stripped[-1] == "}")
+        or (stripped[0] == "[" and stripped[-1] == "]")
+    ):
+        return value
+    try:
+        decoded = json.loads(stripped)
+    except (ValueError, RecursionError):
+        return value
+
+    if isinstance(decoded, dict):
+        # All fields treated equally, in envelope order: a "key:" line, then
+        # the value. Values containing newlines (or pretty-printed JSON) start
+        # on the next line; each of their lines is indented by two spaces.
+        # Nothing is dropped and no field is preferred over another.
+        blocks = []
+        for key, inner in decoded.items():
+            body = inner if isinstance(inner, str) else json.dumps(
+                inner, ensure_ascii=False, indent=2)
+            if "\n" in body:
+                indented = "\n".join("  " + l for l in body.split("\n"))
+                blocks.append(f"{key}:\n{indented}")
+            else:
+                blocks.append(f"{key}: {body}")
+        return "\n".join(blocks) if blocks else value
+    if isinstance(decoded, list):
+        parts = [str(item.get("text", item)) for item in decoded if isinstance(item, dict)]
+        return "\n\n".join(parts) if parts else json.dumps(decoded, ensure_ascii=False, indent=2)
+    # JSON scalars/numbers-as-strings (e.g. "12345"): keep as-is — decoding adds nothing.
+    return value
+
+
+def _content_to_str(content: Any) -> str:
+    """Readable single-string form of an OpenAI-format message's content."""
+    if isinstance(content, str):
+        return _maybe_decode_json_text(content)
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(_maybe_decode_json_text(part))
+            elif isinstance(part, dict):
+                text = part.get("text", "")
+                parts.append(_maybe_decode_json_text(text) if isinstance(text, str) else str(text))
+        return "\n\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def _wire_content_to_str(content: Any) -> str:
+    """Wire-form single-string content (no JSON decoding — as sent)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(str(part.get("text", "")))
+        return "\n\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def _wire_tool_call_text(msg: Dict[str, Any]) -> str:
+    """tool_calls in wire form: each call's arguments EXACTLY as sent.
+
+    On the wire, tool-call arguments are compact JSON *strings*; this renders
+    them verbatim (one call per line) so /json off shows pure wire data.
+    """
+    calls = msg.get("tool_calls") or []
+    if not calls:
+        return ""
+    lines = []
+    for tc in calls:
+        fn = (tc or {}).get("function") or {}
+        args = fn.get("arguments", "")
+        lines.append(f"{fn.get('name', '?')}: {args}")
+    return "\n".join(lines)
+
+
+def _tool_call_chars(msg: Dict[str, Any]) -> int:
+    """Character cost of tool calls attached to an assistant message."""
+    total = 0
+    for tc in msg.get("tool_calls") or []:
+        fn = (tc or {}).get("function") or {}
+        total += len(str(fn.get("name", ""))) + len(str(fn.get("arguments", "")))
+    return total
+
+
+def _tool_call_text(msg: Dict[str, Any]) -> str:
+    """Readable form of tool_calls attached to an assistant message."""
+    calls = msg.get("tool_calls") or []
+    if not calls:
+        return ""
+    blocks = []
+    for tc in calls:
+        fn = (tc or {}).get("function") or {}
+        raw_args = fn.get("arguments", "")
+        # Wire arguments arrive as a JSON *string* with escaped \n; parse it so
+        # the drill-down prints real line breaks instead of escape sequences.
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args)
+            except Exception:
+                args = raw_args
+        else:
+            args = raw_args
+
+        def _pretty(v: Any, ind: int = 0) -> str:
+            pad = "  " * ind
+            if isinstance(v, dict):
+                if not v:
+                    return "{}"
+                items = [
+                    f"{pad}  {json.dumps(k, ensure_ascii=False)}: {_pretty(x, ind + 1)}"
+                    for k, x in v.items()
+                ]
+                return "{\n" + ",\n".join(items) + f"\n{pad}}}"
+            if isinstance(v, list):
+                if not v:
+                    return "[]"
+                items = [f"{pad}  {_pretty(x, ind + 1)}" for x in v]
+                return "[\n" + ",\n".join(items) + f"\n{pad}]"
+            try:
+                return json.dumps(v, ensure_ascii=False)
+            except Exception:
+                return str(v)
+
+        try:
+            args_str = _pretty(args)
+        except Exception:
+            args_str = str(args)
+        blocks.append(f"{fn.get('name', '?')}:\n{args_str}")
+    return "\n".join(blocks)
+
+
+def _wire_message_node(msg: Any) -> Optional[MessageNode]:
+    """Build a MessageNode from one wire message dict, or None if not a dict."""
+    if not isinstance(msg, dict):
+        return None
+    role = msg.get("role")
+    if role == "system":
+        # The system prompt is tracked separately as tier components; skipping it
+        # here avoids double counting.
+        return None
+    if not role:
+        role = "?"
+    content = msg.get("content")
+    return MessageNode(
+        role=str(role),
+        chars=_message_content_chars(content),
+        tool_chars=_tool_call_chars(msg),
+        content=_content_to_str(content) if content is not None else "",
+        raw_content=content if isinstance(content, str) else _wire_content_to_str(content)
+                   if content is not None else "",
+        tool_text=_tool_call_text(msg),
+        raw_tool_text=_wire_tool_call_text(msg),
+    )
+
+
+# ── Records ──────────────────────────────────────────────────────────────
+
+
+@dataclass
+class PromptRecord:
+    """What one API call's prompt consisted of, plus its provider token counts."""
+
+    seq: int
+    built_at: float = field(default_factory=time.time)
+    system_components: List[ComponentNode] = field(default_factory=list)  # ordered snapshot
+    messages: List[MessageNode] = field(default_factory=list)             # in send order (no system)
+    system_texts: List[str] = field(default_factory=list)   # tier text, parallel to components
+    tool_schemas_chars: int = 0
+    tool_schemas_text: str = ""  # full JSON, pretty (human drill-down)
+    tool_schemas_raw: str = ""   # compact JSON as sent (off mode drill-down)
+    label: str = ""
+    # Filled after the API response lands (None until then):
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    cache_read_tokens: Optional[int] = None
+    latency_ms: Optional[float] = None
+
+
+# ── Manifest ─────────────────────────────────────────────────────────────
+
+
+class PromptManifest:
+    """Ordered, per-agent record of prompt components and their token totals.
+
+    Thread-safe: the turn loop, stream reader, background reviews and the
+    read-side slash command all touch it from different threads; every
+    mutation runs under one lock.  Never raises across the public API —
+    instrumentation must not break a turn.
+    """
+
+    MAX_RECORDS = 200          # bounded memory; oldest dropped first
+    MAX_TEXT_CHARS = 4_000_000  # cap on stored drill-down text; oldest loses it
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._records: List[PromptRecord] = []
+        self._shared_components: Dict[str, ComponentNode] = {}
+        # Persistent system-component list (set at build, referenced by sends):
+        self._current_system: List[ComponentNode] = []
+        # Parallel drill-down text for those tiers:
+        self._current_system_texts: List[str] = []
+        # line number (last render) -> (record_seq, kind, index), for get_line()
+        # kind in {stats_tokens, stats_ratio, sys, tools, msg}; index = item pos
+        self._line_to_seq: Dict[int, Tuple[int, str, int]] = {}
+
+    # -- shared component registry (subagent inheritance) ---------------
+
+    def register_shared(self, cid: str, node: ComponentNode) -> ComponentNode:
+        """Register a component as shared under id *cid*.
+
+        If *cid* is already known the stored canonical node wins (callers then
+        reference it instead of their own copy); otherwise *node* is stored.
+        Identical content built by several agents thus appears once, while each
+        manifest keeps its own ordered reference list.
+        """
+        with self._lock:
+            existing = self._shared_components.get(cid)
+            if existing is not None:
+                return existing
+            self._shared_components[cid] = node
+            return node
+
+    # -- write side (attachment sites) ----------------------------------
+
+    def set_system_components(self, components: List[ComponentNode],
+                              texts: Optional[List[str]] = None) -> None:
+        """Store the system prompt's ordered tier components for this agent.
+
+        Called from ``build_system_prompt`` after the tiers are assembled.
+        Every subsequent send snapshots these until they are replaced (a
+        rebuild after compression).  Blank tiers are dropped; *texts* (same
+        order) is kept per-record for /pi drill-down.
+        """
+        with self._lock:
+            keep = [i for i, c in enumerate(components or []) if c and c.chars > 0]
+            self._current_system = [(components or [])[i] for i in keep]
+            self._current_system_texts = [
+                (texts or [""] * len(components or []))[i] for i in keep
+            ]
+
+    def _tool_schema_chars(self, tools: Any) -> Tuple[int, str]:
+        """(char count, wire form) of the tool-schema payload (compact JSON, as sent)."""
+        if not tools:
+            return 0, ""
+        try:
+            raw = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            # Fallback: rough per-tool size so a non-serializable schema never
+            # zeroes the manifest silently.
+            total = 0
+            for t in tools or []:
+                fn = (t or {}).get("function", {})
+                total += len(str(fn.get("name", ""))) + len(str(fn.get("description", "")))
+                total += len(str(fn.get("parameters", "")))
+            return total, str(tools)[:8192]
+        return len(raw), raw
+
+    def _tool_schema_text(self, tools: Any) -> str:
+        """Pretty JSON of the tool schemas (human drill-down); raw is as sent."""
+        if not tools:
+            return ""
+        try:
+            return json.dumps(tools, ensure_ascii=False, indent=2)
+        except Exception:
+            return str(tools)[:8192]
+
+    def record_send(self, api_messages: Any, tools_for_api: Any = None,
+                    label: str = "") -> Optional[PromptRecord]:
+        """Snapshot the prompt about to be sent into a new PromptRecord.
+
+        Pass ``api_messages`` in its final wire form (post-sanitization) and the
+        tools list being sent.  Returns the record so callers can later
+        :meth:`fill_usage` it; the record is already stored.  Never raises.
+        """
+        try:
+            with self._lock:
+                messages = [n for n in (_wire_message_node(m) for m in (api_messages or [])) if n]
+                tool_chars, tool_raw = self._tool_schema_chars(tools_for_api)
+                record = PromptRecord(
+                    seq=len(self._records) + 1,
+                    built_at=time.time(),
+                    system_components=list(self._current_system),
+                    system_texts=list(self._current_system_texts),
+                    messages=messages,
+                    tool_schemas_chars=tool_chars,
+                    tool_schemas_text=self._tool_schema_text(tools_for_api),
+                    tool_schemas_raw=tool_raw,
+                    label=label or "",
+                )
+                self._records.append(record)
+                if len(self._records) > self.MAX_RECORDS:
+                    del self._records[:len(self._records) - self.MAX_RECORDS]
+                self._trim_text_budget()
+                return record
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.debug("prompt_manifest.record_send failed", exc_info=True)
+            return None
+
+    def fill_usage(self, seq: int, *, prompt_tokens: Optional[int],
+                   completion_tokens: Optional[int], cache_read_tokens: Optional[int],
+                   latency_ms: Optional[float]) -> None:
+        """Stamp a stored record with provider-reported token counts. No-op if unknown seq."""
+        try:
+            with self._lock:
+                for rec in reversed(self._records):
+                    if rec.seq == seq:
+                        rec.prompt_tokens = prompt_tokens
+                        rec.completion_tokens = completion_tokens
+                        rec.cache_read_tokens = cache_read_tokens
+                        rec.latency_ms = latency_ms
+                        return
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.debug("prompt_manifest.fill_usage failed", exc_info=True)
+
+    # -- text budget ------------------------------------------------------
+
+    @staticmethod
+    def _record_totals(rec: PromptRecord) -> int:
+        return (sum(c.chars for c in rec.system_components)
+                + sum(m.chars + m.tool_chars for m in rec.messages)
+                + rec.tool_schemas_chars)
+
+    def _record_text_chars(self, rec: PromptRecord) -> int:
+        n = (len(rec.tool_schemas_text or "") + len(rec.tool_schemas_raw or "")
+             + sum(len(t) for t in rec.system_texts))
+        for m in rec.messages:
+            n += (len(m.content or "") + len(m.tool_text or "")
+                  + len(m.raw_content or "") + len(m.raw_tool_text or ""))
+        return n
+
+    def _trim_text_budget(self) -> None:
+        """Evict stored text from the OLDEST records until under budget.
+
+        Char counts and provider token usage always remain; only drill-down
+        text goes, oldest records first (their tier/system text before their
+        message texts).  Caller holds ``self._lock``.
+        """
+        while True:
+            total = sum(self._record_text_chars(r) for r in self._records)
+            if total <= self.MAX_TEXT_CHARS:
+                return
+            stripped_any = False
+            # Pass 1: per-record tier + schema text (the repetitive bulk),
+            # oldest records first.
+            for rec in reversed(self._records):
+                if any(rec.system_texts) or rec.tool_schemas_text or rec.tool_schemas_raw:
+                    rec.system_texts = [""] * len(rec.system_texts)
+                    rec.tool_schemas_text = ""
+                    rec.tool_schemas_raw = ""
+                    stripped_any = True
+            if sum(self._record_text_chars(r) for r in self._records) <= self.MAX_TEXT_CHARS:
+                return
+            # Pass 2: message texts, oldest records first.
+            for rec in reversed(self._records):
+                if any((m.content or m.tool_text) or (m.raw_content or m.raw_tool_text)
+                       for m in rec.messages):
+                    for m in rec.messages:
+                        m.content, m.tool_text = "", ""
+                        m.raw_content, m.raw_tool_text = "", ""
+                    stripped_any = True
+            if not stripped_any:
+                return  # nothing left to strip; accept over-budget
+
+    # -- drill-down -------------------------------------------------------
+
+    def get_line(self, line_no: int, display_mode: str = "off") -> Optional[Tuple[int, str]]:
+        """Resolve a numbered output line (from /pi or /pi all) to prompt text.
+
+        Returns ``(seq, full_text)`` or None if unknown.  Numbers refer to the
+        lines shown by the most recent ``render()`` call — so run /pi or
+        /pi all first, then use its numbers.  Walks the same line ordering
+        ``render()`` uses.
+
+        ``display_mode`` (set via /json): "off" (default) shows message contents
+        in their raw wire form (exactly as sent); "human" decodes tool-result
+        JSON into readable text with real line breaks.
+        """
+        try:
+            with self._lock:
+                entry = self._line_to_seq.get(line_no)
+                records = list(self._records)
+
+            if entry is None:
+                return None
+            seq, kind, idx = entry
+            rec = next((r for r in records if r.seq == seq), None)
+            if not rec:
+                return None
+
+            if kind == "sys":
+                comp = rec.system_components[idx]
+                t = rec.system_texts[idx] if idx < len(rec.system_texts) else ""
+                if not t:
+                    return seq, f"[{comp.description}] text not available (evicted to save memory)"
+                return seq, f"[{comp.description} ({len(t):,} chars)]\n\n{t}"
+
+            if kind == "tools":
+                raw = rec.tool_schemas_raw or ""
+                pretty = rec.tool_schemas_text or ""
+                t = self._content_for_mode(pretty, raw, display_mode)
+                if not t:
+                    return seq, "[tool schemas] text not available (evicted to save memory)"
+                form = "wire form" if display_mode != "human" else "pretty-printed JSON"
+                return seq, f"[tool schemas ({len(t):,} chars, {form})]\n\n{t}"
+
+            m = rec.messages[idx]
+            parts = [f"[message] role={m.role}"]
+            content = self._content_for_mode(m.content, m.raw_content, display_mode)
+            parts.append(content or "(no content)")
+            tool_text = self._content_for_mode(m.tool_text, m.raw_tool_text, display_mode)
+            if tool_text:
+                parts.append(f"tool_calls:\n{tool_text}")
+            return seq, "\n".join(parts)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.debug("prompt_manifest.get_line failed", exc_info=True)
+            return None
+
+    @staticmethod
+    def _content_for_mode(readable: str, raw: str, mode: str) -> str:
+        """Pick the drill-down text form for one payload based on display mode.
+
+        "off": raw wire form exactly as sent; "human": decoded readable form.
+        """
+        if mode == "human":
+            return readable or raw
+        return raw or readable
+
+    # -- display (slash command) -----------------------------------------
+
+    def render(self, last_only: bool = True) -> str:
+        """Numbered text output of the manifest: latest prompt (default) or all.
+
+        Every content line is prefixed with its global line number; pass that
+        number to ``get_line`` (via /pi <no>) for the component's full text.
+        """
+        try:
+            with self._lock:
+                records = list(self._records)
+
+            if not records:
+                return "Prompt manifest: no API calls recorded in this session yet."
+
+            chosen = [records[-1]] if last_only else records
+            out: List[str] = []
+            line_map: Dict[int, Tuple[int, str, int]] = {}
+            n = 0
+            for rec in chosen:
+                sys_chars = sum(c.chars for c in rec.system_components)
+                msg_chars = sum(m.chars + m.tool_chars for m in rec.messages)
+                tot_chars = self._record_totals(rec)
+                tok = rec.prompt_tokens
+
+                when = time.strftime("%H:%M:%S", time.localtime(rec.built_at))
+                head = f"── Prompt #{rec.seq}  ({when}) ──"
+                if rec.label:
+                    head += f"  [{rec.label}]"
+                out.append(head)
+
+                # Call stats are metadata, not content — never numbered.
+                if tok is not None:
+                    extra = ""
+                    if rec.cache_read_tokens:
+                        extra += f" cache_read={rec.cache_read_tokens:,}"
+                    if rec.completion_tokens:
+                        extra += f" completion={rec.completion_tokens:,}"
+                    if rec.latency_ms:
+                        extra += f"  latency={rec.latency_ms / 1000:.1f}s"
+                    out.append(f"    tokens: prompt={tok:,}{extra}")
+
+                if tok and tot_chars:
+                    out.append(f"    ratio:  ~{tot_chars / tok:.2f} chars/token")
+                elif tot_chars:
+                    out.append(f"    chars:  total={tot_chars:,} (tokens pending)")
+
+                for i, comp in enumerate(rec.system_components):
+                    share = (100.0 * comp.chars / sys_chars) if sys_chars else 0.0
+                    est = f" ≈{int(comp.chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
+                    n += 1
+                    line_map[n] = (rec.seq, "sys", i)
+                    num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
+                    out.append(f"{num}   [sys] {comp.description[:44]:<44} {comp.chars:>9,}{est}  ({share:.1f}%)")
+
+                if rec.tool_schemas_chars:
+                    est = f" ≈{int(rec.tool_schemas_chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
+                    n += 1
+                    line_map[n] = (rec.seq, "tools", 0)
+                    num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
+                    out.append(f"{num}   [sys] {'(tool schemas)':<44} {rec.tool_schemas_chars:>9,}{est}")
+
+                for i, m in enumerate(rec.messages):
+                    size = m.chars + m.tool_chars
+                    share = (100.0 * size / msg_chars) if msg_chars else 0.0
+                    est = f" ≈{int(size * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
+                    n += 1
+                    line_map[n] = (rec.seq, "msg", i)
+                    num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
+                    out.append(f"{num}   [msg] {m.role[:40]:<40} {size:>9,}{est}  ({share:.1f}%)")
+
+                out.append("")
+
+            with self._lock:
+                self._line_to_seq = line_map
+            tail = "\n".join(out).rstrip()
+            return tail + "\n\nUse /pi <item no.> to see the full text of any numbered item."
+        except Exception:
+            return "Prompt manifest: render failed (see logs)."
+
+
+def get_or_create_manifest(agent: Any) -> PromptManifest:
+    """Return the agent's manifest, creating it on first use."""
+    m = getattr(agent, "_prompt_manifest", None)
+    if not isinstance(m, PromptManifest):
+        m = PromptManifest()
+        try:
+            agent._prompt_manifest = m
+        except Exception:
+            pass
+    return m

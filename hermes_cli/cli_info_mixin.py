@@ -694,6 +694,67 @@ class CLIInfoMixin:
             print(f"  {line}")
         print()
 
+    def _show_prompt_info(self, cmd_original: str = ""):
+        """`/pi [all | <line-number>]` — prompt info (observability).
+
+        No arg: shows what the most recent API call's prompt was made of, per
+        component in chars plus the provider's real token total. `/pi all`:
+        every recorded call. `/pi N`: full text of numbered item N from the
+        previous view; its form follows the /json display mode. Read-only;
+        never breaks prompt caching."""
+        if not self.agent:
+            print("  (._.) No active agent -- send a message first.")
+            return
+        args = [a for a in cmd_original.split() if a != "/pi"]
+        from agent.prompt_manifest import get_or_create_manifest
+
+        manifest = get_or_create_manifest(self.agent)
+        if args and args[0].isdigit():
+            mode = getattr(self.agent, "_pi_display_mode", "off")
+            seq, text = (manifest.get_line(int(args[0]), display_mode=mode) or (None, None))
+            if text is None:
+                print("  No prompt info item with that number yet — run /pi or /pi all first.")
+                return
+            form = "human-readable" if mode == "human" else "raw wire JSON"
+            print(f"  ── Prompt #{seq} · item {args[0]} ({form}) ──")
+            for line in text.splitlines():
+                print(f"  {line}")
+            print()
+            return
+
+        show_all = bool(args) and args[0] == "all"
+        text = manifest.render(last_only=not show_all)
+        print()
+        for line in text.splitlines():
+            print(f"  {line}")
+        print()
+
+    def _set_json_display_mode(self, cmd_original: str = ""):
+        """`/json [off|human]` — drill-down form for /pi <line>.
+
+        off (default): pure wire JSON exactly as sent. human: decoded readable
+        text with real line breaks. In-memory only; resets on restart/new agent."""
+        arg = next((a for a in cmd_original.split() if a != "/json"), "").lower()
+        if not arg:
+            current = getattr(self, "_pi_display_mode", "off")
+            self._pi_display_mode = "human" if current == "off" else "off"
+        elif arg in ("off", "human"):
+            self._pi_display_mode = arg
+        else:
+            print(f"  Unknown mode '{arg}' — use /json off or /json human.")
+            return
+        # Attach to the agent so /pi <line> sees it (no live agent yet is fine).
+        if self.agent is not None:
+            try:
+                self.agent._pi_display_mode = self._pi_display_mode
+            except Exception:
+                pass
+        cur = getattr(self, "_pi_display_mode", "off")
+        hint = ("human-readable text" if cur == "human"
+                else "raw wire JSON (as sent)")
+        # Confirmation stays on screen so the user sees the change took effect.
+        print(f"  /pi drill-down: {hint}")
+
     def _show_usage(self):
         """Rate limits + session token usage (when a live agent exists) + Nous credits.
 

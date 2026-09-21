@@ -208,6 +208,23 @@ def record_response_usage(
         prompt_tokens, completion_tokens, total_tokens,
         api_duration, _cache_pct, _ident,
     )
+    # Prompt manifest (observability): stamp this response's token counts on the
+    # record created at send time (exact seq — no cross-attribution).
+    try:
+        _pm_seq = getattr(agent, "_pm_current_seq", None)
+        if _pm_seq is not None:
+            from agent.prompt_manifest import get_or_create_manifest
+
+            get_or_create_manifest(agent).fill_usage(
+                _pm_seq,
+                prompt_tokens=int(prompt_tokens or 0),
+                completion_tokens=int(completion_tokens or 0),
+                cache_read_tokens=canonical_usage.cache_read_tokens,
+                latency_ms=float(api_duration) * 1000.0,
+            )
+            agent._pm_current_seq = None
+    except Exception:
+        pass  # observability must never break usage accounting
     # nous.anthropic_wire=auto: the session's wire is decided once, from this first response.
     if agent.session_api_calls == 1 and (agent.provider or "") == "nous":
         with suppress(Exception):

@@ -803,6 +803,21 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
     parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
+    # Prompt manifest (observability): publish the tier char counts + full text;
+    # each send later snapshots them. Shared-tier registry keeps identical bytes stored once.
+    try:
+        from agent.prompt_manifest import ComponentNode, get_or_create_manifest as _pm_get
+        _pm_m = _pm_get(agent)
+        _pm_m.set_system_components(
+            [
+                _pm_m.register_shared(f"sys|stable", ComponentNode("System Prompt (Stable)", len(parts["stable"]))),
+                _pm_m.register_shared(f"sys|context", ComponentNode("System Prompt (Context)", len(parts["context"]))),
+                _pm_m.register_shared(f"sys|volatile", ComponentNode("System Prompt (Volatile)", len(parts["volatile"]))),
+            ],
+            texts=[parts["stable"], parts["context"], parts["volatile"]],
+        )
+    except Exception:
+        pass  # observability must never break prompt build
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_diagnostic_status(warning)
