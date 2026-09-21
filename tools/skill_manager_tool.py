@@ -446,9 +446,7 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
         "success": True, "message": f"Skill '{name}' created.", "path": str(display),
         "skill_md": str(skill_md), "_change": {"description": _description_preview(content)},
         **({"category": category} if category else {}),
-        "hint": "To add reference files, templates, or scripts, use "
-                f"skill_manage(action='write_file', name='{name}', file_path='references/example.md', "
-                "file_content='...')"}
+    }
     _attach_lint_findings(_add_description_prompt_preview(result, content), skill_md)
     return result
 
