@@ -821,13 +821,38 @@ def _context_file_labels_for_block(agent: Any, block_text: str) -> List[Tuple[st
                 path_by_label[str(e["label"])] = str(e["path"])
     except Exception:
         pass  # labels stay as the section header (relative path)
+    # Only headers that the builder wrote as file boundaries (known labels from
+    # ``context_file_sources_for_agent``) split the block; any other ``## ...`` line is an
+    # internal section header of the file and belongs to its source, not a new one.
     out: List[Tuple[str, int]] = []
-    matches = list(_CONTEXT_SECTION_RE.finditer(block_text))
+    matches = [m for m in _CONTEXT_SECTION_RE.finditer(block_text) if m.group(1).strip() in path_by_label]
     for i, m in enumerate(matches):
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(block_text)
         label = m.group(1).strip()
-        out.append((path_by_label.get(label, label), body_end - m.start()))
+        source = _agents_source_label(path_by_label[label])
+        out.append((source or path_by_label[label], body_end - m.start()))
     return out
+
+
+_AGENTS_FILE_NAMES = ("AGENTS.override.md", "AGENTS.md", "agents.md")
+
+
+def _agents_source_label(file_path: str) -> Optional[str]:
+    """Source label for an AGENTS.md context file: ``agents <dir>``, where ``<dir>`` is the
+    file's directory relative to the git root (``.`` at the root). ``None`` for non-agents
+    files or when no git root exists — the caller keeps the plain path then."""
+    from pathlib import Path
+
+    p = Path(file_path)
+    if p.name not in _AGENTS_FILE_NAMES:
+        return None
+    try:
+        from agent.prompt_builder import _find_git_root
+        root = _find_git_root(p.resolve().parent) or p.resolve().parent
+        rel = p.parent.resolve().relative_to(root)
+        return f"agents {rel.as_posix() if str(rel) != '.' else '.'}"
+    except (ValueError, OSError):
+        return None
 
 
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, Any]:
