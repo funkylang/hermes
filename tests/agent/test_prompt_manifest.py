@@ -40,8 +40,8 @@ def test_render_numbers_lines_and_get_line_resolves_them():
                         cache_read_tokens=None, latency_ms=10.0)
 
     rendered = manifest.render()
-    # Rows are numbered without brackets; the stats row carries prompt tokens.
-    assert "prompt       100" in rendered
+    # Rows are numbered; the stats row is plain "label value" pairs.
+    assert "prompt 100" in rendered
     assert "chars/tok" in rendered
 
     got = manifest.get_line(3)  # the user message line (1=sys tier, 2=tool schemas)

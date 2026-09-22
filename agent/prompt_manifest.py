@@ -586,16 +586,16 @@ class PromptManifest:
                     out.append(f"{rec.label}")
 
                 # Call stats: metadata, not content - never numbered.
-                # One aligned row; numbers right-aligned so all columns stack.
+                # One row, "label value" pairs; plain numbers (no column padding).
                 lat_s = f"{rec.latency_ms / 1000:.1f}s" if rec.latency_ms else "-"
                 ratio = (f"{tot_chars / tok:.2f}" if tok else "-")
                 out.append(
-                    f"prompt {'-' if not tok else format(tok, ','):>9}  "
-                    f"completion {format(rec.completion_tokens or 0, ','):>8}  "
-                    f"cache_read {format(rec.cache_read_tokens or 0, ','):>9}  "
-                    f"latency {lat_s:>8}  "
-                    f"chars_total {format(tot_chars, ','):>10}  "
-                    f"chars/tok {ratio:>8}"
+                    "prompt " + ("-" if not tok else format(tok, ","))
+                    + "  completion " + format(rec.completion_tokens or 0, ",")
+                    + "  cache_read " + format(rec.cache_read_tokens or 0, ",")
+                    + f"  latency {lat_s}"
+                    + "  chars_total " + format(tot_chars, ",")
+                    + f"  chars/tok {ratio}"
                 )
                 # Column header for the numbered rows below.
                 out.append(f"{'':>6}  {'kind':<5} {'part':<40} {'chars':>9} {'tok*':>8}")
