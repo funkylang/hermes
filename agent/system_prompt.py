@@ -314,19 +314,29 @@ def _skills_prompt(agent: Any) -> str:
                                          compact_categories=_compact_cats or None, skills_dir_override=_agent_skills_dir(agent))
 
 
-def _auto_load_parts(agent: Any) -> List[str]:
-    """``skills.auto_load`` blocks, resolved once per agent lifecycle (config, skill files and
-    HERMES_IGNORE_RULES are read on the first build only) so the prompt stays byte-stable
-    across model switches, compression and static-prefix restoration.
+def _auto_load_parts(agent: Any) -> List[Tuple[str, str]]:
+    """``skills.auto_load`` text as ``(text, source_label)`` — one pair for the
+    whole join.
 
-    Same gate as ``_skills_prompt``: nothing without the skills toolset, and nothing for agents that skip
-    context files (delegate children, curator/review forks, gateway hygiene agents) — pinned skills are
-    operator guidance for the user's session, not payload for every internal fork."""
+    Resolved once per agent lifecycle (config, skill files and
+    HERMES_IGNORE_RULES read on the first build only) so the prompt stays
+    byte-stable across model switches, compression and static-prefix
+    restoration. The CLI may have pre-resolved the same result
+    (``cli._auto_load_skills_result`` copied onto the agent); both paths use
+    ``build_auto_load_prompt``.
+
+    The label names the loaded skills — no text re-parsing (skill blocks
+    contain blank lines, so the join cannot be undone safely).
+
+    Same gate as ``_skills_prompt``: nothing without the skills toolset, and
+    nothing for agents that skip context files (delegate children, curator /
+    review forks, gateway hygiene agents) — pinned skills are operator
+    guidance for the user's session, not payload for every internal fork."""
     if getattr(agent, "skip_context_files", False) or not any(
             name in agent.valid_tool_names for name in ("skills_list", "skill_view", "skill_manage")):
         return []
     if not getattr(agent, "_auto_load_skills_resolved", False):
-        result: Tuple[str, List[str], List[str]] = ("", [], [])
+        result = ("", [], [])
         try:
             if not is_truthy_value(os.environ.get("HERMES_IGNORE_RULES")):
                 from agent.skill_commands import build_auto_load_prompt
@@ -338,7 +348,44 @@ def _auto_load_parts(agent: Any) -> List[str]:
         agent._auto_load_skills_result = result
         agent._auto_load_skills_resolved = True
     prompt = agent._auto_load_skills_result[0]
-    return [prompt] if prompt else []
+    if not prompt:
+        return []
+    # One part, one label — no text re-parsing (blocks contain blank lines, so
+    # the join cannot be undone safely). The name list answers "which skills
+    # are auto-loaded"; per-block splits would be metadata-only and are
+    # deferred until they matter.
+    loaded_names = list(agent._auto_load_skills_result[1] or [])
+    names = ", ".join(loaded_names)
+    label = f"skills.auto_load config ({names})" if names else "skills.auto_load config"
+    return [(prompt, label)]
+
+
+_SKILL_INDEX_ENTRY_RE = re.compile(r"(?m)^    - ([^\s:：][^:：]*?)[:：]")
+
+
+def _skills_index_sources(agent: Any, index_text: str) -> List[Tuple[str, int]]:
+    """Per-skill provenance for the rendered skills index.
+
+    The index is a deterministic list of ``  - <name>: <desc>`` lines (see
+    ``_render_skills_index``); splitting on those lines yields one entry per
+    listed skill with its real line size. Falls back to the coarse directory
+    label when no entries are found (e.g. demoted names-only format), so
+    provenance is best-effort and never breaks prompt build."""
+    if not index_text or not index_text.strip():
+        return []
+    try:
+        home_str = str(_agent_home(agent)) if _agent_home(agent) else "~/.hermes/skills"
+    except Exception:
+        home_str = "~/.hermes/skills"
+    matches = list(_SKILL_INDEX_ENTRY_RE.finditer(index_text))
+    if not matches:
+        return [(f"skills index ({home_str})", len(index_text))]
+    out: List[Tuple[str, int]] = []
+    for i, m in enumerate(matches):
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(index_text)
+        name = m.group(1).strip()
+        out.append((f"skill {name} ({home_str})", body_end - m.start()))
+    return out
 
 
 def _bot_mode_parts(agent: Any) -> List[str]:
@@ -569,28 +616,28 @@ def _guidance_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
     out: List[Tuple[str, str]] = []
     if agent.valid_tool_names:
         for flag, text, label in (
-            ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE, "task completion guidance (generated constant)"),
-            ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE, "parallel tool call guidance (generated constant)"),
+            ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE, "task completion guidance"),
+            ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE, "parallel tool call guidance"),
         ):
             if getattr(agent, flag, True):
                 out.append((text, label))
     # None/empty entries are dropped by _join_tier
-    out.append((_tool_guidance_block(agent), "tool-aware behavioral guidance (generated constant)"))
+    out.append((_tool_guidance_block(agent), "tool-aware behavioral guidance"))
     if not agent.valid_tool_names:
         return out
     # Steering only lands inside tool results, so only reachable with tools.
-    out.append((STEER_CHANNEL_NOTE, "steering channel note (generated constant)"))
+    out.append((STEER_CHANNEL_NOTE, "steering channel note"))
     # agent.tool_use_enforcement / agent.execution_guidance: "auto" (default)
     # matches the hardcoded model lists; true/false force; a list gives custom
     # model-name substrings.  Execution guidance is an independent gate so
     # DeepSeek/Kimi/Qwen-class models get it even with enforcement off.
     if _model_gate(agent._tool_use_enforcement, agent.model, TOOL_USE_ENFORCEMENT_MODELS):
-        out.append((TOOL_USE_ENFORCEMENT_GUIDANCE, "tool-use enforcement guidance (generated constant)"))
+        out.append((TOOL_USE_ENFORCEMENT_GUIDANCE, "tool-use enforcement guidance"))
         if any(g in (agent.model or "").lower() for g in ("gemini", "gemma")):
-            out.append((GOOGLE_MODEL_OPERATIONAL_GUIDANCE, "google model operational guidance (generated constant)"))
+            out.append((GOOGLE_MODEL_OPERATIONAL_GUIDANCE, "google model operational guidance"))
     if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
-        out.append((execution_guidance_text(), "execution discipline guidance (generated constant)"))
+        out.append((execution_guidance_text(), "execution discipline guidance"))
     # delegate_task background delivery is intentionally between turns. Put this after the generic persistence
     # blocks so their "keep working" rule cannot turn the required yield into no-op/polling activity.
     if "delegate_task" in agent.valid_tool_names:
@@ -726,7 +773,7 @@ def _post_workspace_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
         _bot_parts = _bot_mode_parts(agent)
         for i, p in enumerate(_bot_parts):
             blocks.append((p, "bot-mode capability epoch" if i > 0 and _bot_parts[0] else "bot-mode protocol section"))
-    blocks.append((_active_profile_line(agent), "active profile line (generated constant)"))
+    blocks.append((_active_profile_line(agent), "active profile line"))
     blocks.append((platform_hint(agent), "platform hint"))
     return blocks
 
@@ -812,7 +859,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     stable_parts: List[Optional[str]] = []
     stable_sources: List[str] = []
     _identity_texts, _soul_loaded = _identity_parts(agent, _ctx_len)
-    _identity_label = "SOUL.md" if _soul_loaded else "generated identity constant"
+    _identity_label = "SOUL.md" if _soul_loaded else "default identity"
     for t in _identity_texts:
         stable_parts.append(t)
         stable_sources.append(_identity_label)
@@ -822,7 +869,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # index is built; this slot holds its position.
     _help_guidance_slot = len(stable_parts)
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS)
-    stable_sources.append("hermes-agent help guidance (generated constant)")
+    stable_sources.append("hermes-agent help guidance")
     # Guidance blocks: one code path supplies texts and labels in lockstep.
     for text, label in _guidance_blocks(agent):
         stable_parts.append(text)
@@ -838,9 +885,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         stable_parts.append(t)
         stable_sources.append("model identity (Alibaba provider override)")
     # Pinned skills are per-agent constants (resolved once), so they live in the stable prefix.
-    for t in _auto_load_parts(agent):
+    for t, label in _auto_load_parts(agent):
         stable_parts.append(t)
-        stable_sources.append("skills.auto_load config")
+        stable_sources.append(label)
     # Coding posture: the operating brief stays in the stable prefix. The
     # environment block contains the current cwd/backend and belongs after
     # project context, not ahead of a large shared AGENTS.md block.
@@ -871,9 +918,19 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Placeholder index into the per-file provenance lists built below.
         context_part_labels.append(f"_ctx_block_{len(_ctx_file_blocks) - 1}")
     if coding_workspace_parts:
+        _cwd_label = None
+        try:
+            from agent.runtime_cwd import resolve_context_cwd as _rcwd
+            _rc = _rcwd()
+            _cwd_label = str(_rc) if _rc is not None else None
+        except Exception:
+            _cwd_label = None
         for t in coding_workspace_parts:
             context_parts.append(t)
-            context_part_labels.append("git workspace snapshot (live probe)")
+            if _cwd_label:
+                context_part_labels.append(f"git workspace snapshot ({_cwd_label})")
+            else:
+                context_part_labels.append("git workspace snapshot (live probe)")
         for t in coding_trailing_parts:
             context_parts.append(t)
             context_part_labels.append("coding brief (trailing portion)")
@@ -893,10 +950,16 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
     # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
     # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
+    # (text, label) pairs throughout — blank entries (e.g. no skills index) drop out of BOTH,
+    # so text and labels never drift apart.
     volatile_parts: List[Optional[str]] = []
     volatile_sources: List[str] = []
-    volatile_parts.append(skills_prompt)
-    volatile_sources.append("skills index (~/.hermes/skills)")
+    if skills_prompt:
+        # The index is ONE part so _join_tier keeps the tier byte-identical to
+        # the upstream shape; its per-skill provenance decomposes at metadata
+        # assembly below (placeholder pattern, same as context-file blocks).
+        volatile_parts.append(skills_prompt)
+        volatile_sources.append("_skills_index")
     for text, label in _memory_blocks(agent):
         volatile_parts.append(text)
         volatile_sources.append(label)
@@ -907,14 +970,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         volatile_sources.append("plugin system prompt sections")
     _ts_text = _timestamp_line(agent)
     volatile_parts.append(_ts_text)
-    volatile_sources.append("conversation timestamp (generated constant)")
+    volatile_sources.append("conversation timestamp line")
     # Keep the renderer-owned runtime anchor after all user/plugin prose so quoted
     # host examples cannot shadow it during persisted-prompt validation.
     if environment_hints:
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-        volatile_sources.append("runtime environment hints (generated constant)")
+        volatile_sources.append("runtime environment hints")
 
     # ── Provenance metadata (internal; never part of the prompt) ──
     context_sources: List[Tuple[str, int]] = []
@@ -928,6 +991,23 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         else:
             context_sources.append((label, len(p)))
 
+    volatile_source_entries: List[Tuple[str, int]] = []
+    for (label, chars) in _sources_from(volatile_parts, volatile_sources):
+        if label == "_skills_index":
+            # Skills-index part: one provenance entry per listed skill.
+            sk_src = _skills_index_sources(agent, skills_prompt)
+            if sk_src:
+                volatile_source_entries.extend(sk_src)
+                continue
+            # Unparseable index: fall back to one coarse entry.
+            try:
+                home_str = str(_agent_home(agent)) if _agent_home(agent) else "~/.hermes/skills"
+            except Exception:
+                home_str = "~/.hermes/skills"
+            volatile_source_entries.append((f"skills index ({home_str})", chars))
+        else:
+            volatile_source_entries.append((label, chars))
+
     # Attach the breakdown on the agent (observability side-channel) instead of
     # the return dict — existing consumers (stored-prompt rebuild checks, etc.)
     # iterate parts.values() and would choke on non-str metadata.
@@ -935,7 +1015,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         agent._system_prompt_sources = {
             "stable": list(_sources_from(stable_parts, stable_sources)),
             "context": list(context_sources),
-            "volatile": list(_sources_from(volatile_parts, volatile_sources)),
+            "volatile": volatile_source_entries,
         }
     except Exception:
         pass  # observability must never break prompt build

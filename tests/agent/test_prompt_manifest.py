@@ -309,8 +309,8 @@ def test_record_send_tags_origin_by_this_run_boundary():
     ]
 
 
-def test_render_shows_origin_and_reasoning_tags():
-    """render() marks resumed/this-run origin and reasoning chars on message lines."""
+def test_render_omits_origin_and_reasoning_tags():
+    """render() shows plain rows — origin and reasoning live in /pi N only."""
     manifest = _make_manifest()
     rec = manifest.record_send([
         {"role": "assistant", "content": "old answer", "reasoning_content": "rrr"},
@@ -318,14 +318,12 @@ def test_render_shows_origin_and_reasoning_tags():
     ], this_run_start_idx=1)
     assert rec is not None
     rendered = manifest.render()
-    # The assistant line carries both its origin and a reasoning note.
+    # The tags are gone from the overview rows.
     asst_line = next(l for l in rendered.splitlines() if "[msg] assistant" in l)
-    assert "resumed from session DB" in asst_line
-    assert "reasoning 3" in asst_line
-    # The current user line is tagged this run and has no reasoning note.
     user_line = next(l for l in rendered.splitlines() if "[msg] user" in l)
-    assert "this run" in user_line
-    assert "reasoning" not in user_line
+    assert "resumed from session DB" not in asst_line
+    assert "reasoning" not in asst_line
+    assert "this run" not in user_line
 
 
 def test_get_line_shows_reasoning_and_origin_block():

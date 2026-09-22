@@ -624,14 +624,11 @@ class PromptManifest:
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
                     share = f"{100.0 * size / msg_chars:>5.1f}%" if msg_chars else ""
-                    tags = [t for t in (m.origin,
-                                        f"reasoning {m.reasoning_chars:,}" if m.reasoning_chars else None)
-                            if t]
-                    tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
+                    # Tags removed - see user feedback on display clutter
                     out.append(
                         f"{n:>6}  {'[msg]':<5} {self._cell(m.role)[:40]:<40}"
                         f" {size:>9,} {self._tok_est(size, tot_chars, tok):>8}"
-                        f"{share:>7}{tag_s}"
+                        f"{share:>7}"
                     )
 
                 out.append("")
