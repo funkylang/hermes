@@ -495,11 +495,17 @@ class PromptManifest:
                 comp = rec.system_components[idx]
                 t = comp.text or ""
                 # System tiers: header + source provenance (which files/constants make up this tier).
-                lines = [f"[{comp.description} ({len(t):,} chars)]"]
+                tok = rec.prompt_tokens
+                tot = self._record_totals(rec)
+                lines = [f"[{self._cell(comp.description)} ("
+                         f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
                 if comp.sources:
                     lines.append("  Sources:")
+                    lines.append(f"    {'source':<48} {'chars':>9} {'~tok':>7}")
                     for label, s_chars in comp.sources:
-                        lines.append(f"    · {label[:72]}  {s_chars:>9,} chars")
+                        lines.append(
+                            f"    {label[:46]:<48} {s_chars:>9,}"
+                            f" {self._tok_est(s_chars, tot, tok):>7}")
                 if not t:
                     return seq, "\n".join(lines) + "\n  text not available (not captured)"
                 return seq, "\n".join(lines) + f"\n\n{t}"
@@ -511,11 +517,18 @@ class PromptManifest:
                 t = self._content_for_mode(pretty, raw, display_mode)
                 if not t:
                     return seq, "[tool schemas] text not available (not captured)"
+                tok = rec.prompt_tokens
+                tot = self._record_totals(rec)
                 form = "wire form" if display_mode != "human" else "pretty-printed JSON"
-                return seq, f"[tool schemas ({len(t):,} chars, {form})]\n\n{t}"
+                return seq, (f"[tool schemas ("
+                             f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok, {form})]\n\n{t}")
 
             m = rec.messages[idx]
-            parts = [f"[message] role={m.role}"]
+            msg_size = m.chars + m.tool_chars + m.reasoning_chars
+            tok = rec.prompt_tokens
+            tot = self._record_totals(rec)
+            parts = [f"[message] role={m.role} ("
+                     f"{msg_size:,} chars,  {self._tok_est(msg_size, tot, tok):>8} tok)"]
             if m.origin:
                 parts.append(f"origin: {m.origin}")
             content = self._content_for_mode(m.content, m.raw_content, display_mode)
@@ -545,10 +558,11 @@ class PromptManifest:
     # -- display (slash command) -----------------------------------------
 
     def render(self) -> str:
-        """Numbered text output of the manifest's single stored prompt.
+        """Tabular overview of the manifest's single stored prompt.
 
-        Every content line is prefixed with its global line number; pass that
-        number to ``get_line`` (via /pi <no>) for the component's full text.
+        One numbered line per part, aligned columns; no details here.  Pass a
+        number to ``get_line`` (via /pi <no>) for that part's full text,
+        sources and token counts.
         """
         try:
             with self._lock:
@@ -567,71 +581,125 @@ class PromptManifest:
                 tok = rec.prompt_tokens
 
                 when = time.strftime("%H:%M:%S", time.localtime(rec.built_at))
-                head = f"── Prompt #{rec.seq}  ({when}) ──"
+                out.append(f"Prompt #{rec.seq}  ({when})")
                 if rec.label:
-                    head += f"  [{rec.label}]"
-                out.append(head)
+                    out.append(f"{rec.label}")
 
-                # Call stats are metadata, not content — never numbered.
-                if tok is not None:
-                    extra = ""
-                    if rec.cache_read_tokens:
-                        extra += f" cache_read={rec.cache_read_tokens:,}"
-                    if rec.completion_tokens:
-                        extra += f" completion={rec.completion_tokens:,}"
-                    if rec.latency_ms:
-                        extra += f"  latency={rec.latency_ms / 1000:.1f}s"
-                    out.append(f"    tokens: prompt={tok:,}{extra}")
-
-                if tok and tot_chars:
-                    out.append(f"    ratio:  ~{tot_chars / tok:.2f} chars/token")
-                elif tot_chars:
-                    out.append(f"    chars:  total={tot_chars:,} (tokens pending)")
+                # Call stats: metadata, not content - never numbered.
+                # One aligned row; numbers right-aligned so all columns stack.
+                lat_s = f"{rec.latency_ms / 1000:.1f}s" if rec.latency_ms else "-"
+                ratio = (f"{tot_chars / tok:.2f}" if tok else "-")
+                out.append(
+                    f"prompt {'-' if not tok else format(tok, ','):>9}  "
+                    f"completion {format(rec.completion_tokens or 0, ','):>8}  "
+                    f"cache_read {format(rec.cache_read_tokens or 0, ','):>9}  "
+                    f"latency {lat_s:>8}  "
+                    f"chars_total {format(tot_chars, ','):>10}  "
+                    f"chars/tok {ratio:>8}"
+                )
+                # Column header for the numbered rows below.
+                out.append(f"{'':>6}  {'kind':<5} {'part':<40} {'chars':>9} {'tok*':>8}")
 
                 for i, comp in enumerate(rec.system_components):
-                    share = (100.0 * comp.chars / sys_chars) if sys_chars else 0.0
-                    est = f" ≈{int(comp.chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
                     n += 1
                     line_map[n] = (rec.seq, "sys", i)
-                    num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
-                    out.append(f"{num}   [sys] {comp.description[:44]:<44} {comp.chars:>9,}{est}  ({share:.1f}%)")
-                    # Source provenance: which files/constants make up this tier.
-                    # Metadata sub-lines — never numbered, never part of the prompt.
-                    for label, s_chars in comp.sources:
-                        s_est = f" ≈{int(s_chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
-                        out.append(f"{'':>5}         · {label[:78]} {s_chars:>9,}{s_est}")
+                    share = f"{100.0 * comp.chars / sys_chars:>5.1f}%" if sys_chars else ""
+                    out.append(
+                        f"{n:>6}  {'[sys]':<5} {self._cell(comp.description)[:40]:<40}"
+                        f" {comp.chars:>9,} {self._tok_est(comp.chars, tot_chars, tok):>8}"
+                        f"{share:>7}"
+                    )
 
                 if rec.tool_schemas_chars:
-                    est = f" ≈{int(rec.tool_schemas_chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
                     n += 1
                     line_map[n] = (rec.seq, "tools", 0)
-                    num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
-                    out.append(f"{num}   [sys] {'(tool schemas)':<44} {rec.tool_schemas_chars:>9,}{est}")
+                    out.append(
+                        f"{n:>6}  {'[sys]':<5} {'(tool schemas)':<40}"
+                        f" {rec.tool_schemas_chars:>9,}"
+                        f" {self._tok_est(rec.tool_schemas_chars, tot_chars, tok):>8}"
+                    )
 
                 for i, m in enumerate(rec.messages):
                     size = m.chars + m.tool_chars + m.reasoning_chars
-                    share = (100.0 * size / msg_chars) if msg_chars else 0.0
-                    est = f" ≈{int(size * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
-                    # Metadata sub-lines — never numbered, never part of the prompt.
-                    tags = []
-                    if m.origin:
-                        tags.append(m.origin)
-                    if m.reasoning_chars:
-                        tags.append(f"reasoning {m.reasoning_chars:,} chars on wire")
-                    tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
-                    num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
-                    out.append(f"{num}   [msg] {m.role[:40]:<40} {size:>9,}{est}  ({share:.1f}%){tag_s}")
+                    share = f"{100.0 * size / msg_chars:>5.1f}%" if msg_chars else ""
+                    tags = [t for t in (m.origin,
+                                        f"reasoning {m.reasoning_chars:,}" if m.reasoning_chars else None)
+                            if t]
+                    tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
+                    out.append(
+                        f"{n:>6}  {'[msg]':<5} {self._cell(m.role)[:40]:<40}"
+                        f" {size:>9,} {self._tok_est(size, tot_chars, tok):>8}"
+                        f"{share:>7}{tag_s}"
+                    )
 
                 out.append("")
 
             with self._lock:
                 self._line_to_seq = line_map
             tail = "\n".join(out).rstrip()
-            return tail + "\n\nUse /pi <part no.> to see the full text of any numbered part."
+            return (tail + "\n\n*tok* proportional estimate from the prompt's real token total. "
+                       "Use /pi <part no.> for full text, sources and tokens of a part.")
         except Exception:
             return "Prompt manifest: render failed (see logs)."
+
+
+
+    @staticmethod
+    def _tok_est(part_chars: int, total_chars: int, tok):
+        """Proportional token estimate for one part, from the prompt's real tokens."""
+        if tok and total_chars:
+            return f"{int(part_chars * tok / total_chars):,}"
+        return "-"
+
+    @staticmethod
+    def _cell(value) -> str:
+        """Single-line cell text (multi-line input folded onto one line)."""
+        return " ".join(str(value or "").split())
+
+    def get_line_header(self, line_no: int) -> Optional[str]:
+        """Tabular header line for one numbered part from the last render.
+
+        Shows kind, description, chars and proportional token estimate - the
+        same numbers as the /pi overview row, with roomier columns.
+        """
+        try:
+            with self._lock:
+                entry = self._line_to_seq.get(line_no)
+                records = list(self._records)
+            if entry is None:
+                return None
+            seq, kind, idx = entry
+            rec = next((r for r in records if r.seq == seq), None)
+            if not rec:
+                return None
+            tok = rec.prompt_tokens
+            tot = self._record_totals(rec)
+
+            if kind == "sys":
+                comp = rec.system_components[idx]
+                desc = self._cell(comp.description) or "(text not captured)"
+                return (f"{line_no:>6}  {'[sys]':<5} {desc:<48}"
+                        f" {comp.chars:>9,}"
+                        f"{self._tok_est(comp.chars, tot, tok):>8}")
+
+            if kind == "tools":
+                return (f"{line_no:>6}  {'[sys]':<5} {'(tool schemas)':<48}"
+                        f" {rec.tool_schemas_chars:>9,}"
+                        f"{self._tok_est(rec.tool_schemas_chars, tot, tok):>8}")
+
+            m = rec.messages[idx]
+            size = m.chars + m.tool_chars + m.reasoning_chars
+            tags = [t for t in (m.origin,
+                                f"reasoning {m.reasoning_chars:,} chars" if m.reasoning_chars else None)
+                    if t]
+            tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
+            return (f"{line_no:>6}  {'[msg]':<5} {self._cell(m.role):<48}"
+                    f" {size:>9,}"
+                    f"{self._tok_est(size, tot, tok):>8}{tag_s}")
+        except Exception:
+            return None
 
 
 def get_or_create_manifest(agent: Any) -> PromptManifest:

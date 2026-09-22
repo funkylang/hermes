@@ -710,12 +710,14 @@ class CLIInfoMixin:
         manifest = get_or_create_manifest(self.agent)
         if args and args[0].isdigit():
             mode = getattr(self.agent, "_pi_display_mode", "off")
-            seq, text = (manifest.get_line(int(args[0]), display_mode=mode) or (None, None))
+            part_no = int(args[0])
+            header = manifest.get_line_header(part_no)
+            _, text = (manifest.get_line(part_no, display_mode=mode) or (None, None))
             if text is None:
                 print("  No prompt info part with that number yet — run /pi first.")
                 return
             form = "human-readable" if mode == "human" else "raw wire JSON"
-            self._emit_pi_line(f"── Prompt #{seq} · part {args[0]} ({form}) ──")
+            self._emit_pi_line(f"{header or f'part {args[0]}'}   ({form})")
             for line in text.splitlines():
                 self._emit_pi_line(line)
             self._emit_pi_line("")

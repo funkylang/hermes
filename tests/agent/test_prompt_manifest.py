@@ -40,8 +40,9 @@ def test_render_numbers_lines_and_get_line_resolves_them():
                         cache_read_tokens=None, latency_ms=10.0)
 
     rendered = manifest.render()
-    assert "[1]" in rendered
-    assert "tokens: prompt=100" in rendered
+    # Rows are numbered without brackets; the stats row carries prompt tokens.
+    assert "prompt       100" in rendered
+    assert "chars/tok" in rendered
 
     got = manifest.get_line(3)  # the user message line (1=sys tier, 2=tool schemas)
     assert got is not None
@@ -169,9 +170,9 @@ def test_get_line_display_mode_off_vs_human():
 
     # Find the message line number.
     msg_line_no = None
-    for i, line in enumerate(rendered.splitlines(), start=1):
+    for line in rendered.splitlines():
         if "[msg]" in line:
-            msg_line_no = int(line.split("]")[0].strip().lstrip("["))
+            msg_line_no = int(line.split()[0])
             break
     assert msg_line_no is not None
 
@@ -198,9 +199,9 @@ def test_get_line_tool_call_args_wire_form_off():
     assert rec is not None
     rendered = manifest.render()
     msg_line_no = None
-    for i, line in enumerate(rendered.splitlines(), start=1):
+    for line in rendered.splitlines():
         if "[msg]" in line:
-            msg_line_no = int(line.split("]")[0].strip().lstrip("["))
+            msg_line_no = int(line.split()[0])
             break
     assert msg_line_no is not None
 
@@ -225,9 +226,8 @@ def test_render_shows_source_provenance_for_tiers():
                         cache_read_tokens=None, latency_ms=10.0)
 
     rendered = manifest.render()
-    # Source lines appear under the system tier, unnumbered.
-    assert "SOUL.md" in rendered
-    assert "generated constant" in rendered
+    # Overview stays clean (no source sub-lines); the part row exists.
+    assert "SOUL.md" not in rendered
     # Numbering still: 1=sys, 2=tool schemas, 3=user message.
     got = manifest.get_line(3)
     assert got is not None and "hello" in got[1]
@@ -321,7 +321,7 @@ def test_render_shows_origin_and_reasoning_tags():
     # The assistant line carries both its origin and a reasoning note.
     asst_line = next(l for l in rendered.splitlines() if "[msg] assistant" in l)
     assert "resumed from session DB" in asst_line
-    assert "reasoning 3 chars on wire" in asst_line
+    assert "reasoning 3" in asst_line
     # The current user line is tagged this run and has no reasoning note.
     user_line = next(l for l in rendered.splitlines() if "[msg] user" in l)
     assert "this run" in user_line
