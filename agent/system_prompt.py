@@ -798,7 +798,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     per file inside it). This is the source of the ``/pi`` prompt-part breakdown."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
-    _ctx_len = _cc_len if isinstance(_cc_len, int) and _ctx_len > 0 else None
+    _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
 
     def _sources_from(parts_: List[Optional[str]], labels: List[str]) -> Tuple[Tuple[str, int], ...]:
         """(label, chars) for every non-blank part; mirrors _join_tier's drop rule."""
