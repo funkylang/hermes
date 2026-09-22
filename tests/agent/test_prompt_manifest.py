@@ -211,3 +211,65 @@ def test_get_line_tool_call_args_wire_form_off():
     # human: decoded readable tool_calls text.
     _, text_human = manifest.get_line(msg_line_no, display_mode="human")
     assert "read_file" in text_human
+
+
+def test_render_shows_source_provenance_for_tiers():
+    """render() lists per-block sources under each system tier; numbering unchanged."""
+    manifest = _make_manifest_with_sources()
+    rec = manifest.record_send(
+        [{"role": "user", "content": "hello"}],
+        tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
+    )
+    assert rec is not None
+    manifest.fill_usage(rec.seq, prompt_tokens=100, completion_tokens=5,
+                        cache_read_tokens=None, latency_ms=10.0)
+
+    rendered = manifest.render()
+    # Source lines appear under the system tier, unnumbered.
+    assert "SOUL.md" in rendered
+    assert "generated constant" in rendered
+    # Numbering still: 1=sys, 2=tool schemas, 3=user message.
+    got = manifest.get_line(3)
+    assert got is not None and "hello" in got[1]
+
+
+def test_get_line_sys_shows_sources_header():
+    """get_line for a system tier lists its sources; text stays intact."""
+    manifest = _make_manifest_with_sources()
+    rec = manifest.record_send(
+        [{"role": "user", "content": "hi"}],
+        tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
+    )
+    manifest.render()
+    got = manifest.get_line(1)  # the system tier line
+    assert got is not None
+    seq, text = got
+    assert "Sources:" in text
+    assert "SOUL.md" in text
+    assert "CORE" * 10 in text
+
+
+def _make_manifest_with_sources() -> PromptManifest:
+    manifest = PromptManifest()
+    manifest.set_system_components(
+        [ComponentNode("core instructions", len("CORE" * 10),
+                       "CORE" * 10,
+                       sources=(("SOUL.md", 40), ("generated constant", 10)))],
+        texts=["CORE" * 10],
+    )
+    return manifest
+
+
+def test_set_system_components_preserves_sources_on_rebuild():
+    """A rebuild (production shape: fresh nodes) refreshes stored sources."""
+    manifest = _make_manifest_with_sources()
+    # Rebuild with different sources under the same description.
+    manifest.set_system_components(
+        [ComponentNode("core instructions", len("CORE" * 20),
+                       "CORE" * 20,
+                       sources=(("SOUL.md", 80),))],
+        texts=["CORE" * 20],
+    )
+    node = manifest._current_system[0]
+    assert node.chars == len("CORE" * 20)
+    assert node.sources == (("SOUL.md", 80),)

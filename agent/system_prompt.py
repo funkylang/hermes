@@ -15,7 +15,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agent.delegation_context import owned_kanban_task
 from agent.prompt_builder import (
@@ -513,16 +513,27 @@ def _timestamp_line(agent: Any) -> str:
     return timestamp_line + "".join(f"\n{label}: {value}" for label, value in trailer if value)
 
 
-def _memory_parts(agent: Any) -> List[str]:
-    """Built-in memory/USER.md blocks plus the external provider block (gated on
-    the same check ``inject_memory_provider_tools`` uses, so we never advertise
-    tools the toolset config gated off)."""
-    parts: List[str] = []
+def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
+    """Built-in memory/USER.md blocks plus the external provider block as
+    ``(text, label)`` pairs in assembly order (absent kinds yield nothing), gated
+    on the same check ``inject_memory_provider_tools`` uses so we never advertise
+    tools the toolset config gated off. Single code path keeps text and its
+    provenance label in lockstep — the label is derived from what actually got
+    appended, never from a parallel re-check."""
+    blocks: List[Tuple[str, str]] = []
     if agent._memory_store:
         for enabled, kind in ((agent._memory_enabled, "memory"), (agent._user_profile_enabled, "user")):
             block = agent._memory_store.format_for_system_prompt(kind) if enabled else None
             if block:
-                parts.append(block)
+                # Label from the block's own banner — robust across memory-store
+                # variants; falls back to a kind name when neither banner matches.
+                if "MEMORY (your personal notes)" in block:
+                    label = "~/.hermes/memories/MEMORY.md"
+                elif "USER PROFILE (who is the user)" in block:
+                    label = "~/.hermes/memories/USER.md"
+                else:
+                    label = f"{kind} memory block"
+                blocks.append((block, label))
     # External memory provider system prompt block (additive to built-in). Gated on the same check
     # ``inject_memory_provider_tools`` uses so we never advertise provider tools that the agent's toolset
     # configuration has already gated off (#81014).
@@ -537,8 +548,8 @@ def _memory_parts(agent: Any) -> List[str]:
             except Exception:
                 _ext_mem_block = None
             if _ext_mem_block:
-                parts.append(_ext_mem_block)
-    return parts
+                blocks.append((_ext_mem_block, "external memory provider"))
+    return blocks
 
 
 def _identity_parts(agent: Any, ctx_len: Optional[int]) -> Tuple[List[str], bool]:
@@ -550,37 +561,41 @@ def _identity_parts(agent: Any, ctx_len: Optional[int]) -> Tuple[List[str], bool
     return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
 
 
-def _guidance_parts(agent: Any) -> List[str]:
-    """Universal + tool-aware + model-gated guidance blocks, each gated by its config.yaml key."""
-    parts: List[str] = []
+def _guidance_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
+    """Universal + tool-aware + model-gated guidance blocks as ``(text,
+    source_label)`` pairs in assembly order, each gated by its config.yaml key.
+    Labels ride the same conditionals as their texts — a block that is not
+    appended never produces a label."""
+    out: List[Tuple[str, str]] = []
     if agent.valid_tool_names:
-        parts += [
-            text for flag, text in (
-                ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE),
-                ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE),
-            ) if getattr(agent, flag, True)
-        ]
-    parts.append(_tool_guidance_block(agent))  # None/empty entries are dropped by _join_tier
+        for flag, text, label in (
+            ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE, "task completion guidance (generated constant)"),
+            ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE, "parallel tool call guidance (generated constant)"),
+        ):
+            if getattr(agent, flag, True):
+                out.append((text, label))
+    # None/empty entries are dropped by _join_tier
+    out.append((_tool_guidance_block(agent), "tool-aware behavioral guidance (generated constant)"))
     if not agent.valid_tool_names:
-        return parts
+        return out
     # Steering only lands inside tool results, so only reachable with tools.
-    parts.append(STEER_CHANNEL_NOTE)
+    out.append((STEER_CHANNEL_NOTE, "steering channel note (generated constant)"))
     # agent.tool_use_enforcement / agent.execution_guidance: "auto" (default)
     # matches the hardcoded model lists; true/false force; a list gives custom
     # model-name substrings.  Execution guidance is an independent gate so
     # DeepSeek/Kimi/Qwen-class models get it even with enforcement off.
     if _model_gate(agent._tool_use_enforcement, agent.model, TOOL_USE_ENFORCEMENT_MODELS):
-        parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
+        out.append((TOOL_USE_ENFORCEMENT_GUIDANCE, "tool-use enforcement guidance (generated constant)"))
         if any(g in (agent.model or "").lower() for g in ("gemini", "gemma")):
-            parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
+            out.append((GOOGLE_MODEL_OPERATIONAL_GUIDANCE, "google model operational guidance (generated constant)"))
     if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
-        parts.append(execution_guidance_text())
+        out.append((execution_guidance_text(), "execution discipline guidance (generated constant)"))
     # delegate_task background delivery is intentionally between turns. Put this after the generic persistence
     # blocks so their "keep working" rule cannot turn the required yield into no-op/polling activity.
     if "delegate_task" in agent.valid_tool_names:
-        parts.append(ASYNC_HANDOFF_GUIDANCE)
-    return parts
+        out.append((ASYNC_HANDOFF_GUIDANCE, "async handoff guidance (generated constant)"))
+    return out
 
 
 def _alibaba_identity_part(agent: Any) -> List[str]:
@@ -693,21 +708,27 @@ def _coding_parts(agent: Any) -> Tuple[List[str], List[str], List[str]]:
     return [], [], []
 
 
-def _post_workspace_parts(agent: Any) -> List[str]:
-    """Blocks that follow the worktree-specific context: environment probe
-    (config.yaml agent.environment_probe; one line, nothing when clean, skipped
-    for remote backends), bot-mode protocol, platform hint."""
-    parts: List[str] = []
+def _post_workspace_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
+    """Blocks that follow the worktree-specific context (environment probe,
+    bot-mode protocol, profile line, platform hint) as ``(text, source_label)``
+    pairs — the label is assigned where its text is appended, so it cannot
+    drift from the gates."""
+    blocks: List[Tuple[Optional[str], str]] = []
     if getattr(agent, "_environment_probe", True):
         try:
             from tools.env_probe import get_environment_probe_line
-            parts.append(get_environment_probe_line())
+            probe = get_environment_probe_line()
+            if probe:
+                blocks.append((probe, "runtime environment probe"))
         except Exception:
             pass  # Probe failure must never block prompt build.
     if getattr(agent, "_bot_mode_protocol", True):
-        parts.extend(_bot_mode_parts(agent))
-    parts.append(platform_hint(agent))
-    return parts
+        _bot_parts = _bot_mode_parts(agent)
+        for i, p in enumerate(_bot_parts):
+            blocks.append((p, "bot-mode capability epoch" if i > 0 and _bot_parts[0] else "bot-mode protocol section"))
+    blocks.append((_active_profile_line(agent), "active profile line (generated constant)"))
+    blocks.append((platform_hint(agent), "platform hint"))
+    return blocks
 
 
 def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -> List[str]:
@@ -726,74 +747,199 @@ def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -
         allow_install_tree_fallback=agent.platform in ("cli", "tui"), home_override=_agent_home(agent))]
 
 
-def _join_tier(parts: List[Optional[str]]) -> str:
+def _join_tier(parts: Sequence[Optional[str]]) -> str:
     """Join non-empty parts; None/blank entries are dropped."""
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
+_CONTEXT_SECTION_RE = re.compile(r"(?m)^## (.+?)\n\n")
+
+
+def _context_file_labels_for_block(agent: Any, block_text: str) -> List[Tuple[str, int]]:
+    """Per-file provenance for one context-files block, as ``(label, chars)``.
+
+    The block is a concatenation of ``## <label>`` sections (one per file, see
+    ``build_context_files_prompt``); splitting on its own headers yields the
+    real per-file sizes. Labels resolve to full paths through the same
+    discovery walk the builder uses (``context_file_sources_for_agent``); on
+    any failure the relative label from the header stands in — provenance is
+    best-effort and must never break prompt build."""
+    if not block_text or not block_text.strip():
+        return []
+    path_by_label: Dict[str, str] = {}
+    try:
+        from agent.context_file_sources import context_file_sources_for_agent
+        for e in context_file_sources_for_agent(agent):
+            if e.get("loaded"):
+                path_by_label[str(e["label"])] = str(e["path"])
+    except Exception:
+        pass  # labels stay as the section header (relative path)
+    out: List[Tuple[str, int]] = []
+    matches = list(_CONTEXT_SECTION_RE.finditer(block_text))
+    for i, m in enumerate(matches):
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(block_text)
+        label = m.group(1).strip()
+        out.append((path_by_label.get(label, label), body_end - m.start()))
+    return out
+
+
+def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, Any]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
     context files, workspace snapshot and remaining workspace guidance) and
     ``volatile`` (skills index, memory, user profile, external memory block,
     timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
-    Never re-rendered mid-session."""
+    Never re-rendered mid-session.
+
+    Also returns provenance metadata: ``_stable_sources`` / ``_context_sources`` /
+    ``_volatile_sources`` hold ``(label, chars)`` tuples in assembly order — one entry
+    per text that actually lands in that tier (a context-file block yields one entry
+    per file inside it). This is the source of the ``/pi`` prompt-part breakdown."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
-    _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
+    _ctx_len = _cc_len if isinstance(_cc_len, int) and _ctx_len > 0 else None
+
+    def _sources_from(parts_: List[Optional[str]], labels: List[str]) -> Tuple[Tuple[str, int], ...]:
+        """(label, chars) for every non-blank part; mirrors _join_tier's drop rule."""
+        return tuple(
+            (labels[i], len(p)) for i, p in enumerate(parts_)
+            if p and p.strip() and i < len(labels)
+        )
+
     # ── Stable tier ────────────────────────────────────────────────
-    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    # ``stable_sources`` holds LABELS only — lockstep with ``stable_parts`` by index.
+    stable_parts: List[Optional[str]] = []
+    stable_sources: List[str] = []
+    _identity_texts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    _identity_label = "SOUL.md" if _soul_loaded else "generated identity constant"
+    for t in _identity_texts:
+        stable_parts.append(t)
+        stable_sources.append(_identity_label)
+
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
     _help_guidance_slot = len(stable_parts)
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS)
-    stable_parts.extend(_guidance_parts(agent))
+    stable_sources.append("hermes-agent help guidance (generated constant)")
+    # Guidance blocks: one code path supplies texts and labels in lockstep.
+    for text, label in _guidance_blocks(agent):
+        stable_parts.append(text)
+        stable_sources.append(label)
+
     skills_prompt = _skills_prompt(agent)
     # Skill-pointer variant requires BOTH skill_view AND the hermes-agent skill
     # in the rendered index (pure string check — inherits the index's stability).
     if "skill_view" in (agent.valid_tool_names or set()) and "- hermes-agent:" in skills_prompt:
         stable_parts[_help_guidance_slot] = HERMES_AGENT_HELP_GUIDANCE
-    stable_parts.extend(_alibaba_identity_part(agent))
+
+    for t in _alibaba_identity_part(agent):
+        stable_parts.append(t)
+        stable_sources.append("model identity (Alibaba provider override)")
     # Pinned skills are per-agent constants (resolved once), so they live in the stable prefix.
-    stable_parts.extend(_auto_load_parts(agent))
+    for t in _auto_load_parts(agent):
+        stable_parts.append(t)
+        stable_sources.append("skills.auto_load config")
     # Coding posture: the operating brief stays in the stable prefix. The
     # environment block contains the current cwd/backend and belongs after
     # project context, not ahead of a large shared AGENTS.md block.
     environment_hints = _pb.build_environment_hints()
     coding_prefix_parts, coding_workspace_parts, coding_trailing_parts = _coding_parts(agent)
-    stable_parts.extend(coding_prefix_parts)
-    post_workspace_parts = _post_workspace_parts(agent)
+    for t in coding_prefix_parts:
+        stable_parts.append(t)
+        stable_sources.append("coding brief (stable portion)")
+    # Post-workspace blocks are appended to whichever tier claims them below;
+    # their labels ride along in lockstep.
+    post_blocks = _post_workspace_blocks(agent)
+
     # ── Context tier (project/worktree-dependent, may change between sessions) ──
-    context_parts: List[str] = []
+    # Parallel label lists, index-locked to their parts. The context-file block
+    # is ONE part whose provenance decomposes per file (see metadata below).
+    context_parts: List[Optional[str]] = []
+    context_part_labels: List[str] = []
+    _ctx_file_blocks: List[str] = []  # non-blank blocks from _context_files_part, in order
     # ephemeral_system_prompt is injected at API-call time only, never cached.
     if system_message is not None:
         context_parts.append(system_message)
-    context_parts.extend(_context_files_part(agent, _ctx_len, _soul_loaded))
+        context_part_labels.append("caller-provided system message")
+    for block in _context_files_part(agent, _ctx_len, _soul_loaded):
+        if not (block and block.strip()):
+            continue
+        context_parts.append(block)
+        _ctx_file_blocks.append(block)
+        # Placeholder index into the per-file provenance lists built below.
+        context_part_labels.append(f"_ctx_block_{len(_ctx_file_blocks) - 1}")
     if coding_workspace_parts:
-        context_parts.extend([*coding_workspace_parts, *coding_trailing_parts, *post_workspace_parts])
+        for t in coding_workspace_parts:
+            context_parts.append(t)
+            context_part_labels.append("git workspace snapshot (live probe)")
+        for t in coding_trailing_parts:
+            context_parts.append(t)
+            context_part_labels.append("coding brief (trailing portion)")
+        for text, label in post_blocks:
+            context_parts.append(text)
+            context_part_labels.append(label)
     else:
         # Preserve the stable placement for non-workspace sessions; there is no
         # worktree snapshot whose later position would improve their prefix.
-        stable_parts.extend([*coding_trailing_parts, *post_workspace_parts])
+        for t in coding_trailing_parts:
+            stable_parts.append(t)
+            stable_sources.append("coding brief (trailing portion)")
+        for text, label in post_blocks:
+            stable_parts.append(text)
+            stable_sources.append(label)
+
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
     # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
     # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
-    volatile_parts: List[str] = [skills_prompt, *_memory_parts(agent)]
+    volatile_parts: List[Optional[str]] = []
+    volatile_sources: List[str] = []
+    volatile_parts.append(skills_prompt)
+    volatile_sources.append("skills index (~/.hermes/skills)")
+    for text, label in _memory_blocks(agent):
+        volatile_parts.append(text)
+        volatile_sources.append(label)
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
-    volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))
-    # The profile line names this home's path, so it rides in the volatile tier: the stable
-    # prefix then stays byte-identical across every profile (and home) on the host.
-    volatile_parts.append(_active_profile_line(agent))
-    volatile_parts.append(_timestamp_line(agent))
+    for t in _plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"):
+        volatile_parts.append(t)
+        volatile_sources.append("plugin system prompt sections")
+    _ts_text = _timestamp_line(agent)
+    volatile_parts.append(_ts_text)
+    volatile_sources.append("conversation timestamp (generated constant)")
     # Keep the renderer-owned runtime anchor after all user/plugin prose so quoted
     # host examples cannot shadow it during persisted-prompt validation.
     if environment_hints:
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
+        volatile_sources.append("runtime environment hints (generated constant)")
+
+    # ── Provenance metadata (internal; never part of the prompt) ──
+    context_sources: List[Tuple[str, int]] = []
+    for i, p in enumerate(context_parts):
+        if not (p and p.strip()):
+            continue
+        label = context_part_labels[i]
+        if label.startswith("_ctx_block_"):
+            # Context-file block: one provenance entry per file section inside it.
+            context_sources.extend(_context_file_labels_for_block(agent, p))
+        else:
+            context_sources.append((label, len(p)))
+
+    # Attach the breakdown on the agent (observability side-channel) instead of
+    # the return dict — existing consumers (stored-prompt rebuild checks, etc.)
+    # iterate parts.values() and would choke on non-str metadata.
+    try:
+        agent._system_prompt_sources = {
+            "stable": list(_sources_from(stable_parts, stable_sources)),
+            "context": list(context_sources),
+            "volatile": list(_sources_from(volatile_parts, volatile_sources)),
+        }
+    except Exception:
+        pass  # observability must never break prompt build
+
     return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
 
 
@@ -804,18 +950,18 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
     # Prompt manifest (observability): publish the tier char counts + full text;
-    # each send later snapshots them. Shared-tier registry keeps identical bytes stored once.
+    # each send later snapshots them. Sources ride on the nodes so a rebuild
+    # refreshes provenance exactly like text — never stale.
     try:
         from agent.prompt_manifest import ComponentNode, get_or_create_manifest as _pm_get
         _pm_m = _pm_get(agent)
-        _pm_m.set_system_components(
-            [
-                _pm_m.register_shared(f"sys|stable", ComponentNode("System Prompt (Stable)", len(parts["stable"]))),
-                _pm_m.register_shared(f"sys|context", ComponentNode("System Prompt (Context)", len(parts["context"]))),
-                _pm_m.register_shared(f"sys|volatile", ComponentNode("System Prompt (Volatile)", len(parts["volatile"]))),
-            ],
-            texts=[parts["stable"], parts["context"], parts["volatile"]],
-        )
+        sources = getattr(agent, "_system_prompt_sources", {}) or {}
+        _tiers = ((("stable", "System Prompt (Stable)"), parts["stable"]),
+                  (("context", "System Prompt (Context)"), parts["context"]),
+                  (("volatile", "System Prompt (Volatile)"), parts["volatile"]))
+        _comps = [ComponentNode(desc, len(text), text, tuple(sources.get(key, [])))
+                  for (key, desc), text in _tiers]
+        _pm_m.set_system_components([c for c in _comps if c.chars > 0])
     except Exception:
         pass  # observability must never break prompt build
     # Surface context-file truncation warnings in chat, not only in logs.

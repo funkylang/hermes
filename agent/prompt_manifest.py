@@ -354,6 +354,8 @@ class PromptManifest:
         Blank tiers are dropped; *texts* (same order) become the canonical
         drill-down text, stored ONCE here (attached to the nodes) and shared
         by every record until a rebuild replaces them — not copied per send.
+        Per-tier provenance rides on each node's ``sources``; a rebuild passes
+        fresh nodes, so sources never go stale.
         """
         with self._lock:
             comps = list(components or [])
@@ -363,7 +365,7 @@ class PromptManifest:
                 node = comps[i]
                 text = texts[i] if isinstance(texts, list) and i < len(texts) else ""
                 node = ComponentNode(node.description, node.chars,
-                                     text or node.text, node.sources)
+                                     text or node.text, tuple(node.sources))
                 self._system_by_cid[f"sys|{node.description}"] = node
                 kept_nodes.append(node)
             self._current_system = kept_nodes
@@ -492,9 +494,15 @@ class PromptManifest:
             if kind == "sys":
                 comp = rec.system_components[idx]
                 t = comp.text or ""
+                # System tiers: header + source provenance (which files/constants make up this tier).
+                lines = [f"[{comp.description} ({len(t):,} chars)]"]
+                if comp.sources:
+                    lines.append("  Sources:")
+                    for label, s_chars in comp.sources:
+                        lines.append(f"    · {label[:72]}  {s_chars:>9,} chars")
                 if not t:
-                    return seq, f"[{comp.description}] text not available (not captured)"
-                return seq, f"[{comp.description} ({len(t):,} chars)]\n\n{t}"
+                    return seq, "\n".join(lines) + "\n  text not available (not captured)"
+                return seq, "\n".join(lines) + f"\n\n{t}"
 
             if kind == "tools":
                 with self._lock:
@@ -582,6 +590,11 @@ class PromptManifest:
                     line_map[n] = (rec.seq, "sys", i)
                     num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
                     out.append(f"{num}   [sys] {comp.description[:44]:<44} {comp.chars:>9,}{est}  ({share:.1f}%)")
+                    # Source provenance: which files/constants make up this tier.
+                    # Metadata sub-lines — never numbered, never part of the prompt.
+                    for label, s_chars in comp.sources:
+                        s_est = f" ≈{int(s_chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
+                        out.append(f"{'':>5}         · {label[:78]} {s_chars:>9,}{s_est}")
 
                 if rec.tool_schemas_chars:
                     est = f" ≈{int(rec.tool_schemas_chars * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
