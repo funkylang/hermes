@@ -32,10 +32,29 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+from agent.path_display import display_path
+
+
+# Matches absolute POSIX paths (e.g., /home/hermes/foo) embedded in a string.
+_ABS_PATH_RE = re.compile(r"(?<![\w])(/[\w./-]+)")
+
+
+def _shorten_paths_in_text(text: str) -> str:
+    """Shorten every absolute path substring via display_path (in-place).
+
+    display_path only shortens text that STARTS with the home prefix, but our
+    /pi section labels often embed a path inside parentheses or after a name
+    (e.g., "skill foo (/home/hermes/.hermes/skills)"). This walks the label and
+    shortens each embedded absolute path so all of them render as ~/... in one
+    pass.
+    """
+    return _ABS_PATH_RE.sub(lambda m: display_path(m.group(0)), text)
 
 
 # ── Nodes ────────────────────────────────────────────────────────────────
@@ -500,12 +519,18 @@ class PromptManifest:
                 lines = [f"[{self._cell(comp.description)} ("
                          f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
                 if comp.sources:
-                    lines.append("  Sources:")
-                    lines.append(f"    {'source':<48} {'chars':>9} {'~tok':>7}")
-                    for label, s_chars in comp.sources:
+                    lines.append("  Sections:")
+                    # Shorten embedded absolute paths in-place; compute the
+                    # column from the DISPLAYED (shortened) labels so nothing
+                    # is clipped.
+                    shown = [(self._cell(_shorten_paths_in_text(lbl)), chars)
+                             for lbl, chars in comp.sources]
+                    width = max([8] + [len(l) for l, _ in shown]) + 2
+                    lines.append(f"    {'section':<{width}} {'chars':>9} {'~tok':>7}")
+                    for label, s_chars in shown:
                         lines.append(
-                            f"    {label[:46]:<48} {s_chars:>9,}"
-                            f" {self._tok_est(s_chars, tot, tok):>7}")
+                            f"    {label[:width]:<{width}} "
+                            f"{s_chars:>9,} {self._tok_est(s_chars, tot, tok):>7}")
                 if not t:
                     return seq, "\n".join(lines) + "\n  text not available (not captured)"
                 return seq, "\n".join(lines) + f"\n\n{t}"

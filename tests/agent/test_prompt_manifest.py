@@ -234,7 +234,7 @@ def test_render_shows_source_provenance_for_tiers():
 
 
 def test_get_line_sys_shows_sources_header():
-    """get_line for a system tier lists its sources; text stays intact."""
+    """get_line for a system tier lists its sections; text stays intact."""
     manifest = _make_manifest_with_sources()
     rec = manifest.record_send(
         [{"role": "user", "content": "hi"}],
@@ -244,9 +244,31 @@ def test_get_line_sys_shows_sources_header():
     got = manifest.get_line(1)  # the system tier line
     assert got is not None
     seq, text = got
-    assert "Sources:" in text
+    assert "Sections:" in text
     assert "SOUL.md" in text
     assert "CORE" * 10 in text
+
+
+def test_get_line_sys_sections_full_width_and_tilde_paths():
+    """Section labels are never clipped and home paths render as ~/..."""
+    manifest = PromptManifest()
+    long_label = "/home/hermes/workspace/some/very/deep/project/file.txt"
+    short_label = "SOUL.md"
+    manifest.set_system_components(
+        [ComponentNode("tier", 10, "TIERTEXTTT",
+                       sources=((short_label, 5), (long_label, 5)))],
+        texts=["TIERTEXTTT"],
+    )
+    rec = manifest.record_send([{"role": "user", "content": "x"}])
+    assert rec is not None
+    manifest.render()
+    got = manifest.get_line(1)
+    assert got is not None
+    text = got[1]
+    # Full long label preserved (column auto-widened, no clipping).
+    assert long_label not in text  # display_path converted it to ~/...
+    assert "~/workspace/some/very/deep/project/file.txt" in text
+    assert "section" in text
 
 
 def _make_manifest_with_sources() -> PromptManifest:
