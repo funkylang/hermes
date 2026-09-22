@@ -268,7 +268,7 @@ def test_get_line_sys_sections_full_width_and_tilde_paths():
     # Full long label preserved (column auto-widened, no clipping).
     assert long_label not in text  # display_path converted it to ~/...
     assert "~/workspace/some/very/deep/project/file.txt" in text
-    assert "section" in text
+    assert "source" in text
 
 
 def _make_manifest_with_sources() -> PromptManifest:

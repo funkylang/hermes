@@ -526,7 +526,7 @@ class PromptManifest:
                     shown = [(self._cell(_shorten_paths_in_text(lbl)), chars)
                              for lbl, chars in comp.sources]
                     width = max([8] + [len(l) for l, _ in shown]) + 2
-                    lines.append(f"    {'section':<{width}} {'chars':>9} {'~tok':>7}")
+                    lines.append(f"    {'source':<{width}} {'chars':>9} {'~tok':>7}")
                     for label, s_chars in shown:
                         lines.append(
                             f"    {label[:width]:<{width}} "
