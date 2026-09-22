@@ -273,3 +273,75 @@ def test_set_system_components_preserves_sources_on_rebuild():
     node = manifest._current_system[0]
     assert node.chars == len("CORE" * 20)
     assert node.sources == (("SOUL.md", 80),)
+
+
+def test_record_send_captures_reasoning_content():
+    """Echo-back providers send reasoning_content on the wire; it must be counted + stored."""
+    manifest = _make_manifest()
+    rec = manifest.record_send([
+        {"role": "assistant", "content": "the answer",
+         "reasoning_content": "step 1\nstep 2"},
+    ])
+    assert rec is not None
+    m = rec.messages[0]
+    assert m.reasoning_chars == len("step 1\nstep 2")
+    assert m.reasoning_text == "step 1\nstep 2"
+    # Reasoning rides the wire, so it is part of the counted total.
+    tot = manifest._record_totals(rec)
+    assert tot == (len("CORE" * 10) + len("the answer") + len("step 1\nstep 2"))
+
+
+def test_record_send_tags_origin_by_this_run_boundary():
+    """Messages before the this-run user row are 'resumed'; at/after it are 'this run'."""
+    manifest = _make_manifest()
+    msgs = [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "current question"},
+    ]
+    rec = manifest.record_send(msgs, this_run_start_idx=2)
+    assert rec is not None
+    origins = [m.origin for m in rec.messages]
+    assert origins == [
+        "resumed from session DB",
+        "resumed from session DB",
+        "this run",
+    ]
+
+
+def test_render_shows_origin_and_reasoning_tags():
+    """render() marks resumed/this-run origin and reasoning chars on message lines."""
+    manifest = _make_manifest()
+    rec = manifest.record_send([
+        {"role": "assistant", "content": "old answer", "reasoning_content": "rrr"},
+        {"role": "user", "content": "current question"},
+    ], this_run_start_idx=1)
+    assert rec is not None
+    rendered = manifest.render()
+    # The assistant line carries both its origin and a reasoning note.
+    asst_line = next(l for l in rendered.splitlines() if "[msg] assistant" in l)
+    assert "resumed from session DB" in asst_line
+    assert "reasoning 3 chars on wire" in asst_line
+    # The current user line is tagged this run and has no reasoning note.
+    user_line = next(l for l in rendered.splitlines() if "[msg] user" in l)
+    assert "this run" in user_line
+    assert "reasoning" not in user_line
+
+
+def test_get_line_shows_reasoning_and_origin_block():
+    """/pi <part no.> drill-down prints the reasoning text + origin for a message."""
+    manifest = _make_manifest()
+    rec = manifest.record_send([
+        {"role": "assistant", "content": "the answer",
+         "reasoning_content": "thinking steps here"},
+    ], this_run_start_idx=0)
+    assert rec is not None
+    # Line 1 = sys tier, 2 = the assistant message (no tools sent).
+    manifest.render()
+    got = manifest.get_line(2)
+    assert got is not None
+    seq, text = got
+    assert "role=assistant" in text
+    assert "origin: this run" in text
+    assert "reasoning (sent on the wire" in text
+    assert "thinking steps here" in text

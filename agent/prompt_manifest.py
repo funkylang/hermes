@@ -516,8 +516,13 @@ class PromptManifest:
 
             m = rec.messages[idx]
             parts = [f"[message] role={m.role}"]
+            if m.origin:
+                parts.append(f"origin: {m.origin}")
             content = self._content_for_mode(m.content, m.raw_content, display_mode)
             parts.append(content or "(no content)")
+            reasoning = (m.reasoning_text or "").strip()
+            if reasoning:
+                parts.append(f"reasoning (sent on the wire, {m.reasoning_chars:,} chars):\n{reasoning}")
             tool_text = self._content_for_mode(m.tool_text, m.raw_tool_text, display_mode)
             if tool_text:
                 parts.append(f"tool_calls:\n{tool_text}")
@@ -557,7 +562,7 @@ class PromptManifest:
             n = 0
             for rec in records:
                 sys_chars = sum(c.chars for c in rec.system_components)
-                msg_chars = sum(m.chars + m.tool_chars for m in rec.messages)
+                msg_chars = sum(m.chars + m.tool_chars + m.reasoning_chars for m in rec.messages)
                 tot_chars = self._record_totals(rec)
                 tok = rec.prompt_tokens
 
@@ -604,20 +609,27 @@ class PromptManifest:
                     out.append(f"{num}   [sys] {'(tool schemas)':<44} {rec.tool_schemas_chars:>9,}{est}")
 
                 for i, m in enumerate(rec.messages):
-                    size = m.chars + m.tool_chars
+                    size = m.chars + m.tool_chars + m.reasoning_chars
                     share = (100.0 * size / msg_chars) if msg_chars else 0.0
                     est = f" ≈{int(size * tok / tot_chars):,} tok" if (tok and tot_chars) else ""
+                    # Metadata sub-lines — never numbered, never part of the prompt.
+                    tags = []
+                    if m.origin:
+                        tags.append(m.origin)
+                    if m.reasoning_chars:
+                        tags.append(f"reasoning {m.reasoning_chars:,} chars on wire")
+                    tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
                     num = f"[{n}]".rjust(5)  # "  [9]" / " [10]" / "[100]"
-                    out.append(f"{num}   [msg] {m.role[:40]:<40} {size:>9,}{est}  ({share:.1f}%)")
+                    out.append(f"{num}   [msg] {m.role[:40]:<40} {size:>9,}{est}  ({share:.1f}%){tag_s}")
 
                 out.append("")
 
             with self._lock:
                 self._line_to_seq = line_map
             tail = "\n".join(out).rstrip()
-            return tail + "\n\nUse /pi <item no.> to see the full text of any numbered item."
+            return tail + "\n\nUse /pi <part no.> to see the full text of any numbered part."
         except Exception:
             return "Prompt manifest: render failed (see logs)."
 

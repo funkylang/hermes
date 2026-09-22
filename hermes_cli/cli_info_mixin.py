@@ -699,7 +699,7 @@ class CLIInfoMixin:
 
         No arg: shows what the most recent API call's prompt was made of, per
         component in chars plus the provider's real token total. `/pi N`: full
-        text of numbered item N from the previous view; its form follows the
+        text of numbered part N from the previous view; its form follows the
         /json display mode. Read-only; never breaks prompt caching."""
         if not self.agent:
             print("  (._.) No active agent -- send a message first.")
@@ -712,10 +712,10 @@ class CLIInfoMixin:
             mode = getattr(self.agent, "_pi_display_mode", "off")
             seq, text = (manifest.get_line(int(args[0]), display_mode=mode) or (None, None))
             if text is None:
-                print("  No prompt info item with that number yet — run /pi first.")
+                print("  No prompt info part with that number yet — run /pi first.")
                 return
             form = "human-readable" if mode == "human" else "raw wire JSON"
-            self._emit_pi_line(f"── Prompt #{seq} · item {args[0]} ({form}) ──")
+            self._emit_pi_line(f"── Prompt #{seq} · part {args[0]} ({form}) ──")
             for line in text.splitlines():
                 self._emit_pi_line(line)
             self._emit_pi_line("")
