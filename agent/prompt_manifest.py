@@ -48,11 +48,16 @@ class ComponentNode:
     Drill-down text is stored on the node itself (``text``); records hold
     a reference to it, so identical tiers share one text copy across every
     record and across agents that register the same shared id.
+
+    ``sources`` lists per-block provenance ``(label, chars)`` in assembly
+    order — e.g. which files (SOUL.md, AGENTS.md) or generated constants
+    make up a tier — so /pi can show where the text was loaded from.
     """
 
     description: str
     chars: int
     text: str = ""
+    sources: Tuple[Tuple[str, int], ...] = ()
 
 
 @dataclass
@@ -66,6 +71,9 @@ class MessageNode:
     tool_text: str = ""   # tool_calls as readable text (for drill-down)
     raw_content: str = ""  # wire form exactly as sent (no decoding)
     raw_tool_text: str = ""  # tool_calls JSON exactly as sent
+    origin: str = ""      # "resumed from session DB" or "this run"
+    reasoning_chars: int = 0  # char cost of reasoning_content on the wire
+    reasoning_text: str = ""  # reasoning exactly as sent (echo-back providers)
 
 
 def _message_content_chars(content: Any) -> int:
@@ -245,6 +253,9 @@ def _wire_message_node(msg: Any) -> Optional[MessageNode]:
     if not role:
         role = "?"
     content = msg.get("content")
+    raw_reasoning = (msg.get("reasoning_content") or msg.get("reasoning") or "")
+    if not isinstance(raw_reasoning, str):
+        raw_reasoning = str(raw_reasoning)
     return MessageNode(
         role=str(role),
         chars=_message_content_chars(content),
@@ -254,6 +265,8 @@ def _wire_message_node(msg: Any) -> Optional[MessageNode]:
                    if content is not None else "",
         tool_text=_tool_call_text(msg),
         raw_tool_text=_wire_tool_call_text(msg),
+        reasoning_chars=len(raw_reasoning),
+        reasoning_text=raw_reasoning,
     )
 
 
@@ -349,7 +362,8 @@ class PromptManifest:
             for i in keep:
                 node = comps[i]
                 text = texts[i] if isinstance(texts, list) and i < len(texts) else ""
-                node = ComponentNode(node.description, node.chars, text or node.text)
+                node = ComponentNode(node.description, node.chars,
+                                     text or node.text, node.sources)
                 self._system_by_cid[f"sys|{node.description}"] = node
                 kept_nodes.append(node)
             self._current_system = kept_nodes
@@ -381,7 +395,7 @@ class PromptManifest:
             return str(tools)[:8192]
 
     def record_send(self, api_messages: Any, tools_for_api: Any = None,
-                    label: str = "") -> Optional[PromptRecord]:
+                    label: str = "", this_run_start_idx: Optional[int] = None) -> Optional[PromptRecord]:
         """Snapshot the prompt about to be sent into a new PromptRecord.
 
         Pass ``api_messages`` in its final wire form (post-sanitization) and the
@@ -390,10 +404,17 @@ class PromptManifest:
 
         Only the LAST prompt per agent is kept (MAX_RECORDS = 1): each send
         replaces the previous record.
+
+        ``this_run_start_idx`` (index into *api_messages*, usually the current
+        turn's user row) tags every message before it as "resumed from session
+        DB" and the rest as "this run".
         """
         try:
             with self._lock:
                 messages = [n for n in (_wire_message_node(m) for m in (api_messages or [])) if n]
+                if this_run_start_idx is not None:
+                    for i, node in enumerate(messages):
+                        node.origin = "resumed from session DB" if i < this_run_start_idx else "this run"
                 tool_chars, tool_raw = self._tool_schema_chars(tools_for_api)
                 # Canonical tool-schema text is stored once and refreshed only
                 # when the serialized payload actually changes.
@@ -440,7 +461,7 @@ class PromptManifest:
     @staticmethod
     def _record_totals(rec: PromptRecord) -> int:
         return (sum(c.chars for c in rec.system_components)
-                + sum(m.chars + m.tool_chars for m in rec.messages)
+                + sum(m.chars + m.tool_chars + m.reasoning_chars for m in rec.messages)
                 + rec.tool_schemas_chars)
 
     # -- drill-down -------------------------------------------------------
