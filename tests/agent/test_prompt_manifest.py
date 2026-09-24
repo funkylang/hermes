@@ -168,10 +168,10 @@ def test_get_line_display_mode_raw_vs_human():
     assert rec is not None
     rendered = manifest.render()
 
-    # Find the message line number.
+    # Find the tool-message line number (kind column = role).
     msg_line_no = None
     for line in rendered.splitlines():
-        if "[msg]" in line:
+        if line.split() and line.split()[1] == "tool":
             msg_line_no = int(line.split()[0])
             break
     assert msg_line_no is not None
@@ -200,7 +200,7 @@ def test_get_line_tool_call_args_wire_form_raw():
     rendered = manifest.render()
     msg_line_no = None
     for line in rendered.splitlines():
-        if "[msg]" in line:
+        if line.split() and line.split()[1] == "assistant":
             msg_line_no = int(line.split()[0])
             break
     assert msg_line_no is not None

@@ -119,6 +119,7 @@ class ComponentNode:
     text: str = ""
     sources: Tuple[Tuple[str, int], ...] = ()
     annotation: str = ""
+    kind: str = "generated"  # what this part is: file | generated | hardcoded | summary | user | assistant | tool | ...
 
 
 @dataclass
@@ -429,7 +430,7 @@ class PromptManifest:
                 text = texts[i] if isinstance(texts, list) and i < len(texts) else ""
                 node = ComponentNode(node.description, node.chars,
                                      text or node.text, tuple(node.sources),
-                                     annotation=node.annotation)
+                                     annotation=node.annotation, kind=node.kind)
                 self._system_by_cid[f"sys|{node.description}"] = node
                 kept_nodes.append(node)
             self._current_system = kept_nodes
@@ -696,14 +697,14 @@ class PromptManifest:
                     n += 1
                     line_map[n] = (rec.seq, "sys", i)
                     share = f"{100.0 * comp.chars / sys_chars:.1f}%" if sys_chars else ""
-                    rows.append([str(n), "[sys]", self._cell(comp.description),
+                    rows.append([str(n), comp.kind, self._cell(comp.description),
                                  f"{comp.chars:,}",
                                  str(self._tok_est(comp.chars, tot_chars, tok)), share])
 
                 if rec.tool_schemas_chars:
                     n += 1
                     line_map[n] = (rec.seq, "tools", 0)
-                    rows.append([str(n), "[sys]", "(tool schemas)",
+                    rows.append([str(n), "generated", "(tool schemas)",
                                  f"{rec.tool_schemas_chars:,}",
                                  str(self._tok_est(rec.tool_schemas_chars, tot_chars, tok)), ""])
 
@@ -712,8 +713,7 @@ class PromptManifest:
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
                     share = f"{100.0 * size / msg_chars:.1f}%" if msg_chars else ""
-                    # Tags removed - see user feedback on display clutter
-                    rows.append([str(n), "[msg]", self._cell(m.role),
+                    rows.append([str(n), m.role, self._cell(m.role),
                                  f"{size:,}", str(self._tok_est(size, tot_chars, tok)), share])
 
                 out.extend(format_table(header, rows))
@@ -764,12 +764,12 @@ class PromptManifest:
             if kind == "sys":
                 comp = rec.system_components[idx]
                 desc = self._cell(comp.description) or "(text not captured)"
-                return (f"{line_no:>6}  {'[sys]':<5} {desc:<48}"
+                return (f"{line_no:>6}  {comp.kind:<12} {desc:<48}"
                         f" {comp.chars:>9,}"
                         f"{self._tok_est(comp.chars, tot, tok):>8}")
 
             if kind == "tools":
-                return (f"{line_no:>6}  {'[sys]':<5} {'(tool schemas)':<48}"
+                return (f"{line_no:>6}  {'generated':<12} {'(tool schemas)':<48}"
                         f" {rec.tool_schemas_chars:>9,}"
                         f"{self._tok_est(rec.tool_schemas_chars, tot, tok):>8}")
 
@@ -779,7 +779,7 @@ class PromptManifest:
                                 f"reasoning {m.reasoning_chars:,} chars" if m.reasoning_chars else None)
                     if t]
             tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
-            return (f"{line_no:>6}  {'[msg]':<5} {self._cell(m.role):<48}"
+            return (f"{line_no:>6}  {m.role:<12} {self._cell(m.role):<48}"
                     f" {size:>9,}"
                     f"{self._tok_est(size, tot, tok):>8}{tag_s}")
         except Exception:

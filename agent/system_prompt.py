@@ -833,6 +833,37 @@ def _context_file_labels_for_block(agent: Any, block_text: str) -> List[Tuple[st
     return out
 
 
+# Static constants whose text never changes within the prompt (no builder, no loader).
+# Their /pi labels get an explicit " (hardcoded)" suffix and kind is always "hardcoded".
+_HARDCODED_CONSTANTS = {
+    "default identity", "hermes-agent help guidance",
+    "task completion guidance", "parallel tool call guidance",
+    "steering channel note", "tool-use enforcement guidance",
+    "google model operational guidance",
+}
+
+
+def _part_kind_for_label(label: str) -> str:
+    """Classify what a system-prompt part IS, from its assembly label.
+
+    Returns one of ``hardcoded | file | generated | summary``. Assigned at the
+    point text is appended so the /pi kind column is data, not decoration.
+    (To be refined as more parts get honest kinds; kept simple on purpose.)
+    """
+    if label in _HARDCODED_CONSTANTS or "hardcoded" in label:
+        return "hardcoded"
+    # Real file-backed content: memory files, SOUL.md, skills, AGENTS/CLAUDE, etc.
+    if (label.startswith("~/.hermes/memories/") or label == "~/.hermes/SOUL.md"
+            or label in ("SOUL.md", "MEMORY.md", "USER.md")
+            or label.startswith("skill ") or "SKILL.md" in label
+            or label.endswith((".md", ".MD"))):
+        return "file"
+    # Runtime-assembled from several sources (context-file bundle, skills index).
+    if label in ("project context files", "skills index (generated)") or label.startswith("_ctx_block_"):
+        return "summary"
+    return "generated"
+
+
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, Any]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
@@ -1037,14 +1068,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Index-based (never zip): some paths append to a parts list more often than
     # its label list — an index miss must fall back, never drop a text.
     try:
-        blocks: List[Tuple[str, str, str, List[Tuple[str, int]]]] = []
+        # (text, label, annotation, sources, kind); kind = what this part IS
+        # (hardcoded | file | generated | summary), assigned where the text is appended.
+        blocks: List[Tuple[str, str, str, List[Tuple[str, int]], str]] = []
 
-        _HARDCODED_CONSTANTS = {
-            "default identity", "hermes-agent help guidance",
-            "task completion guidance", "parallel tool call guidance",
-            "steering channel note", "tool-use enforcement guidance",
-            "google model operational guidance",
-        }
         # Stable: 1:1 labels, EXCEPT the non-workspace path appends
         # coding_trailing_parts without labels — fall back by position.
         for i, p in enumerate(stable_parts):
@@ -1054,9 +1081,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             ann = ("Static constant in prompt_builder.py; the skill_view pointer "
                    "variant is swapped in after the skills index renders."
                    if lbl == "hermes-agent help guidance" else "")
+            kind = _part_kind_for_label(lbl)
             blocks.append((p,
                            f"{lbl} (hardcoded)" if lbl in _HARDCODED_CONSTANTS else lbl,
-                           ann, [(lbl, len(p))]))
+                           ann, [(lbl, len(p))], kind))
         # Context: 1:1 labels by construction.
         for i, p in enumerate(context_parts):
             if not (p and p.strip()):
@@ -1064,13 +1092,15 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             lbl = context_part_labels[i] if i < len(context_part_labels) else "context section"
             ann = ""
             srcs = [(lbl, len(p))]
+            kind = "generated"
             if lbl.startswith("_ctx_block_"):
                 lbl = "project context files"
                 ann = ("Built by build_context_files_prompt() from the AGENTS.md/"
                        "CLAUDE.md files discovered in the working directory; one "
                        "section per file (listed below in human mode).")
                 srcs = list(_ctx_file_provenance) or [(lbl, len(p))]
-            blocks.append((p, lbl, ann, srcs))
+                kind = "summary"
+            blocks.append((p, lbl, ann, srcs, kind))
         # Volatile: 1:1 labels by construction.
         _vol_annots = {
             "_skills_index": ("Rendered by build_skills_system_prompt() from the active "
@@ -1085,12 +1115,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 continue
             lbl = volatile_sources[i] if i < len(volatile_sources) else "runtime section"
             srcs = [(lbl, len(p))]
+            kind = "generated"
             if lbl == "_skills_index":
                 sk_src = _skills_index_sources(agent, skills_prompt)
                 if sk_src:
                     srcs = sk_src
             blocks.append((p, "skills index (generated)" if lbl == "_skills_index" else lbl,
-                           _vol_annots.get(lbl, ""), srcs))
+                           _vol_annots.get(lbl, ""), srcs, kind))
         agent._system_prompt_blocks = blocks
     except Exception:
         pass  # observability must never break prompt build
@@ -1112,8 +1143,8 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     try:
         from agent.prompt_manifest import ComponentNode, get_or_create_manifest as _pm_get
         _pm_m = _pm_get(agent)
-        _comps = [ComponentNode(label, len(text), text, tuple(srcs), annotation=ann)
-                  for (text, label, ann, srcs) in (getattr(agent, "_system_prompt_blocks", None) or [])
+        _comps = [ComponentNode(label, len(text), text, tuple(srcs), annotation=ann, kind=kind)
+                  for (text, label, ann, srcs, kind) in (getattr(agent, "_system_prompt_blocks", None) or [])
                   if text and text.strip()]
         if not _comps:
             # Fail open to the previous tier-granular shape.
