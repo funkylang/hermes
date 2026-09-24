@@ -495,8 +495,9 @@ class PromptManifest:
         then use its numbers.  Walks the same line ordering ``render()`` uses.
 
         ``display_mode`` (set via /json): "off" (default) shows message contents
-        in their raw wire form (exactly as sent); "human" decodes tool-result
-        JSON into readable text with real line breaks.
+        in their raw wire form (exactly as sent) and system parts as pure text;
+        "human" decodes tool-result JSON into readable text with real line breaks
+        and shows each system part's header + source sections.
         """
         try:
             with self._lock:
@@ -513,9 +514,12 @@ class PromptManifest:
             if kind == "sys":
                 comp = rec.system_components[idx]
                 t = comp.text or ""
-                # System tiers: header + source provenance (which files/constants make up this tier).
                 tok = rec.prompt_tokens
                 tot = self._record_totals(rec)
+                # Raw: just the text of this whole part, no metadata. Human:
+                # header + source provenance (which files/constants make up this tier).
+                if display_mode == "off":
+                    return seq, t if t else "  text not available (not captured)"
                 lines = [f"[{self._cell(comp.description)} ("
                          f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
                 if comp.sources:

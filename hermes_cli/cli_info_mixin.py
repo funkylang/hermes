@@ -778,8 +778,10 @@ class CLIInfoMixin:
     def _set_json_display_mode(self, cmd_original: str = ""):
         """`/json [off|human]` — drill-down form for /pi <line>.
 
-        off (default): pure wire JSON exactly as sent. human: decoded readable
-        text with real line breaks. In-memory only; resets on restart/new agent."""
+        off (default): raw — pure wire JSON exactly as sent; system parts
+        show only their text. human: decoded readable text with real line
+        breaks and per-source sizes for system parts. In-memory only; resets
+        on restart/new agent."""
         arg = next((a for a in cmd_original.split() if a != "/json"), "").lower()
         if not arg:
             current = getattr(self, "_pi_display_mode", "off")

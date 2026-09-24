@@ -234,19 +234,33 @@ def test_render_shows_source_provenance_for_tiers():
 
 
 def test_get_line_sys_shows_sources_header():
-    """get_line for a system tier lists its sections; text stays intact."""
+    """get_line for a system tier (human mode) lists its sections; text stays intact."""
     manifest = _make_manifest_with_sources()
     rec = manifest.record_send(
         [{"role": "user", "content": "hi"}],
         tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
     )
     manifest.render()
-    got = manifest.get_line(1)  # the system tier line
+    got = manifest.get_line(1, display_mode="human")  # the system tier line
     assert got is not None
     seq, text = got
     assert "Sections:" in text
     assert "SOUL.md" in text
     assert "CORE" * 10 in text
+
+
+def test_get_line_sys_raw_mode_text_only():
+    """Raw mode for a system part returns ONLY the verbatim text — no header or Sections."""
+    manifest = _make_manifest_with_sources()
+    manifest.record_send(
+        [{"role": "user", "content": "hi"}],
+        tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
+    )
+    manifest.render()
+    got = manifest.get_line(1, display_mode="off")
+    assert got is not None
+    text = got[1]
+    assert text == "CORE" * 10
 
 
 def test_get_line_sys_sections_full_width_and_tilde_paths():
@@ -262,7 +276,7 @@ def test_get_line_sys_sections_full_width_and_tilde_paths():
     rec = manifest.record_send([{"role": "user", "content": "x"}])
     assert rec is not None
     manifest.render()
-    got = manifest.get_line(1)
+    got = manifest.get_line(1, display_mode="human")
     assert got is not None
     text = got[1]
     # Full long label preserved (column auto-widened, no clipping).
