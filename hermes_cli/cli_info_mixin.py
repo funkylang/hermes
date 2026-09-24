@@ -716,7 +716,7 @@ class CLIInfoMixin:
             if text is None:
                 print("  No prompt info part with that number yet — run /pi first.")
                 return
-            form = "human-readable" if mode == "human" else "raw wire JSON"
+            form = "human-readable" if mode == "human" else "raw (as sent)"
             self._emit_pi_line(f"{header or f'part {args[0]}'}   ({form})")
             for line in text.splitlines():
                 self._emit_pi_line(line)
@@ -778,10 +778,11 @@ class CLIInfoMixin:
     def _set_pi_style_mode(self, cmd_original: str = ""):
         """`/style [raw|human]` — drill-down form for /pi <line>.
 
-        raw (default): pure wire JSON exactly as sent; system parts show only
-        their text. human: decoded readable text with real line breaks and
-        per-source sizes for system parts. In-memory only; resets on
-        restart/new agent."""
+        raw (default): content exactly as sent — JSON stays compact/escaped
+        where it is JSON on the wire, everything else is plain text; system
+        parts show only their text. human: decoded readable text with real
+        line breaks and per-source sizes for system parts. In-memory only;
+        resets on restart/new agent."""
         arg = next((a for a in cmd_original.split() if a != "/style"), "").lower()
         if not arg:
             current = getattr(self, "_pi_display_mode", "raw")

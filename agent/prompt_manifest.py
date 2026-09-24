@@ -495,7 +495,8 @@ class PromptManifest:
         then use its numbers.  Walks the same line ordering ``render()`` uses.
 
         ``display_mode`` (set via /style): "raw" (default) shows message contents
-        in their raw wire form (exactly as sent) and system parts as pure text;
+        exactly as sent — compact/escaped where it is JSON on the wire, plain
+        text otherwise; system parts are pure text either way;
         "human" decodes tool-result JSON into readable text with real line breaks
         and shows each system part's header + source sections.
         """
@@ -578,7 +579,8 @@ class PromptManifest:
     def _content_for_mode(readable: str, raw: str, mode: str) -> str:
         """Pick the drill-down text form for one payload based on display mode.
 
-        "raw": wire form exactly as sent (default); "human": decoded readable form.
+        "raw": as sent — JSON where it is JSON on the wire, text otherwise
+        (default); "human": decoded readable form.
         """
         if mode == "human":
             return readable or raw

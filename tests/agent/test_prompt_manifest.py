@@ -161,7 +161,7 @@ def test_record_send_stores_decoded_content_for_drilldown():
 
 
 def test_get_line_display_mode_raw_vs_human():
-    """/style raw = pure wire JSON; human = decoded readable text."""
+    """/style raw = verbatim wire form; human = decoded readable text."""
     manifest = _make_manifest()
     raw = json.dumps({"content": "1|line one\n2|line two"})
     rec = manifest.record_send([{"role": "tool", "name": "read_file", "content": raw}])
