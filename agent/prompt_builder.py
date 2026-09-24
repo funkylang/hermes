@@ -1173,6 +1173,34 @@ def drain_truncation_warnings() -> list:
     return drained
 
 
+# Per-file provenance collected by the context-file loaders during build_context_files_prompt().
+# Populated by _record_context_file(); consumed (and cleared) via drain_context_file_provenance().
+# One entry per loaded file: {"label": str, "path": str, "chars": int, "truncated": bool}.
+_CONTEXT_FILE_PROVENANCE: list[dict] = []
+
+
+def _record_context_file(label: str, path: "Path", rendered_len: int, original_len: int) -> None:
+    """Append one provenance entry for a loaded context file.
+
+    *rendered_len* is the char count of what actually entered the prompt (after scan/truncation);
+    *original_len* is the char count of the source content (after frontmatter strip where applicable).
+    """
+    _CONTEXT_FILE_PROVENANCE.append({
+        "label": label,
+        "path": str(path),
+        "chars": rendered_len,
+        "truncated": rendered_len < original_len,
+    })
+
+
+def drain_context_file_provenance() -> list[dict]:
+    """Return and clear the per-file provenance recorded by the most recent context-file build."""
+    global _CONTEXT_FILE_PROVENANCE
+    drained = _CONTEXT_FILE_PROVENANCE
+    _CONTEXT_FILE_PROVENANCE = []
+    return drained
+
+
 # Skills index (two-layer cache: in-process LRU, then disk snapshot).
 # One entry per profile × platform (key carries skills_dir); a multiplexing gateway needs more than a handful.
 # Sized for multi-profile processes: since #86313 the cache key carries a per-profile skills_dir (one entry
@@ -1754,7 +1782,11 @@ def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str
     """.hermes.md / HERMES.md — nearest match walking up to the git root."""
     for label, path, content in _hermes_md_candidates(cwd_path):
         if content:
-            return _context_section(_strip_yaml_frontmatter(content), label, ".hermes.md", path, context_length)
+            body = _strip_yaml_frontmatter(content)
+            section = _context_section(body, label, ".hermes.md", path, context_length)
+            # Record provenance: which file loaded and whether it was truncated.
+            _record_context_file(label, path, len(section), len(body))
+            return section
     return ""
 
 
