@@ -588,17 +588,15 @@ class PromptManifest:
                         lines.append(ln)
                 if has_inner_sources:
                     lines.append("  Sections:")
-                    # Shorten embedded absolute paths in-place; compute the
-                    # column from the DISPLAYED (shortened) labels so nothing
-                    # is clipped.
+                    # Shorten embedded absolute paths in-place; format_table
+                    # sizes the columns from what is actually displayed.
                     shown = [(self._cell(_shorten_paths_in_text(lbl)), chars)
                              for lbl, chars in comp.sources]
-                    width = max([8] + [len(l) for l, _ in shown]) + 2
-                    lines.append(f"    {'source':<{width}} {'chars':>9} {'~tok':>7}")
-                    for label, s_chars in shown:
-                        lines.append(
-                            f"    {label[:width]:<{width}} "
-                            f"{s_chars:>9,} {self._tok_est(s_chars, tot, tok):>7}")
+                    header = [("source", "l"), ("chars", "r"), ("~tok", "r")]
+                    rows = [[label, f"{s_chars:,}",
+                             str(self._tok_est(s_chars, tot, tok))]
+                            for label, s_chars in shown]
+                    lines.extend("    " + ln for ln in format_table(header, rows))
                 if not t:
                     return seq, "\n".join(lines) + "\n  text not available (not captured)"
                 return seq, "\n".join(lines) + f"\n\n{t}"
