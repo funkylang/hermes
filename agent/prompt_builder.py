@@ -1806,7 +1806,10 @@ def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str
     for label, candidate, content in _agents_md_candidates(cwd_path):
         if content and content not in seen_content:  # else: empty, or an identical copy along the chain
             seen_content.add(content)
-            sections.append(_context_section(content, label, label, candidate, context_length))
+            section = _context_section(content, label, label, candidate, context_length)
+            # Record provenance: which file loaded and whether it was truncated.
+            _record_context_file(label, candidate, len(section), len(content))
+            sections.append(section)
     if len(sections) <= 1:
         return sections[0] if sections else ""
     # Per-file budgets applied above; also cap the merged chain so a deep monorepo can't multiply the budget.
@@ -1818,7 +1821,10 @@ def _load_claude_md(cwd_path: Path, context_length: Optional[int] = None) -> str
     """CLAUDE.md / claude.md — cwd only."""
     for name, path, content in _claude_md_candidates(cwd_path):
         if content:
-            return _context_section(content, name, "CLAUDE.md", path, context_length)
+            section = _context_section(content, name, "CLAUDE.md", path, context_length)
+            # Record provenance: which file loaded and whether it was truncated.
+            _record_context_file(name, path, len(section), len(content))
+            return section
     return ""
 
 

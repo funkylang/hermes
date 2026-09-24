@@ -932,6 +932,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         _ctx_file_blocks.append(block)
         # Placeholder index into the per-file provenance lists built below.
         context_part_labels.append(f"_ctx_block_{len(_ctx_file_blocks) - 1}")
+    # Per-file provenance from the loader instrumentation (prompt_builder's
+    # _record_context_file); the loaders know their own sizes — no parsing.
+    # Shape: [(label, chars), ...] in load order; empty list = no files loaded.
+    _ctx_file_provenance = [
+        (_e["path"], _e["chars"]) for _e in _pb.drain_context_file_provenance()
+    ] or []
     if coding_workspace_parts:
         for t in coding_workspace_parts:
             context_parts.append(t)
@@ -991,8 +997,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             continue
         label = context_part_labels[i]
         if label.startswith("_ctx_block_"):
-            # Context-file block: one provenance entry per file section inside it.
-            context_sources.extend(_context_file_labels_for_block(agent, p))
+            # Context-file block: one provenance entry per file, straight
+            # from the loader instrumentation (no parsing of the block).
+            context_sources.extend(_ctx_file_provenance or [(label, len(p))])
         else:
             context_sources.append((label, len(p)))
 
@@ -1062,7 +1069,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 ann = ("Built by build_context_files_prompt() from the AGENTS.md/"
                        "CLAUDE.md files discovered in the working directory; one "
                        "section per file (listed below in human mode).")
-                srcs = list(_context_file_labels_for_block(agent, p)) or [(lbl, len(p))]
+                srcs = list(_ctx_file_provenance) or [(lbl, len(p))]
             blocks.append((p, lbl, ann, srcs))
         # Volatile: 1:1 labels by construction.
         _vol_annots = {
