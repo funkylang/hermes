@@ -368,23 +368,21 @@ def _skills_index_sources(agent: Any, index_text: str) -> List[Tuple[str, int]]:
 
     The index is a deterministic list of ``  - <name>: <desc>`` lines (see
     ``_render_skills_index``); splitting on those lines yields one entry per
-    listed skill with its real line size. Falls back to the coarse directory
-    label when no entries are found (e.g. demoted names-only format), so
-    provenance is best-effort and never breaks prompt build."""
+    listed skill with its real line size. Labels are the plain skill names —
+    the directory is constant for all rows and adds no information. Falls
+    back to a coarse "skills index" label when no entries are found (e.g.
+    demoted names-only format), so provenance is best-effort and never breaks
+    prompt build."""
     if not index_text or not index_text.strip():
         return []
-    try:
-        home_str = str(_agent_home(agent)) if _agent_home(agent) else "~/.hermes/skills"
-    except Exception:
-        home_str = "~/.hermes/skills"
     matches = list(_SKILL_INDEX_ENTRY_RE.finditer(index_text))
     if not matches:
-        return [(f"skills index ({home_str})", len(index_text))]
+        return [("skills index", len(index_text))]
     out: List[Tuple[str, int]] = []
     for i, m in enumerate(matches):
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(index_text)
         name = m.group(1).strip()
-        out.append((f"skill {name} ({home_str})", body_end - m.start()))
+        out.append((f"skill {name}", body_end - m.start()))
     return out
 
 
@@ -573,10 +571,11 @@ def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
             block = agent._memory_store.format_for_system_prompt(kind) if enabled else None
             if block:
                 # Label from the block's own banner — robust across memory-store
-                # variants; falls back to a kind name when neither banner matches.
+                # variants; matches on the stable header prefix so wording
+                # drift inside the parentheses cannot break the mapping.
                 if "MEMORY (your personal notes)" in block:
                     label = "~/.hermes/memories/MEMORY.md"
-                elif "USER PROFILE (who is the user)" in block:
+                elif "USER PROFILE" in block:
                     label = "~/.hermes/memories/USER.md"
                 else:
                     label = f"{kind} memory block"
@@ -973,14 +972,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         volatile_sources.append("plugin system prompt sections")
     _ts_text = _timestamp_line(agent)
     volatile_parts.append(_ts_text)
-    volatile_sources.append("conversation timestamp line")
+    volatile_sources.append("conversation timestamp (generated)")
     # Keep the renderer-owned runtime anchor after all user/plugin prose so quoted
     # host examples cannot shadow it during persisted-prompt validation.
     if environment_hints:
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-        volatile_sources.append("runtime environment hints")
+        volatile_sources.append("runtime environment (generated)")
 
     # ── Provenance metadata (internal; never part of the prompt) ──
     context_sources: List[Tuple[str, int]] = []
@@ -1003,11 +1002,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 volatile_source_entries.extend(sk_src)
                 continue
             # Unparseable index: fall back to one coarse entry.
-            try:
-                home_str = str(_agent_home(agent)) if _agent_home(agent) else "~/.hermes/skills"
-            except Exception:
-                home_str = "~/.hermes/skills"
-            volatile_source_entries.append((f"skills index ({home_str})", chars))
+            volatile_source_entries.append(("skills index", chars))
         else:
             volatile_source_entries.append((label, chars))
 
