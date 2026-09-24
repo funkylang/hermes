@@ -26,6 +26,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, drain_truncation_warnings,
 )
 from agent import prompt_builder as _pb
+from agent.path_display import display_path
 from agent.runtime_cwd import resolve_agent_cwd, resolve_context_cwd
 from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
@@ -844,7 +845,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     Also returns provenance metadata: ``_stable_sources`` / ``_context_sources`` /
     ``_volatile_sources`` hold ``(label, chars)`` tuples in assembly order — one entry
     per text that actually lands in that tier (a context-file block yields one entry
-    per file inside it). This is the source of the ``/pi`` prompt-part breakdown."""
+    per file inside it). This is the source of the ``/pi`` prompt-part breakdown.
+
+    Per-block texts and labels are published on the agent as an observability
+    side-channel (``agent._system_prompt_blocks``) in full assembly order; the
+    manifest publisher turns them into one part per block. The return dict stays
+    exactly three string tiers — consumers iterate ``parts.values()``.
+    """
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
@@ -861,7 +868,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     stable_parts: List[Optional[str]] = []
     stable_sources: List[str] = []
     _identity_texts, _soul_loaded = _identity_parts(agent, _ctx_len)
-    _identity_label = "SOUL.md" if _soul_loaded else "default identity"
+    if _soul_loaded:
+        # Real file path (same home resolution the loader uses), displayed as
+        # ~/... where possible — consistent with the memory-file labels.
+        _home = _agent_home(agent) or get_hermes_home()
+        _identity_label = display_path(str(_home / "SOUL.md"))
+    else:
+        _identity_label = "default identity"
     for t in _identity_texts:
         stable_parts.append(t)
         stable_sources.append(_identity_label)
@@ -920,19 +933,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Placeholder index into the per-file provenance lists built below.
         context_part_labels.append(f"_ctx_block_{len(_ctx_file_blocks) - 1}")
     if coding_workspace_parts:
-        _cwd_label = None
-        try:
-            from agent.runtime_cwd import resolve_context_cwd as _rcwd
-            _rc = _rcwd()
-            _cwd_label = str(_rc) if _rc is not None else None
-        except Exception:
-            _cwd_label = None
         for t in coding_workspace_parts:
             context_parts.append(t)
-            if _cwd_label:
-                context_part_labels.append(f"git workspace snapshot ({_cwd_label})")
-            else:
-                context_part_labels.append("git workspace snapshot (live probe)")
+            context_part_labels.append("git workspace snapshot (generated)")
         for t in coding_trailing_parts:
             context_parts.append(t)
             context_part_labels.append("coding brief (trailing portion)")
@@ -1006,15 +1009,82 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         else:
             volatile_source_entries.append((label, chars))
 
-    # Attach the breakdown on the agent (observability side-channel) instead of
-    # the return dict — existing consumers (stored-prompt rebuild checks, etc.)
-    # iterate parts.values() and would choke on non-str metadata.
     try:
         agent._system_prompt_sources = {
             "stable": list(_sources_from(stable_parts, stable_sources)),
             "context": list(context_sources),
             "volatile": volatile_source_entries,
         }
+    except Exception:
+        pass  # observability must never break prompt build
+
+    # Per-block publish for the /pi manifest: one part per text block instead of
+    # three tier bundles (every hardcoded constant, every memory file, ...). The
+    # entry texts are exactly the parts the tiers join (same drop rule), so the
+    # published parts rejoin to the byte-identical prompt. Each entry is
+    # (text, label, annotation, sources): label is "(hardcoded)"-tagged for static
+    # constants; annotation is human-mode-only explanatory text for parts built
+    # from hardcoded string literals at runtime; sources = the per-block share of
+    # the tier provenance (composite blocks: one row per inner file/skill).
+    #
+    # Index-based (never zip): some paths append to a parts list more often than
+    # its label list — an index miss must fall back, never drop a text.
+    try:
+        blocks: List[Tuple[str, str, str, List[Tuple[str, int]]]] = []
+
+        _HARDCODED_CONSTANTS = {
+            "default identity", "hermes-agent help guidance",
+            "task completion guidance", "parallel tool call guidance",
+            "steering channel note", "tool-use enforcement guidance",
+            "google model operational guidance",
+        }
+        # Stable: 1:1 labels, EXCEPT the non-workspace path appends
+        # coding_trailing_parts without labels — fall back by position.
+        for i, p in enumerate(stable_parts):
+            if not (p and p.strip()):
+                continue
+            lbl = stable_sources[i] if i < len(stable_sources) else "coding brief (trailing portion)"
+            ann = ("Static constant in prompt_builder.py; the skill_view pointer "
+                   "variant is swapped in after the skills index renders."
+                   if lbl == "hermes-agent help guidance" else "")
+            blocks.append((p,
+                           f"{lbl} (hardcoded)" if lbl in _HARDCODED_CONSTANTS else lbl,
+                           ann, [(lbl, len(p))]))
+        # Context: 1:1 labels by construction.
+        for i, p in enumerate(context_parts):
+            if not (p and p.strip()):
+                continue
+            lbl = context_part_labels[i] if i < len(context_part_labels) else "context section"
+            ann = ""
+            srcs = [(lbl, len(p))]
+            if lbl.startswith("_ctx_block_"):
+                lbl = "project context files"
+                ann = ("Built by build_context_files_prompt() from the AGENTS.md/"
+                       "CLAUDE.md files discovered in the working directory; one "
+                       "section per file (listed below in human mode).")
+                srcs = list(_context_file_labels_for_block(agent, p)) or [(lbl, len(p))]
+            blocks.append((p, lbl, ann, srcs))
+        # Volatile: 1:1 labels by construction.
+        _vol_annots = {
+            "_skills_index": ("Rendered by build_skills_system_prompt() from the active "
+                              "skills index; one line per listed skill."),
+            "conversation timestamp (generated)": ("Built by _timestamp_line() from the session id's embedded "
+                                                   "timestamp plus model/provider/platform values."),
+            "runtime environment (generated)": ("Probed by build_environment_hints() at build time: current "
+                                                "host, user, working directory and backend."),
+        }
+        for i, p in enumerate(volatile_parts):
+            if not (p and p.strip()):
+                continue
+            lbl = volatile_sources[i] if i < len(volatile_sources) else "runtime section"
+            srcs = [(lbl, len(p))]
+            if lbl == "_skills_index":
+                sk_src = _skills_index_sources(agent, skills_prompt)
+                if sk_src:
+                    srcs = sk_src
+            blocks.append((p, "skills index (generated)" if lbl == "_skills_index" else lbl,
+                           _vol_annots.get(lbl, ""), srcs))
+        agent._system_prompt_blocks = blocks
     except Exception:
         pass  # observability must never break prompt build
 
@@ -1027,18 +1097,25 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
     parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
-    # Prompt manifest (observability): publish the tier char counts + full text;
-    # each send later snapshots them. Sources ride on the nodes so a rebuild
-    # refreshes provenance exactly like text — never stale.
+    # Prompt manifest (observability): publish ONE part per text block instead of
+    # three tier bundles. The blocks ride on the agent from build_system_prompt_parts;
+    # their texts are exactly the tier inputs, so the published parts rejoin to the
+    # byte-identical prompt. Provenance sub-rows (per-file / per-skill shares) ride on
+    # each node as sources and show in the human-mode drill-down.
     try:
         from agent.prompt_manifest import ComponentNode, get_or_create_manifest as _pm_get
         _pm_m = _pm_get(agent)
-        sources = getattr(agent, "_system_prompt_sources", {}) or {}
-        _tiers = ((("stable", "System Prompt (Stable)"), parts["stable"]),
-                  (("context", "System Prompt (Context)"), parts["context"]),
-                  (("volatile", "System Prompt (Volatile)"), parts["volatile"]))
-        _comps = [ComponentNode(desc, len(text), text, tuple(sources.get(key, [])))
-                  for (key, desc), text in _tiers]
+        _comps = [ComponentNode(label, len(text), text, tuple(srcs), annotation=ann)
+                  for (text, label, ann, srcs) in (getattr(agent, "_system_prompt_blocks", None) or [])
+                  if text and text.strip()]
+        if not _comps:
+            # Fail open to the previous tier-granular shape.
+            sources = getattr(agent, "_system_prompt_sources", {}) or {}
+            _tiers = ((("stable", "System Prompt (Stable)"), parts["stable"]),
+                      (("context", "System Prompt (Context)"), parts["context"]),
+                      (("volatile", "System Prompt (Volatile)"), parts["volatile"]))
+            _comps = [ComponentNode(desc, len(text), text, tuple(sources.get(key, [])))
+                      for (key, desc), text in _tiers]
         _pm_m.set_system_components([c for c in _comps if c.chars > 0])
     except Exception:
         pass  # observability must never break prompt build

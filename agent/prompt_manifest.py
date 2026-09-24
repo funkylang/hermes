@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import textwrap
 import threading
 import time
 from dataclasses import dataclass, field
@@ -57,6 +58,42 @@ def _shorten_paths_in_text(text: str) -> str:
     return _ABS_PATH_RE.sub(lambda m: display_path(m.group(0)), text)
 
 
+def format_table(header: List[Tuple[str, str]], rows: List[List[str]]) -> List[str]:
+    """Render a column-aligned text table with DYNAMIC column widths.
+
+    *header* is ``(name, alignment)`` pairs — alignment ``"l"`` (left) or
+    ``"r"`` (right, for numbers).  Each *rows* entry must match the header
+    length.
+
+    Every column is exactly as wide as its widest cell across header and
+    body — no fixed widths, nothing clipped.  Used by /pi's overview and
+    drill-down tables so column alignment behaves the same everywhere.
+    """
+    if not header:
+        return []
+    cols = len(header)
+
+    # Per-column max width across header + all rows (single-line cells).
+    col_w = [0] * cols
+    for i, (name, _al) in enumerate(header):
+        col_w[i] = max(col_w[i], len(str(name)))
+    for row in rows:
+        if len(row) != cols:
+            raise ValueError(f"row width {len(row)} != header width {cols}")
+        for i, cell in enumerate(row):
+            col_w[i] = max(col_w[i], len(str(cell)))
+
+    def _fmt(cell: str, i: int, align: str) -> str:
+        s = str(cell)
+        return s.rjust(col_w[i]) if align == "r" else s.ljust(col_w[i])
+
+    out: List[str] = []
+    out.append("  ".join(_fmt(name, i, al) for i, (name, al) in enumerate(header)).rstrip())
+    for row in rows:
+        out.append("  ".join(_fmt(cell, i, header[i][1]) for i, cell in enumerate(row)).rstrip())
+    return out
+
+
 # ── Nodes ────────────────────────────────────────────────────────────────
 
 
@@ -71,12 +108,17 @@ class ComponentNode:
     ``sources`` lists per-block provenance ``(label, chars)`` in assembly
     order — e.g. which files (SOUL.md, AGENTS.md) or generated constants
     make up a tier — so /pi can show where the text was loaded from.
+
+    ``annotation`` is optional human-mode-only explanatory text: for parts
+    built from hardcoded string literals at runtime it says how/when the
+    text is constructed. Never shown in raw mode, never part of the prompt.
     """
 
     description: str
     chars: int
     text: str = ""
     sources: Tuple[Tuple[str, int], ...] = ()
+    annotation: str = ""
 
 
 @dataclass
@@ -365,16 +407,18 @@ class PromptManifest:
 
     # -- write side (attachment sites) ----------------------------------
 
+
     def set_system_components(self, components: List[ComponentNode],
                               texts: Optional[List[str]] = None) -> None:
-        """Store the system prompt's ordered tier components for this agent.
+        """Store the system prompt's ordered part components for this agent.
 
-        Called from ``build_system_prompt`` after the tiers are assembled.
-        Blank tiers are dropped; *texts* (same order) become the canonical
-        drill-down text, stored ONCE here (attached to the nodes) and shared
-        by every record until a rebuild replaces them — not copied per send.
-        Per-tier provenance rides on each node's ``sources``; a rebuild passes
-        fresh nodes, so sources never go stale.
+        Called from ``build_system_prompt`` after the prompt blocks are
+        assembled (one node per text block). Blank parts are dropped; *texts*
+        (same order) become the canonical drill-down text, stored ONCE here
+        (attached to the nodes) and shared by every record until a rebuild
+        replaces them — not copied per send. Provenance sub-rows ride on each
+        node's ``sources`` and human-mode explanations on its ``annotation``;
+        a rebuild passes fresh nodes, so neither goes stale.
         """
         with self._lock:
             comps = list(components or [])
@@ -384,7 +428,8 @@ class PromptManifest:
                 node = comps[i]
                 text = texts[i] if isinstance(texts, list) and i < len(texts) else ""
                 node = ComponentNode(node.description, node.chars,
-                                     text or node.text, tuple(node.sources))
+                                     text or node.text, tuple(node.sources),
+                                     annotation=node.annotation)
                 self._system_by_cid[f"sys|{node.description}"] = node
                 kept_nodes.append(node)
             self._current_system = kept_nodes
@@ -518,12 +563,24 @@ class PromptManifest:
                 tok = rec.prompt_tokens
                 tot = self._record_totals(rec)
                 # Raw: just the text of this whole part, no metadata. Human:
-                # header + source provenance (which files/constants make up this tier).
+                # header + explanation + source provenance for composite parts
+                # (context-file block: per file; skills index: per skill).
                 if display_mode == "raw":
                     return seq, t if t else "  text not available (not captured)"
                 lines = [f"[{self._cell(comp.description)} ("
                          f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
-                if comp.sources:
+                # A single source row repeating the part's own name says nothing
+                # new — show the Sections table only for genuinely composite parts.
+                base = self._cell(comp.description)[:-len(" (hardcoded)")] \
+                    if comp.description.endswith(" (hardcoded)") else self._cell(comp.description)
+                has_inner_sources = bool(
+                    comp.sources and not (
+                        len(comp.sources) == 1 and _shorten_paths_in_text(comp.sources[0][0]) == base))
+                if comp.annotation:
+                    for ln in textwrap.wrap(comp.annotation, width=80, initial_indent="  ",
+                                            subsequent_indent="  "):
+                        lines.append(ln)
+                if has_inner_sources:
                     lines.append("  Sections:")
                     # Shorten embedded absolute paths in-place; compute the
                     # column from the DISPLAYED (shortened) labels so nothing
@@ -628,39 +685,38 @@ class PromptManifest:
                     + "  chars_total " + format(tot_chars, ",")
                     + f"  chars/tok {ratio}"
                 )
-                # Column header for the numbered rows below.
-                out.append(f"{'':>6}  {'kind':<5} {'part':<40} {'chars':>9} {'tok*':>8}")
+                # Numbered content rows — dynamic column widths via format_table
+                # (longest label sets the width; nothing is clipped). The last
+                # unlabeled column is the intra-group share %.
+                header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r"),
+                          ("tok*", "r"), ("", "r")]
+                rows: List[List[str]] = []
 
                 for i, comp in enumerate(rec.system_components):
                     n += 1
                     line_map[n] = (rec.seq, "sys", i)
-                    share = f"{100.0 * comp.chars / sys_chars:>5.1f}%" if sys_chars else ""
-                    out.append(
-                        f"{n:>6}  {'[sys]':<5} {self._cell(comp.description)[:40]:<40}"
-                        f" {comp.chars:>9,} {self._tok_est(comp.chars, tot_chars, tok):>8}"
-                        f"{share:>7}"
-                    )
+                    share = f"{100.0 * comp.chars / sys_chars:.1f}%" if sys_chars else ""
+                    rows.append([str(n), "[sys]", self._cell(comp.description),
+                                 f"{comp.chars:,}",
+                                 str(self._tok_est(comp.chars, tot_chars, tok)), share])
 
                 if rec.tool_schemas_chars:
                     n += 1
                     line_map[n] = (rec.seq, "tools", 0)
-                    out.append(
-                        f"{n:>6}  {'[sys]':<5} {'(tool schemas)':<40}"
-                        f" {rec.tool_schemas_chars:>9,}"
-                        f" {self._tok_est(rec.tool_schemas_chars, tot_chars, tok):>8}"
-                    )
+                    rows.append([str(n), "[sys]", "(tool schemas)",
+                                 f"{rec.tool_schemas_chars:,}",
+                                 str(self._tok_est(rec.tool_schemas_chars, tot_chars, tok)), ""])
 
                 for i, m in enumerate(rec.messages):
                     size = m.chars + m.tool_chars + m.reasoning_chars
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
-                    share = f"{100.0 * size / msg_chars:>5.1f}%" if msg_chars else ""
+                    share = f"{100.0 * size / msg_chars:.1f}%" if msg_chars else ""
                     # Tags removed - see user feedback on display clutter
-                    out.append(
-                        f"{n:>6}  {'[msg]':<5} {self._cell(m.role)[:40]:<40}"
-                        f" {size:>9,} {self._tok_est(size, tot_chars, tok):>8}"
-                        f"{share:>7}"
-                    )
+                    rows.append([str(n), "[msg]", self._cell(m.role),
+                                 f"{size:,}", str(self._tok_est(size, tot_chars, tok)), share])
+
+                out.extend(format_table(header, rows))
 
                 out.append("")
 

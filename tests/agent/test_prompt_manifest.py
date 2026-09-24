@@ -354,12 +354,14 @@ def test_render_omits_origin_and_reasoning_tags():
     ], this_run_start_idx=1)
     assert rec is not None
     rendered = manifest.render()
-    # The tags are gone from the overview rows.
-    asst_line = next(l for l in rendered.splitlines() if "[msg] assistant" in l)
-    user_line = next(l for l in rendered.splitlines() if "[msg] user" in l)
-    assert "resumed from session DB" not in asst_line
-    assert "reasoning" not in asst_line
-    assert "this run" not in user_line
+    # Overview table rows only: numbered lines (footer prose mentions the tags'
+    # words and must not count). The tags are gone from those rows.
+    msg_rows = [l for l in rendered.splitlines() if l[:2].strip().isdigit()]
+    asst_row = next(l for l in msg_rows if "assistant" in l)
+    user_row = next(l for l in msg_rows if "user" in l)
+    assert "resumed from session DB" not in asst_row
+    assert "reasoning" not in asst_row
+    assert "this run" not in user_row
 
 
 def test_get_line_shows_reasoning_and_origin_block():
