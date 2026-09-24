@@ -700,7 +700,7 @@ class CLIInfoMixin:
         No arg: shows what the most recent API call's prompt was made of, per
         component in chars plus the provider's real token total. `/pi N`: full
         text of numbered part N from the previous view; its form follows the
-        /json display mode. Read-only; never breaks prompt caching."""
+        /style display mode. Read-only; never breaks prompt caching."""
         if not self.agent:
             print("  (._.) No active agent -- send a message first.")
             return
@@ -709,7 +709,7 @@ class CLIInfoMixin:
 
         manifest = get_or_create_manifest(self.agent)
         if args and args[0].isdigit():
-            mode = getattr(self.agent, "_pi_display_mode", "off")
+            mode = getattr(self.agent, "_pi_display_mode", "raw")
             part_no = int(args[0])
             header = manifest.get_line_header(part_no)
             _, text = (manifest.get_line(part_no, display_mode=mode) or (None, None))
@@ -775,21 +775,21 @@ class CLIInfoMixin:
                 self._pi_redirect_path = None
         print(line)
 
-    def _set_json_display_mode(self, cmd_original: str = ""):
-        """`/json [off|human]` — drill-down form for /pi <line>.
+    def _set_pi_style_mode(self, cmd_original: str = ""):
+        """`/style [raw|human]` — drill-down form for /pi <line>.
 
-        off (default): raw — pure wire JSON exactly as sent; system parts
-        show only their text. human: decoded readable text with real line
-        breaks and per-source sizes for system parts. In-memory only; resets
-        on restart/new agent."""
-        arg = next((a for a in cmd_original.split() if a != "/json"), "").lower()
+        raw (default): pure wire JSON exactly as sent; system parts show only
+        their text. human: decoded readable text with real line breaks and
+        per-source sizes for system parts. In-memory only; resets on
+        restart/new agent."""
+        arg = next((a for a in cmd_original.split() if a != "/style"), "").lower()
         if not arg:
-            current = getattr(self, "_pi_display_mode", "off")
-            self._pi_display_mode = "human" if current == "off" else "off"
-        elif arg in ("off", "human"):
+            current = getattr(self, "_pi_display_mode", "raw")
+            self._pi_display_mode = "human" if current == "raw" else "raw"
+        elif arg in ("raw", "human"):
             self._pi_display_mode = arg
         else:
-            print(f"  Unknown mode '{arg}' — use /json off or /json human.")
+            print(f"  Unknown mode '{arg}' — use /style raw or /style human.")
             return
         # Attach to the agent so /pi <line> sees it (no live agent yet is fine).
         if self.agent is not None:

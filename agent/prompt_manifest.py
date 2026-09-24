@@ -191,7 +191,7 @@ def _wire_tool_call_text(msg: Dict[str, Any]) -> str:
     """tool_calls in wire form: each call's arguments EXACTLY as sent.
 
     On the wire, tool-call arguments are compact JSON *strings*; this renders
-    them verbatim (one call per line) so /json off shows pure wire data.
+    them verbatim (one call per line) so /style raw shows pure wire data.
     """
     calls = msg.get("tool_calls") or []
     if not calls:
@@ -487,14 +487,14 @@ class PromptManifest:
 
     # -- drill-down -------------------------------------------------------
 
-    def get_line(self, line_no: int, display_mode: str = "off") -> Optional[Tuple[int, str]]:
+    def get_line(self, line_no: int, display_mode: str = "raw") -> Optional[Tuple[int, str]]:
         """Resolve a numbered output line (from /pi) to prompt text.
 
         Returns ``(seq, full_text)`` or None if unknown.  Numbers refer to the
         lines shown by the most recent ``render()`` call — so run /pi first,
         then use its numbers.  Walks the same line ordering ``render()`` uses.
 
-        ``display_mode`` (set via /json): "off" (default) shows message contents
+        ``display_mode`` (set via /style): "raw" (default) shows message contents
         in their raw wire form (exactly as sent) and system parts as pure text;
         "human" decodes tool-result JSON into readable text with real line breaks
         and shows each system part's header + source sections.
@@ -518,7 +518,7 @@ class PromptManifest:
                 tot = self._record_totals(rec)
                 # Raw: just the text of this whole part, no metadata. Human:
                 # header + source provenance (which files/constants make up this tier).
-                if display_mode == "off":
+                if display_mode == "raw":
                     return seq, t if t else "  text not available (not captured)"
                 lines = [f"[{self._cell(comp.description)} ("
                          f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
@@ -578,7 +578,7 @@ class PromptManifest:
     def _content_for_mode(readable: str, raw: str, mode: str) -> str:
         """Pick the drill-down text form for one payload based on display mode.
 
-        "off": raw wire form exactly as sent; "human": decoded readable form.
+        "raw": wire form exactly as sent (default); "human": decoded readable form.
         """
         if mode == "human":
             return readable or raw

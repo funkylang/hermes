@@ -160,8 +160,8 @@ def test_record_send_stores_decoded_content_for_drilldown():
     assert m.chars == len(raw)
 
 
-def test_get_line_display_mode_off_vs_human():
-    """/json off = pure wire JSON; human = decoded readable text."""
+def test_get_line_display_mode_raw_vs_human():
+    """/style raw = pure wire JSON; human = decoded readable text."""
     manifest = _make_manifest()
     raw = json.dumps({"content": "1|line one\n2|line two"})
     rec = manifest.record_send([{"role": "tool", "name": "read_file", "content": raw}])
@@ -176,20 +176,20 @@ def test_get_line_display_mode_off_vs_human():
             break
     assert msg_line_no is not None
 
-    seq_off, text_off = manifest.get_line(msg_line_no, display_mode="off")
-    assert text_off is not None
+    seq_raw, text_raw = manifest.get_line(msg_line_no, display_mode="raw")
+    assert text_raw is not None
     seq_human, text_human = manifest.get_line(msg_line_no, display_mode="human")
     assert text_human is not None
-    # off: raw JSON as sent (escaped \n), no decoding.
-    assert json.dumps({"content": "1|line one\n2|line two"}) in text_off
-    assert "\\n" in text_off  # escaped newline visible = pure wire form
+    # raw: JSON as sent (escaped \n), no decoding.
+    assert json.dumps({"content": "1|line one\n2|line two"}) in text_raw
+    assert "\\n" in text_raw  # escaped newline visible = pure wire form
     # human: decoded readable text with real line breaks.
     assert "1|line one" in text_human and "2|line two" in text_human
     assert "\n  2|line two" in text_human  # real line break, not escaped
 
 
-def test_get_line_tool_call_args_wire_form_off():
-    """off mode renders tool-call arguments exactly as sent (compact JSON string)."""
+def test_get_line_tool_call_args_wire_form_raw():
+    """raw mode renders tool-call arguments exactly as sent (compact JSON string)."""
     manifest = _make_manifest()
     args_str = json.dumps({"path": "a.txt"})
     rec = manifest.record_send([
@@ -205,9 +205,9 @@ def test_get_line_tool_call_args_wire_form_off():
             break
     assert msg_line_no is not None
 
-    # off: raw args string preserved as sent.
-    seq_off, text_off = manifest.get_line(msg_line_no, display_mode="off")
-    assert "read_file" in text_off and args_str in text_off
+    # raw: args string preserved as sent.
+    seq_raw, text_raw = manifest.get_line(msg_line_no, display_mode="raw")
+    assert "read_file" in text_raw and args_str in text_raw
 
     # human: decoded readable tool_calls text.
     _, text_human = manifest.get_line(msg_line_no, display_mode="human")
@@ -257,7 +257,7 @@ def test_get_line_sys_raw_mode_text_only():
         tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
     )
     manifest.render()
-    got = manifest.get_line(1, display_mode="off")
+    got = manifest.get_line(1, display_mode="raw")
     assert got is not None
     text = got[1]
     assert text == "CORE" * 10

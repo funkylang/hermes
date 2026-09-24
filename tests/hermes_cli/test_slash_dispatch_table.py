@@ -26,7 +26,7 @@ OLD_CHAIN_COMMANDS = [
 
 # Observability commands added on top of the old chain (prompt manifest work);
 # they live in _SLASH_DISPATCH but were never in the legacy if/elif list.
-_CUSTOM_COMMANDS = ["pi", "json", "redirect"]
+_CUSTOM_COMMANDS = ["pi", "style", "redirect"]
 
 
 def test_every_old_branch_resolves_to_a_handler():
