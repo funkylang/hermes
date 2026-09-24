@@ -58,7 +58,8 @@ def _shorten_paths_in_text(text: str) -> str:
     return _ABS_PATH_RE.sub(lambda m: display_path(m.group(0)), text)
 
 
-def format_table(header: List[Tuple[str, str]], rows: List[List[str]]) -> List[str]:
+def format_table(header: List[Tuple[str, str]], rows: List[List[str]],
+                 show_header: bool = True) -> List[str]:
     """Render a column-aligned text table with DYNAMIC column widths.
 
     *header* is ``(name, alignment)`` pairs — alignment ``"l"`` (left) or
@@ -66,8 +67,10 @@ def format_table(header: List[Tuple[str, str]], rows: List[List[str]]) -> List[s
     length.
 
     Every column is exactly as wide as its widest cell across header and
-    body — no fixed widths, nothing clipped.  Used by /pi's overview and
-    drill-down tables so column alignment behaves the same everywhere.
+    body — no fixed widths, nothing clipped.  Used by /pi's overview,
+    drill-down tables, and single-row headers so column alignment behaves
+    the same everywhere.  Pass ``show_header=False`` to render only the rows
+    (still computed with the header's alignments).
     """
     if not header:
         return []
@@ -75,8 +78,9 @@ def format_table(header: List[Tuple[str, str]], rows: List[List[str]]) -> List[s
 
     # Per-column max width across header + all rows (single-line cells).
     col_w = [0] * cols
-    for i, (name, _al) in enumerate(header):
-        col_w[i] = max(col_w[i], len(str(name)))
+    if show_header:
+        for i, (name, _al) in enumerate(header):
+            col_w[i] = max(col_w[i], len(str(name)))
     for row in rows:
         if len(row) != cols:
             raise ValueError(f"row width {len(row)} != header width {cols}")
@@ -88,7 +92,8 @@ def format_table(header: List[Tuple[str, str]], rows: List[List[str]]) -> List[s
         return s.rjust(col_w[i]) if align == "r" else s.ljust(col_w[i])
 
     out: List[str] = []
-    out.append("  ".join(_fmt(name, i, al) for i, (name, al) in enumerate(header)).rstrip())
+    if show_header:
+        out.append("  ".join(_fmt(name, i, al) for i, (name, al) in enumerate(header)).rstrip())
     for row in rows:
         out.append("  ".join(_fmt(cell, i, header[i][1]) for i, cell in enumerate(row)).rstrip())
     return out
@@ -697,14 +702,14 @@ class PromptManifest:
                     n += 1
                     line_map[n] = (rec.seq, "sys", i)
                     share = f"{100.0 * comp.chars / sys_chars:.1f}%" if sys_chars else ""
-                    rows.append([str(n), comp.kind, self._cell(comp.description),
+                    rows.append([str(n), comp.kind + ":", self._cell(comp.description),
                                  f"{comp.chars:,}",
                                  str(self._tok_est(comp.chars, tot_chars, tok)), share])
 
                 if rec.tool_schemas_chars:
                     n += 1
                     line_map[n] = (rec.seq, "tools", 0)
-                    rows.append([str(n), "generated", "(tool schemas)",
+                    rows.append([str(n), "generated:", "(tool schemas)",
                                  f"{rec.tool_schemas_chars:,}",
                                  str(self._tok_est(rec.tool_schemas_chars, tot_chars, tok)), ""])
 
@@ -713,7 +718,7 @@ class PromptManifest:
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
                     share = f"{100.0 * size / msg_chars:.1f}%" if msg_chars else ""
-                    rows.append([str(n), m.role, self._cell(m.role),
+                    rows.append([str(n), m.role + ":", self._cell(m.role),
                                  f"{size:,}", str(self._tok_est(size, tot_chars, tok)), share])
 
                 out.extend(format_table(header, rows))
@@ -761,27 +766,28 @@ class PromptManifest:
             tok = rec.prompt_tokens
             tot = self._record_totals(rec)
 
+            # Single-row table through format_table (dynamic widths, same
+            # rules as the overview); only alignments matter here.
             if kind == "sys":
                 comp = rec.system_components[idx]
                 desc = self._cell(comp.description) or "(text not captured)"
-                return (f"{line_no:>6}  {comp.kind:<12} {desc:<48}"
-                        f" {comp.chars:>9,}"
-                        f"{self._tok_est(comp.chars, tot, tok):>8}")
-
-            if kind == "tools":
-                return (f"{line_no:>6}  {'generated':<12} {'(tool schemas)':<48}"
-                        f" {rec.tool_schemas_chars:>9,}"
-                        f"{self._tok_est(rec.tool_schemas_chars, tot, tok):>8}")
-
-            m = rec.messages[idx]
-            size = m.chars + m.tool_chars + m.reasoning_chars
-            tags = [t for t in (m.origin,
-                                f"reasoning {m.reasoning_chars:,} chars" if m.reasoning_chars else None)
-                    if t]
-            tag_s = ("  [" + ", ".join(tags) + "]") if tags else ""
-            return (f"{line_no:>6}  {m.role:<12} {self._cell(m.role):<48}"
-                    f" {size:>9,}"
-                    f"{self._tok_est(size, tot, tok):>8}{tag_s}")
+                row = [str(line_no), f"{comp.kind}:", desc,
+                       f"{comp.chars:,}", str(self._tok_est(comp.chars, tot, tok))]
+            elif kind == "tools":
+                row = [str(line_no), "generated:", "(tool schemas)",
+                       f"{rec.tool_schemas_chars:,}",
+                       str(self._tok_est(rec.tool_schemas_chars, tot, tok))]
+            else:
+                m = rec.messages[idx]
+                size = m.chars + m.tool_chars + m.reasoning_chars
+                tags = [t for t in (m.origin,
+                                    f"reasoning {m.reasoning_chars:,} chars" if m.reasoning_chars else None)
+                        if t]
+                tag_s = (" [" + ", ".join(tags) + "]") if tags else ""
+                row = [str(line_no), f"{m.role}:", self._cell(m.role),
+                       f"{size:,}", str(self._tok_est(size, tot, tok)) + tag_s]
+            header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r"), ("tok*", "r")]
+            return format_table(header, [row], show_header=False)[0]
         except Exception:
             return None
 
