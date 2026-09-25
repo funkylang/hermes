@@ -18,8 +18,8 @@ from typing import Any, Dict, Optional
 from hermes_constants import (
     get_hermes_home, get_scratch_dir, get_skills_dir, is_wsl, reset_hermes_home_override, set_hermes_home_override,
 )
-
 from agent.model_metadata import CHARS_PER_TOKEN
+from agent.prompt_manifest import utf8_bytes
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, ORG_ACTIVE_MARKER, ORG_MIRROR_DIR_NAME, ORG_PROVENANCE_FILE, SKILL_SUPPORT_DIRS,
@@ -1175,20 +1175,21 @@ def drain_truncation_warnings() -> list:
 
 # Per-file provenance collected by the context-file loaders during build_context_files_prompt().
 # Populated by _record_context_file(); consumed (and cleared) via drain_context_file_provenance().
-# One entry per loaded file: {"label": str, "path": str, "chars": int, "truncated": bool}.
+# One entry per loaded file: {"label": str, "path": str, "bytes": int, "truncated": bool}.
 _CONTEXT_FILE_PROVENANCE: list[dict] = []
 
 
 def _record_context_file(label: str, path: "Path", rendered_len: int, original_len: int) -> None:
     """Append one provenance entry for a loaded context file.
 
-    *rendered_len* is the char count of what actually entered the prompt (after scan/truncation);
-    *original_len* is the char count of the source content (after frontmatter strip where applicable).
+    *rendered_len* is the UTF-8 byte count of what actually entered the prompt (after scan/truncation);
+    *original_len* is the source content's byte count (after frontmatter strip where applicable).
+    Both are compared in bytes so the truncation flag stays consistent with /pi's byte sizes.
     """
     _CONTEXT_FILE_PROVENANCE.append({
         "label": label,
         "path": str(path),
-        "chars": rendered_len,
+        "bytes": rendered_len,
         "truncated": rendered_len < original_len,
     })
 
@@ -1785,7 +1786,7 @@ def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str
             body = _strip_yaml_frontmatter(content)
             section = _context_section(body, label, ".hermes.md", path, context_length)
             # Record provenance: which file loaded and whether it was truncated.
-            _record_context_file(label, path, len(section), len(body))
+            _record_context_file(label, path, utf8_bytes(section), utf8_bytes(body))
             return section
     return ""
 
@@ -1808,7 +1809,7 @@ def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str
             seen_content.add(content)
             section = _context_section(content, label, label, candidate, context_length)
             # Record provenance: which file loaded and whether it was truncated.
-            _record_context_file(label, candidate, len(section), len(content))
+            _record_context_file(label, candidate, utf8_bytes(section), utf8_bytes(content))
             sections.append(section)
     if len(sections) <= 1:
         return sections[0] if sections else ""
@@ -1823,7 +1824,7 @@ def _load_claude_md(cwd_path: Path, context_length: Optional[int] = None) -> str
         if content:
             section = _context_section(content, name, "CLAUDE.md", path, context_length)
             # Record provenance: which file loaded and whether it was truncated.
-            _record_context_file(name, path, len(section), len(content))
+            _record_context_file(name, path, utf8_bytes(section), utf8_bytes(content))
             return section
     return ""
 

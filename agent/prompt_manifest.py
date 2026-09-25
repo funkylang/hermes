@@ -58,6 +58,11 @@ def _shorten_paths_in_text(text: str) -> str:
     return _ABS_PATH_RE.sub(lambda m: display_path(m.group(0)), text)
 
 
+def utf8_bytes(text: str) -> int:
+    """UTF-8 byte length of *text* — what /pi counts for every prompt part."""
+    return len(text.encode("utf-8"))
+
+
 def format_table(header: List[Tuple[str, str]], rows: List[List[str]],
                  show_header: bool = True) -> List[str]:
     """Render a column-aligned text table with DYNAMIC column widths.
@@ -104,13 +109,13 @@ def format_table(header: List[Tuple[str, str]], rows: List[List[str]],
 
 @dataclass(frozen=True)
 class ComponentNode:
-    """One named prompt component. Char count; no token estimation.
+    """One named prompt component; its UTF-8 byte count is the size shown by /pi.
 
     Drill-down text is stored on the node itself (``text``); records hold
     a reference to it, so identical tiers share one text copy across every
     record and across agents that register the same shared id.
 
-    ``sources`` lists per-block provenance ``(label, chars)`` in assembly
+    ``sources`` lists per-block provenance ``(label, bytes)`` in assembly
     order — e.g. which files (SOUL.md, AGENTS.md) or generated constants
     make up a tier — so /pi can show where the text was loaded from.
 
@@ -144,16 +149,16 @@ class MessageNode:
 
 
 def _message_content_chars(content: Any) -> int:
-    """Character count of an OpenAI-format message's content (string or parts)."""
+    """UTF-8 byte cost of an OpenAI-format message's content (string or parts)."""
     if isinstance(content, str):
-        return len(content)
+        return utf8_bytes(content)
     if isinstance(content, list):
         total = 0
         for part in content:
             if isinstance(part, str):
-                total += len(part)
+                total += utf8_bytes(part)
             elif isinstance(part, dict):
-                total += len(str(part.get("text", "")))
+                total += utf8_bytes(str(part.get("text", "")))
         return total
     return 0
 
@@ -253,11 +258,11 @@ def _wire_tool_call_text(msg: Dict[str, Any]) -> str:
 
 
 def _tool_call_chars(msg: Dict[str, Any]) -> int:
-    """Character cost of tool calls attached to an assistant message."""
+    """Byte cost of tool calls attached to an assistant message (as sent)."""
     total = 0
     for tc in msg.get("tool_calls") or []:
         fn = (tc or {}).get("function") or {}
-        total += len(str(fn.get("name", ""))) + len(str(fn.get("arguments", "")))
+        total += utf8_bytes(str(fn.get("name", ""))) + utf8_bytes(str(fn.get("arguments", "")))
     return total
 
 
@@ -332,7 +337,7 @@ def _wire_message_node(msg: Any) -> Optional[MessageNode]:
                    if content is not None else "",
         tool_text=_tool_call_text(msg),
         raw_tool_text=_wire_tool_call_text(msg),
-        reasoning_chars=len(raw_reasoning),
+        reasoning_chars=utf8_bytes(raw_reasoning),
         reasoning_text=raw_reasoning,
     )
 
@@ -452,10 +457,10 @@ class PromptManifest:
             total = 0
             for t in tools or []:
                 fn = (t or {}).get("function", {})
-                total += len(str(fn.get("name", ""))) + len(str(fn.get("description", "")))
-                total += len(str(fn.get("parameters", "")))
+                total += utf8_bytes(str(fn.get("name", ""))) + utf8_bytes(str(fn.get("description", "")))
+                total += utf8_bytes(str(fn.get("parameters", "")))
             return total, str(tools)[:8192]
-        return len(raw), raw
+        return utf8_bytes(raw), raw
 
     def _tool_schema_text(self, tools: Any) -> str:
         """Pretty JSON of the tool schemas (human drill-down); raw is as sent."""
@@ -570,7 +575,7 @@ class PromptManifest:
                 # (context-file block: per file; skills index: per skill).
                 if display_mode == "raw":
                     return seq, t if t else "  text not available (not captured)"
-                lines = [f"[{self._cell(comp.description)} ({len(t):,} chars)]"]
+                lines = [f"[{self._cell(comp.description)} ({utf8_bytes(t):,} bytes)]"]
                 # A single source row repeating the part's own name says nothing
                 # new — show the Sections table only for genuinely composite parts.
                 base = self._cell(comp.description)
@@ -587,7 +592,7 @@ class PromptManifest:
                     # sizes the columns from what is actually displayed.
                     shown = [(self._cell(_shorten_paths_in_text(lbl)), chars)
                              for lbl, chars in comp.sources]
-                    header = [("source", "l"), ("chars", "r")]
+                    header = [("source", "l"), ("bytes", "r")]
                     rows = [[label, f"{s_chars:,}"] for label, s_chars in shown]
                     lines.extend("    " + ln for ln in format_table(header, rows))
                 if not t:
@@ -602,18 +607,18 @@ class PromptManifest:
                 if not t:
                     return seq, "[tool schemas] text not available (not captured)"
                 form = "wire form" if display_mode != "human" else "pretty-printed JSON"
-                return seq, (f"[tool schemas ({len(t):,} chars, {form})]\n\n{t}")
+                return seq, (f"[tool schemas ({rec.tool_schemas_chars:,} bytes, {form})]\n\n{t}")
 
             m = rec.messages[idx]
             msg_size = m.chars + m.tool_chars + m.reasoning_chars
-            parts = [f"[message] role={m.role} ({msg_size:,} chars)"]
+            parts = [f"[message] role={m.role} ({msg_size:,} bytes)"]
             if m.origin:
                 parts.append(f"origin: {m.origin}")
             content = self._content_for_mode(m.content, m.raw_content, display_mode)
             parts.append(content or "(no content)")
             reasoning = (m.reasoning_text or "").strip()
             if reasoning:
-                parts.append(f"reasoning (sent on the wire, {m.reasoning_chars:,} chars):\n{reasoning}")
+                parts.append(f"reasoning (sent on the wire, {m.reasoning_chars:,} bytes):\n{reasoning}")
             tool_text = self._content_for_mode(m.tool_text, m.raw_tool_text, display_mode)
             if tool_text:
                 parts.append(f"tool_calls:\n{tool_text}")
@@ -654,8 +659,6 @@ class PromptManifest:
             line_map: Dict[int, Tuple[int, str, int]] = {}
             n = 0
             for rec in records:
-                sys_chars = sum(c.chars for c in rec.system_components)
-                msg_chars = sum(m.chars + m.tool_chars + m.reasoning_chars for m in rec.messages)
                 tot_chars = self._record_totals(rec)
                 tok = rec.prompt_tokens
 
@@ -673,36 +676,32 @@ class PromptManifest:
                     + "  completion " + format(rec.completion_tokens or 0, ",")
                     + "  cache_read " + format(rec.cache_read_tokens or 0, ",")
                     + f"  latency {lat_s}"
-                    + "  chars_total " + format(tot_chars, ",")
-                    + f"  chars/tok {ratio}"
+                    + "  bytes_total " + format(tot_chars, ",")
+                    + f"  bytes/tok {ratio}"
                 )
                 # Numbered content rows — dynamic column widths via format_table
-                # (longest label sets the width; nothing is clipped). The last
-                # unlabeled column is the intra-group share %.
-                header = [("#", "r"), ("kind", "l"), ("description", "l"), ("chars", "r"),
-                          ("", "r")]
+                # (longest label sets the width; nothing is clipped).
+                header = [("#", "r"), ("kind", "l"), ("description", "l"), ("bytes", "r")]
                 rows: List[List[str]] = []
 
                 for i, comp in enumerate(rec.system_components):
                     n += 1
                     line_map[n] = (rec.seq, "sys", i)
-                    share = f"{100.0 * comp.chars / sys_chars:.1f}%" if sys_chars else ""
                     rows.append([str(n), comp.kind + ":", self._cell(comp.description),
-                                 f"{comp.chars:,}", share])
+                                 f"{comp.chars:,}"])
 
                 if rec.tool_schemas_chars:
                     n += 1
                     line_map[n] = (rec.seq, "tools", 0)
                     rows.append([str(n), "generated:", "(tool schemas)",
-                                 f"{rec.tool_schemas_chars:,}", ""])
+                                 f"{rec.tool_schemas_chars:,}"])
 
                 for i, m in enumerate(rec.messages):
                     size = m.chars + m.tool_chars + m.reasoning_chars
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
-                    share = f"{100.0 * size / msg_chars:.1f}%" if msg_chars else ""
                     rows.append([str(n), m.role + ":", self._message_part_label(m),
-                                 f"{size:,}", share])
+                                 f"{size:,}"])
 
                 out.extend(format_table(header, rows))
 
@@ -767,12 +766,12 @@ class PromptManifest:
                 m = rec.messages[idx]
                 size = m.chars + m.tool_chars + m.reasoning_chars
                 tags = [t for t in (m.origin,
-                                    f"reasoning {m.reasoning_chars:,} chars" if m.reasoning_chars else None)
+                                    f"reasoning {m.reasoning_chars:,} bytes" if m.reasoning_chars else None)
                         if t]
                 tag_s = (" [" + ", ".join(tags) + "]") if tags else ""
                 row = [str(line_no), f"{m.role}:", self._message_part_label(m),
                        f"{size:,}{tag_s}"]
-            header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r")]
+            header = [("#", "r"), ("kind", "l"), ("description", "l"), ("bytes", "r")]
             return format_table(header, [row], show_header=False)[0]
         except Exception:
             return None

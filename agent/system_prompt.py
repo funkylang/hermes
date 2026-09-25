@@ -27,6 +27,7 @@ from agent.prompt_builder import (
 )
 from agent import prompt_builder as _pb
 from agent.path_display import display_path
+from agent.prompt_manifest import utf8_bytes
 from agent.runtime_cwd import resolve_agent_cwd, resolve_context_cwd
 from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
@@ -378,12 +379,12 @@ def _skills_index_sources(agent: Any, index_text: str) -> List[Tuple[str, int]]:
         return []
     matches = list(_SKILL_INDEX_ENTRY_RE.finditer(index_text))
     if not matches:
-        return [("skills index", len(index_text))]
+        return [("skills index", utf8_bytes(index_text))]
     out: List[Tuple[str, int]] = []
     for i, m in enumerate(matches):
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(index_text)
         name = m.group(1).strip()
-        out.append((f"skill {name}", body_end - m.start()))
+        out.append((f"skill {name}", utf8_bytes(index_text[m.start():body_end])))
     return out
 
 
@@ -875,7 +876,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     Never re-rendered mid-session.
 
     Also returns provenance metadata: ``_stable_sources`` / ``_context_sources`` /
-    ``_volatile_sources`` hold ``(label, chars)`` tuples in assembly order — one entry
+    ``_volatile_sources`` hold ``(label, bytes)`` tuples in assembly order — one entry
     per text that actually lands in that tier (a context-file block yields one entry
     per file inside it). This is the source of the ``/pi`` prompt-part breakdown.
 
@@ -889,9 +890,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
 
     def _sources_from(parts_: List[Optional[str]], labels: List[str]) -> Tuple[Tuple[str, int], ...]:
-        """(label, chars) for every non-blank part; mirrors _join_tier's drop rule."""
+        """(label, bytes) for every non-blank part; mirrors _join_tier's drop rule."""
         return tuple(
-            (labels[i], len(p)) for i, p in enumerate(parts_)
+            (labels[i], utf8_bytes(p)) for i, p in enumerate(parts_)
             if p and p.strip() and i < len(labels)
         )
 
@@ -968,7 +969,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # _record_context_file); the loaders know their own sizes — no parsing.
     # Shape: [(label, chars), ...] in load order; empty list = no files loaded.
     _ctx_file_provenance = [
-        (_e["path"], _e["chars"]) for _e in _pb.drain_context_file_provenance()
+        (_e["path"], _e["bytes"]) for _e in _pb.drain_context_file_provenance()
     ] or []
     if coding_workspace_parts:
         for t in coding_workspace_parts:
@@ -1031,9 +1032,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         if label.startswith("_ctx_block_"):
             # Context-file block: one provenance entry per file, straight
             # from the loader instrumentation (no parsing of the block).
-            context_sources.extend(_ctx_file_provenance or [(label, len(p))])
+            context_sources.extend(_ctx_file_provenance or [(label, utf8_bytes(p))])
         else:
-            context_sources.append((label, len(p)))
+            context_sources.append((label, utf8_bytes(p)))
 
     volatile_source_entries: List[Tuple[str, int]] = []
     for (label, chars) in _sources_from(volatile_parts, volatile_sources):
@@ -1082,21 +1083,21 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                    "variant is swapped in after the skills index renders."
                    if lbl == "hermes-agent help guidance" else "")
             kind = _part_kind_for_label(lbl)
-            blocks.append((p, lbl, ann, [(lbl, len(p))], kind))
+            blocks.append((p, lbl, ann, [(lbl, utf8_bytes(p))], kind))
         # Context: 1:1 labels by construction.
         for i, p in enumerate(context_parts):
             if not (p and p.strip()):
                 continue
             lbl = context_part_labels[i] if i < len(context_part_labels) else "context section"
             ann = ""
-            srcs = [(lbl, len(p))]
+            srcs = [(lbl, utf8_bytes(p))]
             kind = "generated"
             if lbl.startswith("_ctx_block_"):
                 lbl = "project context files"
                 ann = ("Built by build_context_files_prompt() from the AGENTS.md/"
                        "CLAUDE.md files discovered in the working directory; one "
                        "section per file (listed below in human mode).")
-                srcs = list(_ctx_file_provenance) or [(lbl, len(p))]
+                srcs = list(_ctx_file_provenance) or [(lbl, utf8_bytes(p))]
                 kind = "summary"
             blocks.append((p, lbl, ann, srcs, kind))
         # Volatile: 1:1 labels by construction.
@@ -1112,7 +1113,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             if not (p and p.strip()):
                 continue
             lbl = volatile_sources[i] if i < len(volatile_sources) else "runtime section"
-            srcs = [(lbl, len(p))]
+            srcs = [(lbl, utf8_bytes(p))]
             kind = "summary" if lbl == "_skills_index" else _part_kind_for_label(lbl)
             if lbl == "_skills_index":
                 sk_src = _skills_index_sources(agent, skills_prompt)
@@ -1141,7 +1142,7 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     try:
         from agent.prompt_manifest import ComponentNode, get_or_create_manifest as _pm_get
         _pm_m = _pm_get(agent)
-        _comps = [ComponentNode(label, len(text), text, tuple(srcs), annotation=ann, kind=kind)
+        _comps = [ComponentNode(label, utf8_bytes(text), text, tuple(srcs), annotation=ann, kind=kind)
                   for (text, label, ann, srcs, kind) in (getattr(agent, "_system_prompt_blocks", None) or [])
                   if text and text.strip()]
         if not _comps:
@@ -1150,7 +1151,7 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
             _tiers = ((("stable", "System Prompt (Stable)"), parts["stable"]),
                       (("context", "System Prompt (Context)"), parts["context"]),
                       (("volatile", "System Prompt (Volatile)"), parts["volatile"]))
-            _comps = [ComponentNode(desc, len(text), text, tuple(sources.get(key, [])))
+            _comps = [ComponentNode(desc, utf8_bytes(text), text, tuple(sources.get(key, [])))
                       for (key, desc), text in _tiers]
         _pm_m.set_system_components([c for c in _comps if c.chars > 0])
     except Exception:
