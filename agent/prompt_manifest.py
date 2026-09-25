@@ -679,7 +679,7 @@ class PromptManifest:
                 # Numbered content rows — dynamic column widths via format_table
                 # (longest label sets the width; nothing is clipped). The last
                 # unlabeled column is the intra-group share %.
-                header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r"),
+                header = [("#", "r"), ("kind", "l"), ("description", "l"), ("chars", "r"),
                           ("", "r")]
                 rows: List[List[str]] = []
 
