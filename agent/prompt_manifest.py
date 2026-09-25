@@ -701,7 +701,7 @@ class PromptManifest:
                     n += 1
                     line_map[n] = (rec.seq, "msg", i)
                     share = f"{100.0 * size / msg_chars:.1f}%" if msg_chars else ""
-                    rows.append([str(n), m.role + ":", self._cell(m.role),
+                    rows.append([str(n), m.role + ":", self._message_part_label(m),
                                  f"{size:,}", share])
 
                 out.extend(format_table(header, rows))
@@ -721,6 +721,21 @@ class PromptManifest:
     def _cell(value) -> str:
         """Single-line cell text (multi-line input folded onto one line)."""
         return " ".join(str(value or "").split())
+
+    @classmethod
+    def _message_part_label(cls, m: MessageNode) -> str:
+        """Generate a descriptive label for the 'part' column of message rows.
+
+        For user messages: use the start of the content text (first 40 chars).
+        For other roles: fall back to the role name.
+        """
+        # User messages get their content prefix as the description
+        if m.role == "user" and m.content:
+            label = cls._cell(m.content)  # fold to single line
+            if len(label) > 40:
+                return label[:37] + "..."
+            return label or m.role
+        return m.role
 
     def get_line_header(self, line_no: int) -> Optional[str]:
         """Tabular header line for one numbered part from the last render.
@@ -755,7 +770,7 @@ class PromptManifest:
                                     f"reasoning {m.reasoning_chars:,} chars" if m.reasoning_chars else None)
                         if t]
                 tag_s = (" [" + ", ".join(tags) + "]") if tags else ""
-                row = [str(line_no), f"{m.role}:", self._cell(m.role),
+                row = [str(line_no), f"{m.role}:", self._message_part_label(m),
                        f"{size:,}{tag_s}"]
             header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r")]
             return format_table(header, [row], show_header=False)[0]
