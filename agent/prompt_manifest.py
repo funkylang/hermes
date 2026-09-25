@@ -538,18 +538,17 @@ class PromptManifest:
 
     # -- drill-down -------------------------------------------------------
 
-    def get_line(self, line_no: int, display_mode: str = "raw") -> Optional[Tuple[int, str]]:
+    def get_line(self, line_no: int, display_mode: str = "human") -> Optional[Tuple[int, str]]:
         """Resolve a numbered output line (from /pi) to prompt text.
 
         Returns ``(seq, full_text)`` or None if unknown.  Numbers refer to the
         lines shown by the most recent ``render()`` call — so run /pi first,
         then use its numbers.  Walks the same line ordering ``render()`` uses.
 
-        ``display_mode`` (set via /style): "raw" (default) shows message contents
-        exactly as sent — compact/escaped where it is JSON on the wire, plain
-        text otherwise; system parts are pure text either way;
-        "human" decodes tool-result JSON into readable text with real line breaks
-        and shows each system part's header + source sections.
+        ``display_mode`` (set via /style): "human" (default) decodes tool-result
+        JSON into readable text with real line breaks and shows each system
+        part's header + source sections; "raw" shows message contents exactly as
+        sent — compact/escaped where it is JSON on the wire, plain text otherwise.
         """
         try:
             with self._lock:

@@ -709,7 +709,7 @@ class CLIInfoMixin:
 
         manifest = get_or_create_manifest(self.agent)
         if args and args[0].isdigit():
-            mode = getattr(self.agent, "_pi_display_mode", "raw")
+            mode = getattr(self.agent, "_pi_display_mode", "human")
             part_no = int(args[0])
             header = manifest.get_line_header(part_no)
             _, text = (manifest.get_line(part_no, display_mode=mode) or (None, None))
@@ -778,15 +778,15 @@ class CLIInfoMixin:
     def _set_pi_style_mode(self, cmd_original: str = ""):
         """`/style [raw|human]` — drill-down form for /pi <line>.
 
-        raw (default): content exactly as sent — JSON stays compact/escaped
-        where it is JSON on the wire, everything else is plain text; system
-        parts show only their text. human: decoded readable text with real
-        line breaks and per-source sizes for system parts. In-memory only;
+        human (default): decoded readable text with real line breaks and
+        per-source sizes for system parts. raw: content exactly as sent —
+        JSON stays compact/escaped where it is JSON on the wire, everything
+        else is plain text; system parts show only their text. In-memory only;
         resets on restart/new agent."""
         arg = next((a for a in cmd_original.split() if a != "/style"), "").lower()
         if not arg:
-            current = getattr(self, "_pi_display_mode", "raw")
-            self._pi_display_mode = "human" if current == "raw" else "raw"
+            current = getattr(self, "_pi_display_mode", "human")
+            self._pi_display_mode = "raw" if current == "human" else "human"
         elif arg in ("raw", "human"):
             self._pi_display_mode = arg
         else:
