@@ -364,6 +364,45 @@ def test_render_omits_origin_and_reasoning_tags():
     assert "this run" not in user_row
 
 
+def test_user_message_part_label_shows_content_prefix():
+    """User rows use the start of the message as part label; others keep the role.
+
+    Contract (not a snapshot): the user's own words identify the row, while
+    non-user roles must NOT leak content into the part column — so the
+    relationship between role and label is what's asserted.
+    """
+    manifest = _make_manifest()
+    long_q = "How do I refactor this module cleanly without breaking callers?"
+    rec = manifest.record_send([
+        {"role": "user", "content": long_q},
+        {"role": "assistant", "content": long_q},  # same text, different role
+    ])
+    assert rec is not None
+
+    # Direct label contract: user -> content prefix; assistant -> role name.
+    user_label = PromptManifest._message_part_label(rec.messages[0])
+    asst_label = PromptManifest._message_part_label(rec.messages[1])
+    assert user_label.startswith(long_q[:20])
+    assert asst_label == "assistant"
+
+    # And it flows through to the rendered overview + drill-down header.
+    rendered = manifest.render()
+    for l in rendered.splitlines():
+        if "  assistant:" in l:
+            assert long_q[:20] not in l
+    # Find the user message row and its line number.
+    user_line_no = None
+    for l in rendered.splitlines():
+        if "  user:" in l:
+            user_line_no = int(l.split()[0])
+            assert long_q[:20] in l
+            break
+    assert user_line_no is not None
+    # The drill-down header carries the same label.
+    header = manifest.get_line_header(user_line_no)
+    assert header is not None and long_q[:20] in header
+
+
 def test_get_line_shows_reasoning_and_origin_block():
     """/pi <part no.> drill-down prints the reasoning text + origin for a message."""
     manifest = _make_manifest()
