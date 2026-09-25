@@ -853,7 +853,8 @@ def _part_kind_for_label(label: str) -> str:
     if label in _HARDCODED_CONSTANTS or "hardcoded" in label:
         return "hardcoded"
     # Real file-backed content: memory files, SOUL.md, skills, AGENTS/CLAUDE, etc.
-    if (label.startswith("~/.hermes/memories/") or label == "~/.hermes/SOUL.md"
+    if (label.startswith("~/.hermes/memories/") or "memories/MEMORY.md" in label
+            or "memories/USER.md" in label or label == "~/.hermes/SOUL.md"
             or label in ("SOUL.md", "MEMORY.md", "USER.md")
             or label.startswith("skill ") or "SKILL.md" in label
             or label.endswith((".md", ".MD"))):
@@ -1112,7 +1113,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 continue
             lbl = volatile_sources[i] if i < len(volatile_sources) else "runtime section"
             srcs = [(lbl, len(p))]
-            kind = "generated"
+            kind = "summary" if lbl == "_skills_index" else _part_kind_for_label(lbl)
             if lbl == "_skills_index":
                 sk_src = _skills_index_sources(agent, skills_prompt)
                 if sk_src:

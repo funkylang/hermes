@@ -565,15 +565,12 @@ class PromptManifest:
             if kind == "sys":
                 comp = rec.system_components[idx]
                 t = comp.text or ""
-                tok = rec.prompt_tokens
-                tot = self._record_totals(rec)
                 # Raw: just the text of this whole part, no metadata. Human:
                 # header + explanation + source provenance for composite parts
                 # (context-file block: per file; skills index: per skill).
                 if display_mode == "raw":
                     return seq, t if t else "  text not available (not captured)"
-                lines = [f"[{self._cell(comp.description)} ("
-                         f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
+                lines = [f"[{self._cell(comp.description)} ({len(t):,} chars)]"]
                 # A single source row repeating the part's own name says nothing
                 # new — show the Sections table only for genuinely composite parts.
                 base = self._cell(comp.description)
@@ -590,10 +587,8 @@ class PromptManifest:
                     # sizes the columns from what is actually displayed.
                     shown = [(self._cell(_shorten_paths_in_text(lbl)), chars)
                              for lbl, chars in comp.sources]
-                    header = [("source", "l"), ("chars", "r"), ("~tok", "r")]
-                    rows = [[label, f"{s_chars:,}",
-                             str(self._tok_est(s_chars, tot, tok))]
-                            for label, s_chars in shown]
+                    header = [("source", "l"), ("chars", "r")]
+                    rows = [[label, f"{s_chars:,}"] for label, s_chars in shown]
                     lines.extend("    " + ln for ln in format_table(header, rows))
                 if not t:
                     return seq, "\n".join(lines) + "\n  text not available (not captured)"
@@ -606,18 +601,12 @@ class PromptManifest:
                 t = self._content_for_mode(pretty, raw, display_mode)
                 if not t:
                     return seq, "[tool schemas] text not available (not captured)"
-                tok = rec.prompt_tokens
-                tot = self._record_totals(rec)
                 form = "wire form" if display_mode != "human" else "pretty-printed JSON"
-                return seq, (f"[tool schemas ("
-                             f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok, {form})]\n\n{t}")
+                return seq, (f"[tool schemas ({len(t):,} chars, {form})]\n\n{t}")
 
             m = rec.messages[idx]
             msg_size = m.chars + m.tool_chars + m.reasoning_chars
-            tok = rec.prompt_tokens
-            tot = self._record_totals(rec)
-            parts = [f"[message] role={m.role} ("
-                     f"{msg_size:,} chars,  {self._tok_est(msg_size, tot, tok):>8} tok)"]
+            parts = [f"[message] role={m.role} ({msg_size:,} chars)"]
             if m.origin:
                 parts.append(f"origin: {m.origin}")
             content = self._content_for_mode(m.content, m.raw_content, display_mode)
@@ -691,7 +680,7 @@ class PromptManifest:
                 # (longest label sets the width; nothing is clipped). The last
                 # unlabeled column is the intra-group share %.
                 header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r"),
-                          ("tok*", "r"), ("", "r")]
+                          ("", "r")]
                 rows: List[List[str]] = []
 
                 for i, comp in enumerate(rec.system_components):
@@ -699,15 +688,13 @@ class PromptManifest:
                     line_map[n] = (rec.seq, "sys", i)
                     share = f"{100.0 * comp.chars / sys_chars:.1f}%" if sys_chars else ""
                     rows.append([str(n), comp.kind + ":", self._cell(comp.description),
-                                 f"{comp.chars:,}",
-                                 str(self._tok_est(comp.chars, tot_chars, tok)), share])
+                                 f"{comp.chars:,}", share])
 
                 if rec.tool_schemas_chars:
                     n += 1
                     line_map[n] = (rec.seq, "tools", 0)
                     rows.append([str(n), "generated:", "(tool schemas)",
-                                 f"{rec.tool_schemas_chars:,}",
-                                 str(self._tok_est(rec.tool_schemas_chars, tot_chars, tok)), ""])
+                                 f"{rec.tool_schemas_chars:,}", ""])
 
                 for i, m in enumerate(rec.messages):
                     size = m.chars + m.tool_chars + m.reasoning_chars
@@ -715,7 +702,7 @@ class PromptManifest:
                     line_map[n] = (rec.seq, "msg", i)
                     share = f"{100.0 * size / msg_chars:.1f}%" if msg_chars else ""
                     rows.append([str(n), m.role + ":", self._cell(m.role),
-                                 f"{size:,}", str(self._tok_est(size, tot_chars, tok)), share])
+                                 f"{size:,}", share])
 
                 out.extend(format_table(header, rows))
 
@@ -724,19 +711,11 @@ class PromptManifest:
             with self._lock:
                 self._line_to_seq = line_map
             tail = "\n".join(out).rstrip()
-            return (tail + "\n\n*tok* proportional estimate from the prompt's real token total. "
-                       "Use /pi <part no.> for full text, sources and tokens of a part.")
+            return (tail + "\n\nUse /pi <part no.> for the full text and sources of a part.")
         except Exception:
             return "Prompt manifest: render failed (see logs)."
 
 
-
-    @staticmethod
-    def _tok_est(part_chars: int, total_chars: int, tok):
-        """Proportional token estimate for one part, from the prompt's real tokens."""
-        if tok and total_chars:
-            return f"{int(part_chars * tok / total_chars):,}"
-        return "-"
 
     @staticmethod
     def _cell(value) -> str:
@@ -746,8 +725,8 @@ class PromptManifest:
     def get_line_header(self, line_no: int) -> Optional[str]:
         """Tabular header line for one numbered part from the last render.
 
-        Shows kind, description, chars and proportional token estimate - the
-        same numbers as the /pi overview row, with roomier columns.
+        Shows kind, description and chars — the same numbers as the /pi
+        overview row, with roomier columns.
         """
         try:
             with self._lock:
@@ -759,20 +738,16 @@ class PromptManifest:
             rec = next((r for r in records if r.seq == seq), None)
             if not rec:
                 return None
-            tok = rec.prompt_tokens
-            tot = self._record_totals(rec)
 
             # Single-row table through format_table (dynamic widths, same
             # rules as the overview); only alignments matter here.
             if kind == "sys":
                 comp = rec.system_components[idx]
                 desc = self._cell(comp.description) or "(text not captured)"
-                row = [str(line_no), f"{comp.kind}:", desc,
-                       f"{comp.chars:,}", str(self._tok_est(comp.chars, tot, tok))]
+                row = [str(line_no), f"{comp.kind}:", desc, f"{comp.chars:,}"]
             elif kind == "tools":
                 row = [str(line_no), "generated:", "(tool schemas)",
-                       f"{rec.tool_schemas_chars:,}",
-                       str(self._tok_est(rec.tool_schemas_chars, tot, tok))]
+                       f"{rec.tool_schemas_chars:,}"]
             else:
                 m = rec.messages[idx]
                 size = m.chars + m.tool_chars + m.reasoning_chars
@@ -781,8 +756,8 @@ class PromptManifest:
                         if t]
                 tag_s = (" [" + ", ".join(tags) + "]") if tags else ""
                 row = [str(line_no), f"{m.role}:", self._cell(m.role),
-                       f"{size:,}", str(self._tok_est(size, tot, tok)) + tag_s]
-            header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r"), ("tok*", "r")]
+                       f"{size:,}{tag_s}"]
+            header = [("#", "r"), ("kind", "l"), ("part", "l"), ("chars", "r")]
             return format_table(header, [row], show_header=False)[0]
         except Exception:
             return None
