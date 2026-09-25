@@ -833,8 +833,8 @@ def _context_file_labels_for_block(agent: Any, block_text: str) -> List[Tuple[st
     return out
 
 
-# Static constants whose text never changes within the prompt (no builder, no loader).
-# Their /pi labels get an explicit " (hardcoded)" suffix and kind is always "hardcoded".
+# Static constants whose text never changes within the prompt (no builder, no loader);
+# their parts are published with kind = "hardcoded".
 _HARDCODED_CONSTANTS = {
     "default identity", "hermes-agent help guidance",
     "task completion guidance", "parallel tool call guidance",
@@ -859,7 +859,7 @@ def _part_kind_for_label(label: str) -> str:
             or label.endswith((".md", ".MD"))):
         return "file"
     # Runtime-assembled from several sources (context-file bundle, skills index).
-    if label in ("project context files", "skills index (generated)") or label.startswith("_ctx_block_"):
+    if label in ("project context files", "skills index") or label.startswith("_ctx_block_"):
         return "summary"
     return "generated"
 
@@ -972,7 +972,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if coding_workspace_parts:
         for t in coding_workspace_parts:
             context_parts.append(t)
-            context_part_labels.append("git workspace snapshot (generated)")
+            context_part_labels.append("git workspace snapshot")
         for t in coding_trailing_parts:
             context_parts.append(t)
             context_part_labels.append("coding brief (trailing portion)")
@@ -1012,14 +1012,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         volatile_sources.append("plugin system prompt sections")
     _ts_text = _timestamp_line(agent)
     volatile_parts.append(_ts_text)
-    volatile_sources.append("conversation timestamp (generated)")
+    volatile_sources.append("conversation timestamp")
     # Keep the renderer-owned runtime anchor after all user/plugin prose so quoted
     # host examples cannot shadow it during persisted-prompt validation.
     if environment_hints:
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-        volatile_sources.append("runtime environment (generated)")
+        volatile_sources.append("runtime environment")
 
     # ── Provenance metadata (internal; never part of the prompt) ──
     context_sources: List[Tuple[str, int]] = []
@@ -1060,8 +1060,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # three tier bundles (every hardcoded constant, every memory file, ...). The
     # entry texts are exactly the parts the tiers join (same drop rule), so the
     # published parts rejoin to the byte-identical prompt. Each entry is
-    # (text, label, annotation, sources): label is "(hardcoded)"-tagged for static
-    # constants; annotation is human-mode-only explanatory text for parts built
+    # (text, label, annotation, sources, kind); annotation is human-mode-only explanatory text for parts built
     # from hardcoded string literals at runtime; sources = the per-block share of
     # the tier provenance (composite blocks: one row per inner file/skill).
     #
@@ -1082,9 +1081,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                    "variant is swapped in after the skills index renders."
                    if lbl == "hermes-agent help guidance" else "")
             kind = _part_kind_for_label(lbl)
-            blocks.append((p,
-                           f"{lbl} (hardcoded)" if lbl in _HARDCODED_CONSTANTS else lbl,
-                           ann, [(lbl, len(p))], kind))
+            blocks.append((p, lbl, ann, [(lbl, len(p))], kind))
         # Context: 1:1 labels by construction.
         for i, p in enumerate(context_parts):
             if not (p and p.strip()):
@@ -1105,9 +1102,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         _vol_annots = {
             "_skills_index": ("Rendered by build_skills_system_prompt() from the active "
                               "skills index; one line per listed skill."),
-            "conversation timestamp (generated)": ("Built by _timestamp_line() from the session id's embedded "
+            "conversation timestamp": ("Built by _timestamp_line() from the session id's embedded "
                                                    "timestamp plus model/provider/platform values."),
-            "runtime environment (generated)": ("Probed by build_environment_hints() at build time: current "
+            "runtime environment": ("Probed by build_environment_hints() at build time: current "
                                                 "host, user, working directory and backend."),
         }
         for i, p in enumerate(volatile_parts):
@@ -1120,7 +1117,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 sk_src = _skills_index_sources(agent, skills_prompt)
                 if sk_src:
                     srcs = sk_src
-            blocks.append((p, "skills index (generated)" if lbl == "_skills_index" else lbl,
+            blocks.append((p, "skills index" if lbl == "_skills_index" else lbl,
                            _vol_annots.get(lbl, ""), srcs, kind))
         agent._system_prompt_blocks = blocks
     except Exception:

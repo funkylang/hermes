@@ -577,8 +577,7 @@ class PromptManifest:
                          f"{len(t):,} chars,  {self._tok_est(len(t), tot, tok):>8} tok)]"]
                 # A single source row repeating the part's own name says nothing
                 # new — show the Sections table only for genuinely composite parts.
-                base = self._cell(comp.description)[:-len(" (hardcoded)")] \
-                    if comp.description.endswith(" (hardcoded)") else self._cell(comp.description)
+                base = self._cell(comp.description)
                 has_inner_sources = bool(
                     comp.sources and not (
                         len(comp.sources) == 1 and _shorten_paths_in_text(comp.sources[0][0]) == base))
