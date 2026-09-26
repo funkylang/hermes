@@ -4,12 +4,14 @@ Rides an httpx ``request`` event hook on the agent's client (same pattern as
 the served-model response capture in ``agent/served_model.py``). The hook
 writes whatever the OpenAI SDK serialized — nothing we re-assemble — to a
 configurable path, so /tmp/prompt.txt always holds the body of the LAST
-prompt sent to the server. Fail-open everywhere; observability never breaks
-a turn.
+prompt sent to the server. A human-readable copy (pretty-printed, same data)
+is written alongside as <base>.json (/tmp/prompt.json by default).
+Fail-open everywhere; observability never breaks a turn.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -24,6 +26,14 @@ _HOOK_MARK = "_hermes_prompt_capture_hook"
 def prompt_capture_path() -> str:
     """Current capture path (env override wins; read live, never cached)."""
     return os.environ.get(_CAPTURE_ENV) or _DEFAULT_PATH
+
+
+def prompt_capture_json_path() -> str:
+    """Readable-JSON companion of :func:`prompt_capture_path` (.txt -> .json)."""
+    path = prompt_capture_path()
+    if path.endswith(".txt"):
+        return path[: -len(".txt")] + ".json"
+    return path + ".json"
 
 
 def install_prompt_capture(client: Any) -> None:
@@ -46,8 +56,16 @@ def install_prompt_capture(client: Any) -> None:
             read = getattr(request, "read", None)
             data = read() if callable(read) else None
             if isinstance(data, (bytes, bytearray)) and data:
+                raw = bytes(data)
                 with open(prompt_capture_path(), "wb") as f:
-                    f.write(bytes(data))
+                    f.write(raw)
+                # Human-readable companion of the same body (.json, indent=2).
+                try:
+                    parsed = json.loads(raw)
+                    with open(prompt_capture_json_path(), "w", encoding="utf-8") as jf:
+                        json.dump(parsed, jf, indent=2, ensure_ascii=False)
+                except Exception:
+                    logger.debug("prompt capture JSON companion skipped", exc_info=True)
         except Exception:
             logger.debug("prompt capture skipped", exc_info=True)
 

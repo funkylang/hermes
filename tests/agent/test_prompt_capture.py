@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 from typing import Any
 
-from agent.prompt_capture import install_prompt_capture, prompt_capture_path
+from agent.prompt_capture import install_prompt_capture, prompt_capture_json_path, prompt_capture_path
 
 
 def _sdk_with_hook() -> Any:
@@ -54,6 +54,37 @@ def test_writes_last_request_only(tmp_path, monkeypatch):
     sdk._client.post(base, content=b"second")
 
     assert (tmp_path / "prompt.txt").read_bytes() == b"second"
+
+
+def test_writes_json_companion_of_same_body(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("HERMES_PROMPT_CAPTURE", str(tmp_path / "prompt.txt"))
+    sdk = _sdk_with_hook()
+    body = b'{"messages": [{"role": "user", "content": "hi"}], "model": "m"}'
+    sdk._client.post(
+        "http://localhost/v1/chat/completions", content=body,
+    )
+
+    json_path = tmp_path / "prompt.json"
+    assert json_path.exists()
+    # The .json companion holds the SAME data as the captured body.
+    assert json.loads(json_path.read_text(encoding="utf-8")) == json.loads(body)
+
+
+def test_invalid_body_still_writes_txt_no_json(tmp_path, monkeypatch):
+    # Fail-open: a non-JSON body still lands in prompt.txt; companion is skipped.
+    monkeypatch.setenv("HERMES_PROMPT_CAPTURE", str(tmp_path / "prompt.txt"))
+    sdk = _sdk_with_hook()
+    sdk._client.post("http://localhost/v1/chat/completions", content=b"second")
+
+    assert (tmp_path / "prompt.txt").read_bytes() == b"second"
+    assert not (tmp_path / "prompt.json").exists()
+
+
+def test_json_path_derives_from_txt_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_PROMPT_CAPTURE", str(tmp_path / "capture.txt"))
+    assert prompt_capture_json_path() == str(tmp_path / "capture.json")
 
 
 def test_hook_not_double_installed():
