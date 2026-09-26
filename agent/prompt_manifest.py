@@ -375,7 +375,7 @@ class PromptManifest:
             raw = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
         except Exception:
             raw = str(tools)[:8192]
-        return ComponentNode("tool schemas", raw, kind="generated")
+        return ComponentNode("tool schemas", raw, kind="hardcoded")
 
     def record_send(self, agent: Any, api_messages: Any, tools_for_api: Any = None,
                     label: str = "", this_run_start_idx: Optional[int] = None) -> Optional[PromptRecord]:
@@ -734,14 +734,14 @@ class PromptManifest:
                     for i, t in enumerate(wtools):
                         n += 1
                         line_map[n] = (rec.seq, "wtool", i)
-                        rows.append([str(n), "generated:", self._tool_name(t),
+                        rows.append([str(n), "hardcoded:", self._tool_name(t),
                                      f"{PromptManifest._wire_bytes(t):,}"])
                 else:
                     # Fallback path (no wire capture yet): record nodes.
                     if self._component_bytes(rec.tool_schemas):
                         n += 1
                         line_map[n] = (rec.seq, "tools", 0)
-                        rows.append([str(n), "generated:", "(tool schemas)",
+                        rows.append([str(n), "hardcoded:", "(tool schemas)",
                                      f"{self._component_bytes(rec.tool_schemas):,}"])
 
                     for i, m in enumerate(rec.messages):
@@ -809,7 +809,7 @@ class PromptManifest:
                 row = [str(line_no), f"{comp.kind}:", desc, f"{self._component_bytes(comp):,}"]
             elif kind == "tools":
                 ts = rec.tool_schemas
-                row = [str(line_no), "generated:", "(tool schemas)",
+                row = [str(line_no), f"{getattr(ts, 'kind', 'hardcoded')}:", "(tool schemas)",
                        f"{self._component_bytes(ts):,}"]
             elif kind in ("wmsg", "wtool", "wenv"):
                 # Wire-truth rows: resolve the part from the stored wire body.
@@ -827,7 +827,7 @@ class PromptManifest:
                     wtools = wb.get("tools") or []
                     if idx >= len(wtools):
                         return None
-                    part, kd, desc = wtools[idx], "generated:", self._tool_name(wtools[idx])
+                    part, kd, desc = wtools[idx], "hardcoded:", self._tool_name(wtools[idx])
                 else:
                     part, kd, desc = {k: v for k, v in wb.items() if k not in ("messages", "tools")}, "generated:", "server parameters"
                 row = [str(line_no), kd, desc, f"{self._wire_bytes(part):,}"]
