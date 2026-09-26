@@ -604,7 +604,7 @@ class PromptManifest:
             if name:
                 names.append(str(name))
         if names:
-            label = ", ".join(names)
+            label = "call tool: " + ", ".join(names)
             return (label[:37] + "...") if len(label) > 40 else label
         return ""
 
