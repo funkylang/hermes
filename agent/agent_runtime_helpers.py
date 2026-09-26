@@ -1987,6 +1987,9 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # Routing proxies name the deployment they served in a response header (#54864).
     from agent.served_model import install_served_model_capture
     install_served_model_capture(agent, client)
+    # Wire-faithful prompt capture: /tmp/prompt.txt = last request body bytes.
+    from agent.prompt_capture import install_prompt_capture
+    install_prompt_capture(client)
     _ra().logger.info("OpenAI client created (%s, shared=%s) %s", reason, shared, agent._client_log_context())
     return client
 
