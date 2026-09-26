@@ -145,7 +145,7 @@ def build_api_request(
         from agent.prompt_manifest import get_or_create_manifest
 
         _pm_rec = get_or_create_manifest(agent).record_send(
-            api_messages, tools_for_api, this_run_start_idx=_find_this_run_start(api_messages, original_user_message)
+            agent, api_messages, tools_for_api, this_run_start_idx=_find_this_run_start(api_messages, original_user_message)
         )
         agent._pm_current_seq = getattr(_pm_rec, "seq", None)
     except Exception:

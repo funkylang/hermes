@@ -1,8 +1,9 @@
 """Tests for agent/prompt_manifest.py — prompt manifest instrumentation.
 
-Covers the node/record model (single stored prompt, canonical tier/schema
-text), render numbering + get_line resolution, and JSON envelope decoding of
-tool-result content for readable /pi drill-downs.
+Covers the node/record model (single stored prompt; system parts published at
+build time on the agent), byte totals computed from held text at render time,
+render numbering + get_line resolution, and JSON envelope decoding of tool-
+result content for readable /pi drill-downs.
 """
 
 import json
@@ -20,18 +21,22 @@ class FakeAgent:
     pass
 
 
-def _make_manifest() -> PromptManifest:
-    manifest = PromptManifest()
-    manifest.set_system_components(
-        [ComponentNode("core instructions", len("CORE" * 10))],
-        texts=["CORE" * 10],
-    )
-    return manifest
+def _make_agent() -> FakeAgent:
+    return FakeAgent()
+
+
+def _make_manifest() -> tuple:
+    agent = _make_agent()
+    PromptManifest._store_system_nodes(agent, [
+        ComponentNode("core instructions", "CORE" * 10),
+    ])
+    return agent, PromptManifest()
 
 
 def test_render_numbers_lines_and_get_line_resolves_them():
-    manifest = _make_manifest()
+    agent, manifest = _make_manifest()
     rec = manifest.record_send(
+        agent,
         [{"role": "user", "content": "hello"}],
         tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
     )
@@ -42,9 +47,8 @@ def test_render_numbers_lines_and_get_line_resolves_them():
     rendered = manifest.render()
     # Rows are numbered; the stats row is plain "label value" pairs.
     assert "prompt 100" in rendered
-    assert "bytes/tok" in rendered
 
-    got = manifest.get_line(3)  # the user message line (1=sys tier, 2=tool schemas)
+    got = manifest.get_line(3)  # the user message line (1=sys part, 2=tool schemas)
     assert got is not None
     seq, text = got
     assert seq == rec.seq
@@ -54,9 +58,9 @@ def test_render_numbers_lines_and_get_line_resolves_them():
 
 def test_only_last_prompt_is_kept():
     """MAX_RECORDS=1: each send replaces the previous; prompt numbers stay monotonic."""
-    manifest = _make_manifest()
-    r1 = manifest.record_send([{"role": "user", "content": "first"}])
-    r2 = manifest.record_send([{"role": "user", "content": "second"}])
+    agent, manifest = _make_manifest()
+    r1 = manifest.record_send(agent, [{"role": "user", "content": "first"}])
+    r2 = manifest.record_send(agent, [{"role": "user", "content": "second"}])
     assert r1 is not None and r2 is not None
     assert len(manifest._records) == 1
     kept = manifest._records[-1]
@@ -68,10 +72,9 @@ def test_only_last_prompt_is_kept():
 
 
 def test_message_text_stored_verbatim_no_eviction():
-    # Drill-down text is never evicted: every stored message keeps its text,
-    # and tier text is canonical (stored once). 1-2 MB per agent is fine.
-    manifest = _make_manifest()
-    rec = manifest.record_send([{"role": "user", "content": "x" * 50000}])
+    # Drill-down text is never evicted: every stored message keeps its text.
+    agent, manifest = _make_manifest()
+    rec = manifest.record_send(agent, [{"role": "user", "content": "x" * 50000}])
     assert rec is not None
     assert rec.messages[0].content == "x" * 50000
 
@@ -80,31 +83,32 @@ def test_message_text_stored_verbatim_no_eviction():
     assert got_msg is not None
     assert "x" * 50000 in got_msg[1]
 
-    got_sys = manifest.get_line(1)  # system tier — canonical text intact
+    got_sys = manifest.get_line(1)  # system part — text intact
     assert got_sys is not None
     assert "CORE" * 10 in got_sys[1]
 
 
-def test_char_counts_reflect_wire_sizes():
-    manifest = _make_manifest()
-    rec = manifest.record_send([{"role": "user", "content": "abcd"}])
+def test_byte_totals_computed_from_held_text():
+    """Totals are derived from node text at render time, never stored."""
+    agent, manifest = _make_manifest()
+    rec = manifest.record_send(agent, [{"role": "user", "content": "abcd"}])
     assert rec is not None
     # Totals reflect the wire sizes of all components.
     assert manifest._record_totals(rec) == (len("CORE" * 10) + len("abcd"))
 
 
 def test_record_send_never_raises_on_odd_inputs():
-    manifest = PromptManifest()
+    agent, manifest = _make_manifest()
     # None input yields an empty record (never raises).
-    rec = manifest.record_send(None)
+    rec = manifest.record_send(agent, None)
     assert rec is not None
     assert len(rec.messages) == 0
 
-    # Non-dict entries are skipped; dicts with a role become zero-char nodes.
-    rec = manifest.record_send(["not a message", {"role": "user"}])
+    # Non-dict entries are skipped; dicts with a role become zero-byte nodes.
+    rec = manifest.record_send(agent, ["not a message", {"role": "user"}])
     assert rec is not None
     assert len(rec.messages) == 1
-    assert rec.messages[0].chars == 0
+    assert PromptManifest._message_bytes(rec.messages[0]) == 0
 
 
 def test_content_to_str_unwraps_json_envelope_tool_result():
@@ -148,23 +152,23 @@ def test_content_to_str_no_field_preference():
 
 
 def test_record_send_stores_decoded_content_for_drilldown():
-    manifest = PromptManifest()
+    agent, manifest = _make_manifest()
     raw = json.dumps({"content": "A\nB"})
     rec = manifest.record_send(
-        [{"role": "tool", "name": "read_file", "content": raw}])
+        agent, [{"role": "tool", "name": "read_file", "content": raw}])
     assert rec is not None
     m = rec.messages[0]
     # Human mode shows decoded text with the field name label.
     assert m.content == "content:\n  A\n  B"
-    # Char count is still the wire length.
-    assert m.chars == len(raw)
+    # Bytes are the wire length.
+    assert PromptManifest._message_bytes(m) == len(raw)
 
 
 def test_get_line_display_mode_raw_vs_human():
     """/style raw = verbatim wire form; human = decoded readable text."""
-    manifest = _make_manifest()
+    agent, manifest = _make_manifest()
     raw = json.dumps({"content": "1|line one\n2|line two"})
-    rec = manifest.record_send([{"role": "tool", "name": "read_file", "content": raw}])
+    rec = manifest.record_send(agent, [{"role": "tool", "name": "read_file", "content": raw}])
     assert rec is not None
     rendered = manifest.render()
 
@@ -190,9 +194,9 @@ def test_get_line_display_mode_raw_vs_human():
 
 def test_get_line_tool_call_args_wire_form_raw():
     """raw mode renders tool-call arguments exactly as sent (compact JSON string)."""
-    manifest = _make_manifest()
+    agent, manifest = _make_manifest()
     args_str = json.dumps({"path": "a.txt"})
-    rec = manifest.record_send([
+    rec = manifest.record_send(agent, [
         {"role": "assistant", "content": None,
          "tool_calls": [{"function": {"name": "read_file", "arguments": args_str}}]},
     ])
@@ -215,9 +219,10 @@ def test_get_line_tool_call_args_wire_form_raw():
 
 
 def test_render_shows_source_provenance_for_tiers():
-    """render() lists per-block sources under each system tier; numbering unchanged."""
-    manifest = _make_manifest_with_sources()
+    """render() stays clean; numbering unchanged with sources on the node."""
+    agent, manifest = _make_manifest_with_sources()
     rec = manifest.record_send(
+        agent,
         [{"role": "user", "content": "hello"}],
         tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
     )
@@ -234,14 +239,15 @@ def test_render_shows_source_provenance_for_tiers():
 
 
 def test_get_line_sys_shows_sources_header():
-    """get_line for a system tier (human mode) lists its sections; text stays intact."""
-    manifest = _make_manifest_with_sources()
+    """get_line for a system part (human mode) lists its sections; text stays intact."""
+    agent, manifest = _make_manifest_with_sources()
     rec = manifest.record_send(
+        agent,
         [{"role": "user", "content": "hi"}],
         tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
     )
     manifest.render()
-    got = manifest.get_line(1, display_mode="human")  # the system tier line
+    got = manifest.get_line(1, display_mode="human")  # the system part line
     assert got is not None
     seq, text = got
     assert "Sections:" in text
@@ -251,8 +257,9 @@ def test_get_line_sys_shows_sources_header():
 
 def test_get_line_sys_raw_mode_text_only():
     """Raw mode for a system part returns ONLY the verbatim text — no header or Sections."""
-    manifest = _make_manifest_with_sources()
+    agent, manifest = _make_manifest_with_sources()
     manifest.record_send(
+        agent,
         [{"role": "user", "content": "hi"}],
         tools_for_api=[{"type": "function", "function": {"name": "terminal"}}],
     )
@@ -265,15 +272,14 @@ def test_get_line_sys_raw_mode_text_only():
 
 def test_get_line_sys_sections_full_width_and_tilde_paths():
     """Section labels are never clipped and home paths render as ~/..."""
-    manifest = PromptManifest()
+    agent, manifest = _make_manifest()
     long_label = "/home/hermes/workspace/some/very/deep/project/file.txt"
     short_label = "SOUL.md"
-    manifest.set_system_components(
-        [ComponentNode("tier", 10, "TIERTEXTTT",
-                       sources=((short_label, 5), (long_label, 5)))],
-        texts=["TIERTEXTTT"],
-    )
-    rec = manifest.record_send([{"role": "user", "content": "x"}])
+    PromptManifest._store_system_nodes(agent, [
+        ComponentNode("tier", "TIERTEXTTT",
+                      sources=((short_label, 5), (long_label, 5))),
+    ])
+    rec = manifest.record_send(agent, [{"role": "user", "content": "x"}])
     assert rec is not None
     manifest.render()
     got = manifest.get_line(1, display_mode="human")
@@ -285,42 +291,42 @@ def test_get_line_sys_sections_full_width_and_tilde_paths():
     assert "source" in text
 
 
-def _make_manifest_with_sources() -> PromptManifest:
-    manifest = PromptManifest()
-    manifest.set_system_components(
-        [ComponentNode("core instructions", len("CORE" * 10),
-                       "CORE" * 10,
-                       sources=(("SOUL.md", 40), ("generated constant", 10)))],
-        texts=["CORE" * 10],
-    )
-    return manifest
-
-
-def test_set_system_components_preserves_sources_on_rebuild():
-    """A rebuild (production shape: fresh nodes) refreshes stored sources."""
-    manifest = _make_manifest_with_sources()
-    # Rebuild with different sources under the same description.
-    manifest.set_system_components(
-        [ComponentNode("core instructions", len("CORE" * 20),
-                       "CORE" * 20,
-                       sources=(("SOUL.md", 80),))],
-        texts=["CORE" * 20],
-    )
-    node = manifest._current_system[0]
-    assert node.chars == len("CORE" * 20)
+def test_store_system_nodes_refreshes_on_rebuild():
+    """A rebuild (fresh nodes at build time) is seen by the NEXT send only."""
+    agent, manifest = _make_manifest_with_sources()
+    r1 = manifest.record_send(agent, [{"role": "user", "content": "first"}])
+    assert r1 is not None
+    # Rebuild with different text + sources under the same description.
+    PromptManifest._store_system_nodes(agent, [
+        ComponentNode("core instructions", "CORE" * 20,
+                      sources=(("SOUL.md", 80),)),
+    ])
+    r2 = manifest.record_send(agent, [{"role": "user", "content": "second"}])
+    assert r2 is not None
+    # The new send sees the rebuilt part.
+    node = r2.system_components[0]
+    assert node.text == "CORE" * 20
     assert node.sources == (("SOUL.md", 80),)
+
+
+def _make_manifest_with_sources() -> tuple:
+    agent = _make_agent()
+    PromptManifest._store_system_nodes(agent, [
+        ComponentNode("core instructions", "CORE" * 10,
+                      sources=(("SOUL.md", 40), ("generated constant", 10))),
+    ])
+    return agent, PromptManifest()
 
 
 def test_record_send_captures_reasoning_content():
     """Echo-back providers send reasoning_content on the wire; it must be counted + stored."""
-    manifest = _make_manifest()
-    rec = manifest.record_send([
+    agent, manifest = _make_manifest()
+    rec = manifest.record_send(agent, [
         {"role": "assistant", "content": "the answer",
          "reasoning_content": "step 1\nstep 2"},
     ])
     assert rec is not None
     m = rec.messages[0]
-    assert m.reasoning_chars == len("step 1\nstep 2")
     assert m.reasoning_text == "step 1\nstep 2"
     # Reasoning rides the wire, so it is part of the counted total.
     tot = manifest._record_totals(rec)
@@ -329,13 +335,13 @@ def test_record_send_captures_reasoning_content():
 
 def test_record_send_tags_origin_by_this_run_boundary():
     """Messages before the this-run user row are 'resumed'; at/after it are 'this run'."""
-    manifest = _make_manifest()
+    agent, manifest = _make_manifest()
     msgs = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
         {"role": "user", "content": "current question"},
     ]
-    rec = manifest.record_send(msgs, this_run_start_idx=2)
+    rec = manifest.record_send(agent, msgs, this_run_start_idx=2)
     assert rec is not None
     origins = [m.origin for m in rec.messages]
     assert origins == [
@@ -347,8 +353,8 @@ def test_record_send_tags_origin_by_this_run_boundary():
 
 def test_render_omits_origin_and_reasoning_tags():
     """render() shows plain rows — origin and reasoning live in /pi N only."""
-    manifest = _make_manifest()
-    rec = manifest.record_send([
+    agent, manifest = _make_manifest()
+    rec = manifest.record_send(agent, [
         {"role": "assistant", "content": "old answer", "reasoning_content": "rrr"},
         {"role": "user", "content": "current question"},
     ], this_run_start_idx=1)
@@ -371,9 +377,9 @@ def test_user_message_part_label_shows_content_prefix():
     non-user roles must NOT leak content into the part column — so the
     relationship between role and label is what's asserted.
     """
-    manifest = _make_manifest()
+    agent, manifest = _make_manifest()
     long_q = "How do I refactor this module cleanly without breaking callers?"
-    rec = manifest.record_send([
+    rec = manifest.record_send(agent, [
         {"role": "user", "content": long_q},
         {"role": "assistant", "content": long_q},  # same text, different role
     ])
@@ -405,13 +411,13 @@ def test_user_message_part_label_shows_content_prefix():
 
 def test_get_line_shows_reasoning_and_origin_block():
     """/pi <part no.> drill-down prints the reasoning text + origin for a message."""
-    manifest = _make_manifest()
-    rec = manifest.record_send([
+    agent, manifest = _make_manifest()
+    rec = manifest.record_send(agent, [
         {"role": "assistant", "content": "the answer",
          "reasoning_content": "thinking steps here"},
     ], this_run_start_idx=0)
     assert rec is not None
-    # Line 1 = sys tier, 2 = the assistant message (no tools sent).
+    # Line 1 = sys part, 2 = the assistant message (no tools sent).
     manifest.render()
     got = manifest.get_line(2)
     assert got is not None

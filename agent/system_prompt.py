@@ -1142,7 +1142,7 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     try:
         from agent.prompt_manifest import ComponentNode, get_or_create_manifest as _pm_get
         _pm_m = _pm_get(agent)
-        _comps = [ComponentNode(label, utf8_bytes(text), text, tuple(srcs), annotation=ann, kind=kind)
+        _comps = [ComponentNode(label, text, tuple(srcs), annotation=ann, kind=kind)
                   for (text, label, ann, srcs, kind) in (getattr(agent, "_system_prompt_blocks", None) or [])
                   if text and text.strip()]
         if not _comps:
@@ -1151,9 +1151,9 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
             _tiers = ((("stable", "System Prompt (Stable)"), parts["stable"]),
                       (("context", "System Prompt (Context)"), parts["context"]),
                       (("volatile", "System Prompt (Volatile)"), parts["volatile"]))
-            _comps = [ComponentNode(desc, utf8_bytes(text), text, tuple(sources.get(key, [])))
-                      for (key, desc), text in _tiers]
-        _pm_m.set_system_components([c for c in _comps if c.chars > 0])
+            _comps = [ComponentNode(desc, text, tuple(sources.get(key, [])))
+                      for (key, desc), text in _tiers if text and text.strip()]
+        _pm_m._store_system_nodes(agent, [c for c in _comps if c.text.strip()])
     except Exception:
         pass  # observability must never break prompt build
     # Surface context-file truncation warnings in chat, not only in logs.
