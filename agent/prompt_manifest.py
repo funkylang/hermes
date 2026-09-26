@@ -723,17 +723,19 @@ class PromptManifest:
                         rows.append([str(n), str(m.get("role")) + ":", self._wire_msg_label(m),
                                      f"{PromptManifest._wire_bytes(m):,}"])
 
+                    # Top-level params sit between messages and tools in the
+                    # wire body's key order — number them accordingly.
+                    if wenv:
+                        n += 1
+                        line_map[n] = (rec.seq, "wenv", 0)
+                        rows.append([str(n), "generated:", "server parameters",
+                                     f"{PromptManifest._wire_bytes(wenv):,}"])
+
                     for i, t in enumerate(wtools):
                         n += 1
                         line_map[n] = (rec.seq, "wtool", i)
                         rows.append([str(n), "generated:", self._tool_name(t),
                                      f"{PromptManifest._wire_bytes(t):,}"])
-
-                    if wenv:
-                        n += 1
-                        line_map[n] = (rec.seq, "wenv", 0)
-                        rows.append([str(n), "meta:", "(top-level params)",
-                                     f"{PromptManifest._wire_bytes(wenv):,}"])
                 else:
                     # Fallback path (no wire capture yet): record nodes.
                     if self._component_bytes(rec.tool_schemas):
@@ -827,7 +829,7 @@ class PromptManifest:
                         return None
                     part, kd, desc = wtools[idx], "generated:", self._tool_name(wtools[idx])
                 else:
-                    part, kd, desc = {k: v for k, v in wb.items() if k not in ("messages", "tools")}, "meta:", "(top-level params)"
+                    part, kd, desc = {k: v for k, v in wb.items() if k not in ("messages", "tools")}, "generated:", "server parameters"
                 row = [str(line_no), kd, desc, f"{self._wire_bytes(part):,}"]
             else:
                 m = rec.messages[idx]
