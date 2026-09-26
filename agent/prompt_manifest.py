@@ -349,6 +349,9 @@ class PromptManifest:
         # line number (last render) -> (record_seq, kind, index), for get_line()
         # kind in {sys, tools, msg}; index = item position in that record
         self._line_to_seq: Dict[int, Tuple[int, str, int]] = {}
+        # Last conversation-history entry at /pi call time (live tail); used by
+        # the wtail drill-down. Set by render(); never part of any send path.
+        self._live_tail: Any = None
 
     # -- write side (attachment sites) ----------------------------------
 
@@ -527,6 +530,15 @@ class PromptManifest:
                 wb = get_wire_body() or {}
             except Exception:
                 wb = {}
+            if kind == "wtail":
+                tail_item = getattr(self, "_live_tail", None)
+                if not isinstance(tail_item, dict):
+                    return None
+                clean = self._clean_tail_entry(tail_item)
+                size = self._wire_bytes(clean)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                return seq, (f"[live tail] role={tail_item.get('role', '?')} ({size:,} bytes, {form})]\n\n"
+                             + self._wire_text(clean, display_mode))
             if kind == "wmsg":
                 wmsgs = [m for m in (wb.get("messages") or []) if m.get("role") != "system"]
                 if not isinstance(wmsgs, list) or idx >= len(wmsgs):
@@ -557,6 +569,8 @@ class PromptManifest:
             parts = [f"[message] role={m.role} ({msg_size:,} bytes)"]
             if m.origin:
                 parts.append(f"origin: {m.origin}")
+            # Wire order for assistant rows: content first, then
+            # reasoning (reasoning_content) — mirror it in the display.
             content = self._content_for_mode(m.content, m.raw_content, display_mode)
             parts.append(content or "(no content)")
             reasoning = (m.reasoning_text or "").strip()
@@ -641,7 +655,7 @@ class PromptManifest:
 
     # -- display (slash command) -----------------------------------------
 
-    def render(self, agent: Any = None) -> str:
+    def render(self, agent: Any = None, live_tail: Any = None) -> str:
         """Tabular overview of the manifest's single stored prompt.
 
         System parts come from our internal model (as assembled). Conversation
@@ -674,6 +688,7 @@ class PromptManifest:
                 wmsgs = [m for m in (wb.get("messages") or []) if isinstance(m, dict) and m.get("role") != "system"]
                 wtools = [t for t in (wb.get("tools") or []) if isinstance(t, dict)]
                 wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
+                live_tail_clean = self._clean_tail_entry(live_tail) if isinstance(live_tail, dict) else None
 
                 # The parts shown determine the total bytes.
                 sys_bytes = sum(self._component_bytes(c) for c in rec.system_components)
@@ -681,7 +696,8 @@ class PromptManifest:
                     tot_bytes = (sys_bytes
                                  + sum(self._wire_bytes(x) for x in wmsgs)
                                  + sum(self._wire_bytes(t) for t in wtools)
-                                 + (self._wire_bytes(wenv) if wenv else 0))
+                                 + (self._wire_bytes(wenv) if wenv else 0)
+                                 + (self._wire_bytes(live_tail_clean) if live_tail_clean else 0))
                 else:
                     # Fallback: record nodes.
                     tot_bytes = self._record_totals(rec)
@@ -736,6 +752,18 @@ class PromptManifest:
                         line_map[n] = (rec.seq, "wtool", i)
                         rows.append([str(n), "hardcoded:", self._tool_name(t),
                                      f"{PromptManifest._wire_bytes(t):,}"])
+
+                    # LIVE TAIL: the last conversation-history entry — the one
+                    # piece this turn added that no API call sent yet (the
+                    # final reply, or a tool result). Appended after the
+                    # captured parts; always shown when present.
+                    if live_tail_clean:
+                        self._live_tail = live_tail_clean
+                        n += 1
+                        line_map[n] = (rec.seq, "wtail", 0)
+                        rows.append([str(n), str(live_tail.get("role")) + ":", self._wire_msg_label(live_tail_clean),
+                                     f"{PromptManifest._wire_bytes(live_tail_clean):,}"])
+
                 else:
                     # Fallback path (no wire capture yet): record nodes.
                     if self._component_bytes(rec.tool_schemas):
@@ -757,12 +785,37 @@ class PromptManifest:
 
             with self._lock:
                 self._line_to_seq = line_map
-            tail = "\n".join(out).rstrip()
-            return (tail + "\n\nUse /pi <part no.> for the full text and sources of a part.")
+            rendered = "\n".join(out).rstrip()
+            return (rendered + "\n\nUse /pi <part no.> for the full text and sources of a part.")
         except Exception:
             return "Prompt manifest: render failed (see logs)."
 
 
+
+    @staticmethod
+    def _clean_tail_entry(entry: Any) -> Dict[str, Any]:
+        """One conversation-history entry reduced to its wire-relevant fields.
+
+        History rows carry local bookkeeping (timestamps, DB flags); only the
+        payload that an API call would send is shown. reasoning_content is
+        preferred over 'reasoning' (the field the sanitizer emits for the wire).
+        """
+        if not isinstance(entry, dict):
+            return {}
+        out: Dict[str, Any] = {}
+        role = entry.get("role")
+        if role:
+            out["role"] = role
+        content = entry.get("content")
+        if content is not None:
+            out["content"] = content
+        reasoning = entry.get("reasoning_content") or entry.get("reasoning")
+        if reasoning:
+            out["reasoning_content"] = reasoning
+        for key in ("tool_calls", "name", "tool_call_id"):
+            if entry.get(key) is not None:
+                out[key] = entry[key]
+        return out
 
     @staticmethod
     def _cell(value) -> str:
@@ -811,14 +864,20 @@ class PromptManifest:
                 ts = rec.tool_schemas
                 row = [str(line_no), f"{getattr(ts, 'kind', 'hardcoded')}:", "(tool schemas)",
                        f"{self._component_bytes(ts):,}"]
-            elif kind in ("wmsg", "wtool", "wenv"):
+            elif kind in ("wmsg", "wtool", "wenv", "wtail"):
                 # Wire-truth rows: resolve the part from the stored wire body.
                 try:
                     from agent.prompt_capture import get_wire_body
                     wb = get_wire_body() or {}
                 except Exception:
                     wb = {}
-                if kind == "wmsg":
+                if kind == "wtail":
+                    tail_item = getattr(self, "_live_tail", None)
+                    if not isinstance(tail_item, dict):
+                        return None
+                    part, kd, desc = (tail_item, str(tail_item.get("role")) + ":",
+                                      self._wire_msg_label(tail_item))
+                elif kind == "wmsg":
                     wmsgs = [m for m in (wb.get("messages") or []) if m.get("role") != "system"]
                     if idx >= len(wmsgs):
                         return None

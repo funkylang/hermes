@@ -709,6 +709,18 @@ class CLIInfoMixin:
         from agent.prompt_manifest import get_or_create_manifest
 
         manifest = get_or_create_manifest(self.agent)
+        # LIVE TAIL: /pi runs between turns, and every send's prompt is the
+        # conversation history up to the last user message — so exactly one
+        # entry is missing from the captured wire body: the LAST entry of the
+        # conversation history (this turn's final reply, or a tool result).
+        live_tail = None
+        try:
+            hist = getattr(self, "conversation_history", None) or []
+            last = hist[-1] if hist else None
+            if isinstance(last, dict):
+                live_tail = last
+        except Exception:
+            live_tail = None
         if args and args[0].isdigit():
             mode = getattr(self.agent, "_pi_display_mode", "human")
             part_no = int(args[0])
@@ -724,7 +736,7 @@ class CLIInfoMixin:
             self._emit_pi_line("")
             return
 
-        text = manifest.render()
+        text = manifest.render(agent=self.agent, live_tail=live_tail)
         self._emit_pi_line("")
         for line in text.splitlines():
             self._emit_pi_line(line)
