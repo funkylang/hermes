@@ -840,7 +840,7 @@ _HARDCODED_CONSTANTS = {
     "default identity", "hermes-agent help guidance",
     "task completion guidance", "parallel tool call guidance",
     "steering channel note", "tool-use enforcement guidance",
-    "google model operational guidance",
+    "execution discipline guidance", "google model operational guidance",
 }
 
 
