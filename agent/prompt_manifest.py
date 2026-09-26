@@ -521,6 +521,37 @@ class PromptManifest:
                 form = "wire form" if display_mode != "human" else "JSON as sent"
                 return seq, (f"[tool schemas ({self._component_bytes(ts):,} bytes, {form})]\n\n{t}")
 
+            # Wire-truth parts: resolved from the stored wire body at call time.
+            try:
+                from agent.prompt_capture import get_wire_body
+                wb = get_wire_body() or {}
+            except Exception:
+                wb = {}
+            if kind == "wmsg":
+                wmsgs = [m for m in (wb.get("messages") or []) if m.get("role") != "system"]
+                if not isinstance(wmsgs, list) or idx >= len(wmsgs):
+                    return None
+                m = wmsgs[idx]
+                size = self._wire_bytes(m)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                return seq, (f"[message] role={m.get('role', '?')} ({size:,} bytes, {form})]\n\n"
+                             + self._wire_text(m, display_mode))
+            if kind == "wtool":
+                wtools = wb.get("tools") or []
+                if idx >= len(wtools):
+                    return None
+                t = wtools[idx]
+                size = self._wire_bytes(t)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                return seq, (f"[tool schema] {self._tool_name(t)} ({size:,} bytes, {form})]\n\n"
+                             + self._wire_text(t, display_mode))
+            if kind == "wenv":
+                wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
+                size = self._wire_bytes(wenv)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                return seq, (f"[top-level params] ({size:,} bytes, {form})]\n\n"
+                             + self._wire_text(wenv, display_mode))
+
             m = rec.messages[idx]
             msg_size = self._message_bytes(m)
             parts = [f"[message] role={m.role} ({msg_size:,} bytes)"]
@@ -551,14 +582,76 @@ class PromptManifest:
             return readable or raw
         return raw or readable
 
+    @staticmethod
+    def _wire_msg_label(m: Any) -> str:
+        """Label for a wire message row: content prefix, or tool-call names.
+
+        Content rows get their first chars on one line; assistant rows that
+        only carry tool_calls (empty content) get the called tool names —
+        nothing is shown as bare "?" when something descriptive exists.
+        """
+        if not isinstance(m, dict):
+            return ""
+        content = m.get("content")
+        if isinstance(content, str) and content:
+            label = PromptManifest._cell(content)
+            return (label[:37] + "...") if len(label) > 40 else label
+        calls = m.get("tool_calls") or []
+        names = []
+        for tc in calls:
+            fn = (tc or {}).get("function") or {}
+            name = fn.get("name")
+            if name:
+                names.append(str(name))
+        if names:
+            label = ", ".join(names)
+            return (label[:37] + "...") if len(label) > 40 else label
+        return ""
+
+    @staticmethod
+    def _tool_name(t: Any) -> str:
+        """Tool name of one tools-array entry (e.g. "tool: browser_exec")."""
+        try:
+            fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+            return f"tool: {fn.get('name', '?')}"
+        except Exception:
+            return "(tool)"
+
+    @staticmethod
+    def _wire_bytes(obj: Any) -> int:
+        """UTF-8 bytes of one wire part (compact JSON form, as the SDK sends it)."""
+        try:
+            s = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return utf8_bytes(str(obj))
+        return utf8_bytes(s)
+
+    @staticmethod
+    def _wire_text(obj: Any, mode: str) -> str:
+        """Drill-down text of one wire part.
+
+        "raw": compact JSON as sent; "human": pretty-printed for reading.
+        """
+        try:
+            if mode == "human":
+                return json.dumps(obj, ensure_ascii=False, indent=2)
+            return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return str(obj)
+
     # -- display (slash command) -----------------------------------------
 
-    def render(self) -> str:
+    def render(self, agent: Any = None) -> str:
         """Tabular overview of the manifest's single stored prompt.
 
-        One numbered line per part, aligned columns; no details here.  Pass a
-        number to ``get_line`` (via /pi <no>) for that part's full text,
-        sources and token counts.
+        System parts come from our internal model (as assembled). Conversation
+        messages, tool schemas and top-level params come from the CAPTURED wire
+        body — the in-memory copy of the SDK's own serialized request (same
+        object dumped to prompt.json) — so they show what actually went out.
+        Falls back to the record's own nodes when no capture has happened yet.
+
+        One numbered line per part, aligned columns; pass a number to ``get_line``
+        (via /pi <no>) for that part's full text.
         """
         try:
             with self._lock:
@@ -571,7 +664,27 @@ class PromptManifest:
             line_map: Dict[int, Tuple[int, str, int]] = {}
             n = 0
             for rec in records:
-                tot_bytes = self._record_totals(rec)
+                # Read the captured wire body ONCE per render; all record rows
+                # below share it (there is at most one record anyway).
+                try:
+                    from agent.prompt_capture import get_wire_body
+                    wb = get_wire_body() or {}
+                except Exception:
+                    wb = {}
+                wmsgs = [m for m in (wb.get("messages") or []) if isinstance(m, dict) and m.get("role") != "system"]
+                wtools = [t for t in (wb.get("tools") or []) if isinstance(t, dict)]
+                wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
+
+                # The parts shown determine the total bytes.
+                sys_bytes = sum(self._component_bytes(c) for c in rec.system_components)
+                if wmsgs or wtools:
+                    tot_bytes = (sys_bytes
+                                 + sum(self._wire_bytes(x) for x in wmsgs)
+                                 + sum(self._wire_bytes(t) for t in wtools)
+                                 + (self._wire_bytes(wenv) if wenv else 0))
+                else:
+                    # Fallback: record nodes.
+                    tot_bytes = self._record_totals(rec)
                 tok = rec.prompt_tokens
 
                 when = time.strftime("%H:%M:%S", time.localtime(rec.built_at))
@@ -600,18 +713,41 @@ class PromptManifest:
                     rows.append([str(n), comp.kind + ":", self._cell(comp.description),
                                  f"{self._component_bytes(comp):,}"])
 
-                if self._component_bytes(rec.tool_schemas):
-                    n += 1
-                    line_map[n] = (rec.seq, "tools", 0)
-                    rows.append([str(n), "generated:", "(tool schemas)",
-                                 f"{self._component_bytes(rec.tool_schemas):,}"])
+                # Conversation + tools from the CAPTURED wire body (in-memory
+                # copy of the SDK's own serialized request — same object dumped
+                # to prompt.json). System parts stay from our internal model.
+                if wmsgs or wtools:
+                    for i, m in enumerate(wmsgs):
+                        n += 1
+                        line_map[n] = (rec.seq, "wmsg", i)
+                        rows.append([str(n), str(m.get("role")) + ":", self._wire_msg_label(m),
+                                     f"{PromptManifest._wire_bytes(m):,}"])
 
-                for i, m in enumerate(rec.messages):
-                    size = self._message_bytes(m)
-                    n += 1
-                    line_map[n] = (rec.seq, "msg", i)
-                    rows.append([str(n), m.role + ":", self._message_part_label(m),
-                                 f"{size:,}"])
+                    for i, t in enumerate(wtools):
+                        n += 1
+                        line_map[n] = (rec.seq, "wtool", i)
+                        rows.append([str(n), "generated:", self._tool_name(t),
+                                     f"{PromptManifest._wire_bytes(t):,}"])
+
+                    if wenv:
+                        n += 1
+                        line_map[n] = (rec.seq, "wenv", 0)
+                        rows.append([str(n), "meta:", "(top-level params)",
+                                     f"{PromptManifest._wire_bytes(wenv):,}"])
+                else:
+                    # Fallback path (no wire capture yet): record nodes.
+                    if self._component_bytes(rec.tool_schemas):
+                        n += 1
+                        line_map[n] = (rec.seq, "tools", 0)
+                        rows.append([str(n), "generated:", "(tool schemas)",
+                                     f"{self._component_bytes(rec.tool_schemas):,}"])
+
+                    for i, m in enumerate(rec.messages):
+                        size = self._message_bytes(m)
+                        n += 1
+                        line_map[n] = (rec.seq, "msg", i)
+                        rows.append([str(n), m.role + ":", self._message_part_label(m),
+                                     f"{size:,}"])
 
                 out.extend(format_table(header, rows))
 
@@ -673,6 +809,26 @@ class PromptManifest:
                 ts = rec.tool_schemas
                 row = [str(line_no), "generated:", "(tool schemas)",
                        f"{self._component_bytes(ts):,}"]
+            elif kind in ("wmsg", "wtool", "wenv"):
+                # Wire-truth rows: resolve the part from the stored wire body.
+                try:
+                    from agent.prompt_capture import get_wire_body
+                    wb = get_wire_body() or {}
+                except Exception:
+                    wb = {}
+                if kind == "wmsg":
+                    wmsgs = [m for m in (wb.get("messages") or []) if m.get("role") != "system"]
+                    if idx >= len(wmsgs):
+                        return None
+                    part, kd, desc = wmsgs[idx], str(wmsgs[idx].get("role")) + ":", self._wire_msg_label(wmsgs[idx])
+                elif kind == "wtool":
+                    wtools = wb.get("tools") or []
+                    if idx >= len(wtools):
+                        return None
+                    part, kd, desc = wtools[idx], "generated:", self._tool_name(wtools[idx])
+                else:
+                    part, kd, desc = {k: v for k, v in wb.items() if k not in ("messages", "tools")}, "meta:", "(top-level params)"
+                row = [str(line_no), kd, desc, f"{self._wire_bytes(part):,}"]
             else:
                 m = rec.messages[idx]
                 size = self._message_bytes(m)

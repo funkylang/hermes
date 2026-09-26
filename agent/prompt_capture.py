@@ -36,6 +36,27 @@ def prompt_capture_json_path() -> str:
     return path + ".json"
 
 
+# In-memory copy of the parsed body of the LAST captured request. The /pi
+# wire-truth display reads this instead of parsing files: same object that was
+# dumped to prompt.json, held for in-process consumers (CLI and agent share
+# the process).
+_last_wire_body: Any = None
+
+
+def set_wire_body(body: Any) -> None:
+    """Store the parsed body of the last captured request (fail-open)."""
+    global _last_wire_body
+    try:
+        _last_wire_body = body
+    except Exception:
+        logger.debug("wire body store skipped", exc_info=True)
+
+
+def get_wire_body() -> Any:
+    """Return the stored parsed body, or None if no capture happened yet."""
+    return _last_wire_body
+
+
 def install_prompt_capture(client: Any) -> None:
     """Register the request hook on *client*'s ``httpx`` transport (idempotent per client).
 
@@ -64,6 +85,8 @@ def install_prompt_capture(client: Any) -> None:
                     parsed = json.loads(raw)
                     with open(prompt_capture_json_path(), "w", encoding="utf-8") as jf:
                         json.dump(parsed, jf, indent=2, ensure_ascii=False)
+                    # In-memory copy for the /pi wire-truth display.
+                    set_wire_body(parsed)
                 except Exception:
                     logger.debug("prompt capture JSON companion skipped", exc_info=True)
         except Exception:
