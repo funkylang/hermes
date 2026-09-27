@@ -15,16 +15,6 @@ from agent.prompt_manifest import (
     PromptManifest,
     _content_to_str,
 )
-from agent import prompt_capture
-
-
-# Autouse fixture to reset the wire body before each test — render() may
-# read the module-level capture; tests that don't set one get a clean state.
-@pytest.fixture(autouse=True)
-def reset_wire_body():
-    prompt_capture.set_wire_body(None)
-    yield
-    prompt_capture.set_wire_body(None)
 
 
 class FakeAgent:
