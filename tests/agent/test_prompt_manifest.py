@@ -15,6 +15,16 @@ from agent.prompt_manifest import (
     PromptManifest,
     _content_to_str,
 )
+from agent import prompt_capture
+
+
+# Autouse fixture to reset the captured outgoing traffic before each test —
+# render() may read it for tool schemas and server parameters.
+@pytest.fixture(autouse=True)
+def reset_wire_body():
+    prompt_capture.set_wire_body(None)
+    yield
+    prompt_capture.set_wire_body(None)
 
 
 class FakeAgent:
@@ -48,7 +58,19 @@ def test_render_numbers_lines_and_get_line_resolves_them():
     # Rows are numbered; the stats row is plain "label value" pairs.
     assert "prompt 100" in rendered
 
-    got = manifest.get_line(3)  # the user message line (1=sys part, 2=tool schemas)
+    # Simulate the captured outgoing traffic (what the hook stores).
+    prompt_capture.set_wire_body({
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "CORE" * 10},
+            {"role": "user", "content": "hello"},
+        ],
+        "tools": [{"type": "function", "function": {"name": "terminal"}}],
+    })
+    rendered = manifest.render()
+
+    # Order: system part, messages, server params, tool schemas.
+    got = manifest.get_line(2)  # the user message line (1=sys part, then msgs)
     assert got is not None
     seq, text = got
     assert seq == rec.seq
@@ -233,8 +255,18 @@ def test_render_shows_source_provenance_for_tiers():
     rendered = manifest.render()
     # Overview stays clean (no source sub-lines); the part row exists.
     assert "SOUL.md" not in rendered
-    # Numbering still: 1=sys, 2=tool schemas, 3=user message.
-    got = manifest.get_line(3)
+
+    # With captured traffic, numbering is: 1=sys, 2=user msg, 3=server params, 4=tool.
+    prompt_capture.set_wire_body({
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "CORE" * 10},
+            {"role": "user", "content": "hello"},
+        ],
+        "tools": [{"type": "function", "function": {"name": "terminal"}}],
+    })
+    manifest.render()
+    got = manifest.get_line(2)
     assert got is not None and "hello" in got[1]
 
 

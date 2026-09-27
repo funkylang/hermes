@@ -515,14 +515,27 @@ class PromptManifest:
                     return seq, "\n".join(lines) + "\n  text not available (not captured)"
                 return seq, "\n".join(lines) + f"\n\n{t}"
 
-            if kind == "tools":
-                ts = rec.tool_schemas
-                raw = ts.text if ts else ""
-                t = self._content_for_mode("", raw, display_mode)
-                if not t:
-                    return seq, "[tool schemas] text not available (not captured)"
-                form = "wire form" if display_mode != "human" else "JSON as sent"
-                return seq, (f"[tool schemas ({self._component_bytes(ts):,} bytes, {form})]\n\n{t}")
+            # Wire-truth parts: resolved from the stored wire body at call time.
+            try:
+                from agent.prompt_capture import get_wire_body
+                wb = get_wire_body() or {}
+            except Exception:
+                wb = {}
+            if kind == "wtool":
+                wtools = wb.get("tools") or []
+                if idx >= len(wtools):
+                    return None
+                t = wtools[idx]
+                size = self._wire_bytes(t)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                return seq, (f"[tool schema] {self._tool_name(t)} ({size:,} bytes, {form})]\n\n"
+                             + self._wire_text(t, display_mode))
+            if kind == "wenv":
+                wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
+                size = self._wire_bytes(wenv)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                return seq, (f"[top-level params] ({size:,} bytes, {form})]\n\n"
+                             + self._wire_text(wenv, display_mode))
 
             # LIVE TAIL: rendered at /pi call time; never sent, so no wire form exists.
             if kind == "wtail":
@@ -571,6 +584,37 @@ class PromptManifest:
         if mode == "human":
             return readable or raw
         return raw or readable
+
+    @staticmethod
+    def _tool_name(t: Any) -> str:
+        """Tool name of one tools-array entry (e.g. "tool: browser_exec")."""
+        try:
+            fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+            return f"tool: {fn.get('name', '?')}"
+        except Exception:
+            return "(tool)"
+
+    @staticmethod
+    def _wire_bytes(obj: Any) -> int:
+        """UTF-8 bytes of one wire part (compact JSON form, as the SDK sends it)."""
+        try:
+            s = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return utf8_bytes(str(obj))
+        return utf8_bytes(s)
+
+    @staticmethod
+    def _wire_text(obj: Any, mode: str) -> str:
+        """Drill-down text of one wire part.
+
+        "raw": compact JSON as sent; "human": pretty-printed for reading.
+        """
+        try:
+            if mode == "human":
+                return json.dumps(obj, ensure_ascii=False, indent=2)
+            return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return str(obj)
 
     @staticmethod
     def _wire_msg_label(m: Any) -> str:
@@ -656,12 +700,22 @@ class PromptManifest:
             line_map: Dict[int, Tuple[int, str, int]] = {}
             n = 0
             for rec in records:
+                # Read the captured wire body ONCE per render; all record rows
+                # below share it (there is at most one record anyway).
+                try:
+                    from agent.prompt_capture import get_wire_body
+                    wb = get_wire_body() or {}
+                except Exception:
+                    wb = {}
+                wtools = [t for t in (wb.get("tools") or []) if isinstance(t, dict)]
+                wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
                 live_tail_clean = self._clean_tail_entry(live_tail) if isinstance(live_tail, dict) else None
 
                 # The parts shown determine the total bytes.
                 sys_bytes = sum(self._component_bytes(c) for c in rec.system_components)
                 msg_bytes = sum(self._message_bytes(m) for m in rec.messages)
-                tools_bytes = self._component_bytes(rec.tool_schemas)
+                tools_bytes = (sum(self._wire_bytes(t) for t in wtools)
+                               + (self._wire_bytes(wenv) if wenv else 0))
                 tail_bytes = (self._msg_body_bytes(live_tail_clean) if live_tail_clean else 0)
                 tot_bytes = sys_bytes + msg_bytes + tools_bytes + tail_bytes
                 tok = rec.prompt_tokens
@@ -692,13 +746,6 @@ class PromptManifest:
                     rows.append([str(n), comp.kind + ":", self._cell(comp.description),
                                  f"{self._component_bytes(comp):,}"])
 
-                # Tool schemas: one opaque part holding all tool schemas as sent.
-                if self._component_bytes(rec.tool_schemas):
-                    n += 1
-                    line_map[n] = (rec.seq, "tools", 0)
-                    rows.append([str(n), "hardcoded:", "(tool schemas)",
-                                 f"{self._component_bytes(rec.tool_schemas):,}"])
-
                 # Conversation messages in send order.
                 for i, m in enumerate(rec.messages):
                     size = self._message_bytes(m)
@@ -706,6 +753,20 @@ class PromptManifest:
                     line_map[n] = (rec.seq, "msg", i)
                     rows.append([str(n), m.role + ":", self._message_part_label(m),
                                  f"{size:,}"])
+
+                # Server parameters + tool schemas from the CAPTURED wire body
+                # (in-memory copy of the SDK's own serialized request — same
+                # object dumped to prompt.json), in wire key order.
+                if wenv:
+                    n += 1
+                    line_map[n] = (rec.seq, "wenv", 0)
+                    rows.append([str(n), "generated:", "server parameters",
+                                 f"{PromptManifest._wire_bytes(wenv):,}"])
+                for i, t in enumerate(wtools):
+                    n += 1
+                    line_map[n] = (rec.seq, "wtool", i)
+                    rows.append([str(n), "hardcoded:", self._tool_name(t),
+                                 f"{PromptManifest._wire_bytes(t):,}"])
 
                 # LIVE TAIL: the last conversation-history entry — the one
                 # piece this turn added that no API call sent yet (the
@@ -800,10 +861,27 @@ class PromptManifest:
                 comp = rec.system_components[idx]
                 desc = self._cell(comp.description) or "(text not captured)"
                 row = [str(line_no), f"{comp.kind}:", desc, f"{self._component_bytes(comp):,}"]
-            elif kind == "tools":
-                ts = rec.tool_schemas
-                row = [str(line_no), f"{getattr(ts, 'kind', 'hardcoded')}:", "(tool schemas)",
-                       f"{self._component_bytes(ts):,}"]
+            elif kind == "wtool":
+                try:
+                    from agent.prompt_capture import get_wire_body
+                    wb = get_wire_body() or {}
+                except Exception:
+                    wb = {}
+                wtools = wb.get("tools") or []
+                if idx >= len(wtools):
+                    return None
+                t = wtools[idx]
+                row = [str(line_no), "hardcoded:", self._tool_name(t),
+                       f"{self._wire_bytes(t):,}"]
+            elif kind == "wenv":
+                try:
+                    from agent.prompt_capture import get_wire_body
+                    wb = get_wire_body() or {}
+                except Exception:
+                    wb = {}
+                wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
+                row = [str(line_no), "generated:", "server parameters",
+                       f"{self._wire_bytes(wenv):,}"]
             elif kind == "wtail":
                 # Live tail: rendered at /pi call time; never sent, no wire form.
                 tail_item = getattr(self, "_live_tail", None)
