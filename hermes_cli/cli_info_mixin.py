@@ -841,7 +841,10 @@ class CLIInfoMixin:
             except OSError:
                 # Target became unwritable (bad path, permissions): fall back to screen.
                 self._pi_redirect_path = None
-        print(line)
+        # Route through prompt_toolkit's renderer like the ⚙️ echo line — a bare
+        # print() races it and the lines land in swapped order on screen.
+        from cli import _cprint as _pi_cprint
+        _pi_cprint(line)
 
     def _set_pi_style_mode(self, cmd_original: str = ""):
         """`/style [raw|human]` — drill-down form for /pi <line>.
@@ -858,7 +861,8 @@ class CLIInfoMixin:
         elif arg in ("raw", "human"):
             self._pi_display_mode = arg
         else:
-            print(f"  Unknown mode '{arg}' — use /style raw or /style human.")
+            from cli import _cprint as _pi_cprint
+            _pi_cprint(f"  Unknown mode '{arg}' — use /style raw or /style human.")
             return
         # Attach to the agent so /pi <line> sees it (no live agent yet is fine).
         if self.agent is not None:

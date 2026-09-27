@@ -129,7 +129,8 @@ class CLITuiRuntimeMixin:
     def _tui_run_slash_input(self, user_input: str):
         """Dispatch a slash command. Returns the pending agent seed to run as a chat turn, else None."""
         from cli import _cprint
-        _cprint(f"\n⚙️  {user_input}")
+        # ⚙️ echo line, then a blank separator before any command output.
+        _cprint(f"\n⚙️  {user_input}\n")
         try:
             if not self.process_command(user_input):
                 self._should_exit = True

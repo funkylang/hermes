@@ -535,19 +535,25 @@ class PromptManifest:
                 if not isinstance(tail_item, dict):
                     return None
                 clean = self._clean_tail_entry(tail_item)
-                size = self._wire_bytes(clean)
-                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                size = self._msg_body_bytes("wtail", clean)
+                form = "raw" if display_mode != "human" else "human-readable JSON"
+                body = (self._tail_message_text(clean)
+                        if display_mode == "raw"
+                        else self._wire_text(clean, display_mode))
                 return seq, (f"[live tail] role={tail_item.get('role', '?')} ({size:,} bytes, {form})]\n\n"
-                             + self._wire_text(clean, display_mode))
+                             + body)
             if kind == "wmsg":
                 wmsgs = [m for m in (wb.get("messages") or []) if m.get("role") != "system"]
                 if not isinstance(wmsgs, list) or idx >= len(wmsgs):
                     return None
                 m = wmsgs[idx]
-                size = self._wire_bytes(m)
-                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                size = self._msg_body_bytes("wmsg", m)
+                form = "raw" if display_mode != "human" else "human-readable JSON"
+                body = (self._stored_message_text(m)
+                        if display_mode == "raw"
+                        else self._wire_text(m, display_mode))
                 return seq, (f"[message] role={m.get('role', '?')} ({size:,} bytes, {form})]\n\n"
-                             + self._wire_text(m, display_mode))
+                             + body)
             if kind == "wtool":
                 wtools = wb.get("tools") or []
                 if idx >= len(wtools):
@@ -569,16 +575,18 @@ class PromptManifest:
             parts = [f"[message] role={m.role} ({msg_size:,} bytes)"]
             if m.origin:
                 parts.append(f"origin: {m.origin}")
-            # Wire order for assistant rows: content first, then
-            # reasoning (reasoning_content) — mirror it in the display.
-            content = self._content_for_mode(m.content, m.raw_content, display_mode)
-            parts.append(content or "(no content)")
-            reasoning = (m.reasoning_text or "").strip()
-            if reasoning:
-                parts.append(f"reasoning (sent on the wire, {utf8_bytes(reasoning):,} bytes):\n{reasoning}")
-            tool_text = self._content_for_mode(m.tool_text, m.raw_tool_text, display_mode)
-            if tool_text:
-                parts.append(f"tool_calls:\n{tool_text}")
+            # Raw mode: held strings verbatim; human mode: decoded forms.
+            if display_mode == "raw":
+                parts.append(self._node_body_text(m))
+            else:
+                content = self._content_for_mode(m.content, m.raw_content, display_mode)
+                parts.append(content or "(no content)")
+                reasoning = (m.reasoning_text or "").strip()
+                if reasoning:
+                    parts.append(f"reasoning ({utf8_bytes(reasoning):,} bytes):\n{reasoning}")
+                tool_text = self._content_for_mode(m.tool_text, m.raw_tool_text, display_mode)
+                if tool_text:
+                    parts.append(f"tool_calls:\n{tool_text}")
             return seq, "\n".join(parts)
         except Exception:
             logger = logging.getLogger(__name__)
@@ -653,6 +661,60 @@ class PromptManifest:
         except Exception:
             return str(obj)
 
+    # -- message renderers --------------------------------------------------
+    # Two distinct bodies, two distinct sources:
+    #  - stored messages (wmsg): the wire capture exists and IS the truth —
+    #    print its fields verbatim in wire order (reasoning_content, content,
+    #    tool_calls); each field only when non-empty.
+    #  - live tail (wtail): never sent, so no wire form exists — rendered at
+    #    /pi call time: reasoning_content in <reasoning> tags first, then the
+    #    content as plain text.
+
+    @staticmethod
+    def _stored_message_text(m: Dict[str, Any]) -> str:
+        """Raw body of one stored wire message: its fields verbatim."""
+        parts: List[str] = []
+        reasoning = m.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            parts.append(reasoning)
+        content = m.get("content")
+        if isinstance(content, str) and content:
+            parts.append(content)
+        tool_text = _wire_tool_call_text(m)
+        if tool_text:
+            parts.append(tool_text)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _tail_message_text(clean: Dict[str, Any]) -> str:
+        """Raw body of the live tail row (never sent — rendered, not read)."""
+        parts: List[str] = []
+        reasoning = clean.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            parts.append(f"<reasoning>\n{reasoning}\n</reasoning>")
+        content = clean.get("content")
+        if isinstance(content, str) and content:
+            parts.append(content)
+        tool_text = _wire_tool_call_text(clean)
+        if tool_text:
+            parts.append(tool_text)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _node_body_text(m: MessageNode) -> str:
+        """Raw body of one stored record node: held strings verbatim, blank-line separated."""
+        return "\n\n".join(s for s in (m.reasoning_text, m.raw_content, m.raw_tool_text)
+                           if s and s.strip())
+
+    @classmethod
+    def _msg_body_bytes(cls, kind: str, obj: Any) -> int:
+        """Bytes column for a message row: exactly what the raw body prints."""
+        if kind == "wtail":
+            return utf8_bytes(cls._tail_message_text(obj))
+        if isinstance(obj, MessageNode):
+            return utf8_bytes(cls._node_body_text(obj))
+        return utf8_bytes(cls._stored_message_text(obj))
+
     # -- display (slash command) -----------------------------------------
 
     def render(self, agent: Any = None, live_tail: Any = None) -> str:
@@ -694,10 +756,10 @@ class PromptManifest:
                 sys_bytes = sum(self._component_bytes(c) for c in rec.system_components)
                 if wmsgs or wtools:
                     tot_bytes = (sys_bytes
-                                 + sum(self._wire_bytes(x) for x in wmsgs)
+                                 + sum(self._msg_body_bytes('wmsg', x) for x in wmsgs)
                                  + sum(self._wire_bytes(t) for t in wtools)
                                  + (self._wire_bytes(wenv) if wenv else 0)
-                                 + (self._wire_bytes(live_tail_clean) if live_tail_clean else 0))
+                                 + (self._msg_body_bytes('wtail', live_tail_clean) if live_tail_clean else 0))
                 else:
                     # Fallback: record nodes.
                     tot_bytes = self._record_totals(rec)
@@ -737,7 +799,7 @@ class PromptManifest:
                         n += 1
                         line_map[n] = (rec.seq, "wmsg", i)
                         rows.append([str(n), str(m.get("role")) + ":", self._wire_msg_label(m),
-                                     f"{PromptManifest._wire_bytes(m):,}"])
+                                     f"{self._msg_body_bytes('wmsg', m):,}"])
 
                     # Top-level params sit between messages and tools in the
                     # wire body's key order — number them accordingly.
@@ -762,7 +824,7 @@ class PromptManifest:
                         n += 1
                         line_map[n] = (rec.seq, "wtail", 0)
                         rows.append([str(n), str(live_tail.get("role")) + ":", self._wire_msg_label(live_tail_clean),
-                                     f"{PromptManifest._wire_bytes(live_tail_clean):,}"])
+                                     f"{self._msg_body_bytes('wtail', live_tail_clean):,}"])
 
                 else:
                     # Fallback path (no wire capture yet): record nodes.
@@ -889,7 +951,8 @@ class PromptManifest:
                     part, kd, desc = wtools[idx], "hardcoded:", self._tool_name(wtools[idx])
                 else:
                     part, kd, desc = {k: v for k, v in wb.items() if k not in ("messages", "tools")}, "generated:", "server parameters"
-                row = [str(line_no), kd, desc, f"{self._wire_bytes(part):,}"]
+                row = [str(line_no), kd, desc,
+                       f"{self._msg_body_bytes(kind, part) if kind in ('wmsg', 'wtail') else self._wire_bytes(part):,}"]
             else:
                 m = rec.messages[idx]
                 size = self._message_bytes(m)

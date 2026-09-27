@@ -434,5 +434,5 @@ def test_get_line_shows_reasoning_and_origin_block():
     seq, text = got
     assert "role=assistant" in text
     assert "origin: this run" in text
-    assert "reasoning (sent on the wire" in text
+    assert "reasoning (" in text
     assert "thinking steps here" in text
