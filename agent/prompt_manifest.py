@@ -800,6 +800,10 @@ class PromptManifest:
         History rows carry local bookkeeping (timestamps, DB flags); only the
         payload that an API call would send is shown. reasoning_content is
         preferred over 'reasoning' (the field the sanitizer emits for the wire).
+
+        Trailing whitespace is stripped from content: it originates in the raw
+        model output but is removed before display (final_response .strip()),
+        so showing it here would misrepresent what the user saw.
         """
         if not isinstance(entry, dict):
             return {}
@@ -809,7 +813,7 @@ class PromptManifest:
             out["role"] = role
         content = entry.get("content")
         if content is not None:
-            out["content"] = content
+            out["content"] = content.rstrip() if isinstance(content, str) else content
         reasoning = entry.get("reasoning_content") or entry.get("reasoning")
         if reasoning:
             out["reasoning_content"] = reasoning
