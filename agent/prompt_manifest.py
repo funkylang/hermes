@@ -664,13 +664,13 @@ class PromptManifest:
         tool_text = _wire_tool_call_text(clean)
         if tool_text:
             parts.append(tool_text)
-        return "\n\n".join(parts)
+        return "\n".join(parts)
 
     @staticmethod
     def _node_body_text(m: MessageNode) -> str:
-        """Raw body of one stored record node: held strings verbatim, blank-line separated."""
-        return "\n\n".join(s for s in (m.reasoning_text, m.raw_content, m.raw_tool_text)
-                           if s and s.strip())
+        """Raw body of one stored record node: held strings verbatim, newline separated."""
+        return "\n".join(s for s in (m.reasoning_text, m.raw_content, m.raw_tool_text)
+                         if s and s.strip())
 
     @classmethod
     def _msg_body_bytes(cls, obj: Any) -> int:
