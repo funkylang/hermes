@@ -12,6 +12,7 @@ Fail-open everywhere; observability never breaks a turn.
 from __future__ import annotations
 
 import json
+import glob
 import logging
 import os
 from typing import Any
@@ -34,6 +35,59 @@ def prompt_capture_json_path() -> str:
     if path.endswith(".txt"):
         return path[: -len(".txt")] + ".json"
     return path + ".json"
+
+
+def _message_part_base() -> str:
+    """Base for per-message part files (no index): /tmp/prompt.txt -> /tmp/prompt_part."""
+    path = prompt_capture_path()
+    if path.endswith(".txt"):
+        return path[: -len(".txt")] + "_part"
+    return path + "_part"
+
+
+def write_message_parts(raw: bytes) -> None:
+    """Split the captured body into per-message part files (raw slices).
+
+    Walks the messages array with ``json.JSONDecoder.raw_decode``: at each '{'
+    that opens a message, raw_decode returns where that message ends in the
+    text (nested braces handled), so ``text[idx:end]`` is the exact wire slice.
+    Each part file holds only its slice; the parts in order reassemble exactly
+    the messages array content between the brackets. Fail-open: never raises.
+    """
+    try:
+        text = raw.decode("utf-8")
+        kpos = text.find('"messages"')
+        if kpos < 0:
+            return
+        apos = text.find(":", kpos + len('"messages"'))
+        bpos = text.find("[", apos + 1) if apos >= 0 else -1
+        if bpos < 0:
+            return
+        dec = json.JSONDecoder()
+        # Remove stale part files from a previous (larger) capture.
+        base = _message_part_base()
+        for f in glob.glob(glob.escape(base) + "_*.txt"):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        idx = bpos + 1
+        i = 0
+        while True:
+            c = text[idx]
+            if c == "]":
+                break
+            if c != "{":
+                # separator (comma/whitespace) between messages — step past it
+                idx += 1
+                continue
+            _, end = dec.raw_decode(text, idx)
+            with open(f"{base}_{i}.txt", "wb") as f:
+                f.write(text[idx:end].encode("utf-8"))
+            i += 1
+            idx = end
+    except Exception:
+        logger.debug("prompt capture message parts skipped", exc_info=True)
 
 
 # In-memory copy of the parsed body of the LAST captured request. The /pi
@@ -79,6 +133,11 @@ def install_prompt_capture(client: Any) -> None:
                 raw = bytes(data)
                 with open(prompt_capture_path(), "wb") as f:
                     f.write(raw)
+                # Per-message part files (raw slices of the same body).
+                try:
+                    write_message_parts(raw)
+                except Exception:
+                    logger.debug("prompt capture message parts skipped", exc_info=True)
                 # Human-readable companion of the same body (.json, indent=2).
                 try:
                     parsed = json.loads(raw)
