@@ -26,6 +26,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, drain_truncation_warnings,
 )
 from agent import prompt_builder as _pb
+
 from agent.path_display import display_path
 from agent.prompt_manifest import utf8_bytes
 from agent.runtime_cwd import resolve_agent_cwd, resolve_context_cwd
