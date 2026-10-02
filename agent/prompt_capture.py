@@ -12,7 +12,6 @@ Fail-open everywhere; observability never breaks a turn.
 from __future__ import annotations
 
 import json
-import glob
 import logging
 import os
 from typing import Any, List
@@ -35,14 +34,6 @@ def prompt_capture_json_path() -> str:
     if path.endswith(".txt"):
         return path[: -len(".txt")] + ".json"
     return path + ".json"
-
-
-def _message_part_base() -> str:
-    """Base for per-message part files (no index): /tmp/prompt.txt -> /tmp/prompt_part."""
-    path = prompt_capture_path()
-    if path.endswith(".txt"):
-        return path[: -len(".txt")] + "_part"
-    return path + "_part"
 
 
 def _collect_message_slices(raw: bytes) -> List[str]:
@@ -80,29 +71,6 @@ def _collect_message_slices(raw: bytes) -> List[str]:
     except Exception:
         logger.debug("prompt capture message slices skipped", exc_info=True)
     return slices
-
-
-def write_message_parts(slices: List[str]) -> None:
-    """Debug output only: one raw-slice file per message (/tmp/prompt_part_<n>.txt).
-
-    The in-memory store (:func:`set_message_parts`) is what /pi reads; these
-    files exist for offline inspection. Stale parts from a previous larger
-    capture are removed first. Fail-open: never raises.
-    """
-    try:
-        if not slices:
-            return
-        base = _message_part_base()
-        for f in glob.glob(glob.escape(base) + "_*.txt"):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
-        for i, s in enumerate(slices):
-            with open(f"{base}_{i}.txt", "wb") as f:
-                f.write(s.encode("utf-8"))
-    except Exception:
-        logger.debug("prompt capture message parts skipped", exc_info=True)
 
 
 # In-memory copy of the parsed body of the LAST captured request. The /pi
@@ -216,11 +184,9 @@ def install_prompt_capture(client: Any) -> None:
                         cb(len(raw))
                     except Exception:
                         logger.debug("on_prompt_sent callback skipped", exc_info=True)
-                # Per-message raw-text slices (exact wire text).
+                # Per-message raw-text slices (exact wire text) for the /pi display.
                 try:
-                    slices = _collect_message_slices(raw)
-                    write_message_parts(slices)
-                    set_message_parts(slices)
+                    set_message_parts(_collect_message_slices(raw))
                 except Exception:
                     logger.debug("prompt capture message parts skipped", exc_info=True)
                 # Human-readable companion of the same body (.json, indent=2).
