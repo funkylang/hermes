@@ -561,8 +561,9 @@ def _timestamp_line(agent: Any) -> str:
     return timestamp_line + "".join(f"\n{label}: {value}" for label, value in trailer if value)
 
 
-def _rules_block(agent: Any) -> Optional[Tuple[str, str]]:
-    """RULES.md — general standing rules, injected BEFORE MEMORY.md.
+def _memories_file_block(agent: Any, filename: str, title: str) -> Optional[Tuple[str, str]]:
+    """A hand-edited memories/ context file (RULES.md, HISTORY.md), injected
+    before MEMORY.md.
 
     No store/entry model and no API: the file itself is the source of truth
     (edited by hand), read directly from the profile-scoped memories dir.
@@ -570,14 +571,14 @@ def _rules_block(agent: Any) -> Optional[Tuple[str, str]]:
     content. The label carries its real path for /pi provenance."""
     try:
         from tools.memory_tool import get_memory_dir
-        path = get_memory_dir() / "RULES.md"
+        path = get_memory_dir() / filename
         if not path.is_file():
             return None
         content = path.read_text(encoding="utf-8").strip()
         if not content:
             return None
         sep = "═" * 46
-        block = f"{sep}\nRULES (general standing rules)\n{sep}\n{content}"
+        block = f"{sep}\n{title}\n{sep}\n{content}"
         return (block, display_path(str(path)))
     except Exception:
         return None
@@ -591,9 +592,13 @@ def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
     provenance label in lockstep — the label is derived from what actually got
     appended, never from a parallel re-check."""
     blocks: List[Tuple[str, str]] = []
-    rules = _rules_block(agent)
-    if rules:
-        blocks.append(rules)
+    # Hand-edited standing files first (RULES -> HISTORY -> MEMORY/USER order),
+    # so stable index content precedes the churning scratch pad.
+    for filename, title in (("RULES.md", "RULES (general standing rules)"),
+                            ("HISTORY.md", "HISTORY (project index)")):
+        block = _memories_file_block(agent, filename, title)
+        if block:
+            blocks.append(block)
     if agent._memory_store:
         for enabled, kind in ((agent._memory_enabled, "memory"), (agent._user_profile_enabled, "user")):
             block = agent._memory_store.format_for_system_prompt(kind) if enabled else None
