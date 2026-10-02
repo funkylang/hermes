@@ -12,8 +12,11 @@ Model:
   - System-prompt parts are published onto the agent once per prompt build
     (``_store_system_nodes``) and snapshotted onto every send until a rebuild
     replaces them.
-  - Each API call calls ``record_send`` with the wire messages + tool schemas;
-    that snapshots everything into a single ``PromptRecord`` and returns it.
+  - Each API call calls ``record_send``, which snapshots system parts + send
+    metadata into a single ``PromptRecord`` and returns it. Conversation
+    messages are NOT held on the record: they come from prompt_capture's
+    in-memory store (raw slices of the actual captured request body) and are
+    read at render time, like tool schemas and server parameters.
   - After the response arrives, ``fill_usage`` stamps that record's provider
     token counts (matched by seq).
 
@@ -125,94 +128,16 @@ class ComponentNode:
     kind: str = "generated"  # what this part is: file | generated | hardcoded | summary | user | assistant | tool | ...
 
 
-@dataclass
+@dataclass(frozen=True)
 class MessageNode:
-    """One conversation message; sizes computed from text at render time."""
+    """One conversation message part, held as its exact wire text.
 
-    role: str
-    content: str = ""     # readable (decoded) message text (for drill-down)
-    tool_text: str = ""   # tool_calls as readable text (for drill-down)
-    raw_content: str = ""  # wire form exactly as sent (no decoding)
-    raw_tool_text: str = ""  # tool_calls JSON exactly as sent
-    origin: str = ""      # "resumed from session DB" or "this run"
-    reasoning_text: str = ""  # reasoning exactly as sent (echo-back providers)
-
-
-def _maybe_decode_json_text(value: Any) -> Any:
-    """Unwrap a JSON-encoded string into its native form when it looks like one.
-
-    Several tools (read_file, search_files, terminal) return their result as a
-    JSON *string* in the wire message content, so drill-downs would otherwise
-    show ``\\n`` escapes on one long line instead of readable text.  When the
-    payload parses as a JSON dict, every field is rendered equally (nothing
-    dropped, nothing preferred); unparseable input passes through untouched.
-    Char counts are computed separately and stay faithful to the wire form.
+    ``raw_text`` is the message's raw slice of the captured request body (the
+    text between its braces on the wire) — nothing decoded, nothing reassembled.
+    Role/label are derived from it at render time; sizes are computed from it.
     """
-    if not isinstance(value, str):
-        return value
-    stripped = value.strip()
-    # Cheap pre-filter: must start and end with matching brackets.
-    if len(stripped) < 2 or not (
-        (stripped[0] == "{" and stripped[-1] == "}")
-        or (stripped[0] == "[" and stripped[-1] == "]")
-    ):
-        return value
-    try:
-        decoded = json.loads(stripped)
-    except (ValueError, RecursionError):
-        return value
 
-    if isinstance(decoded, dict):
-        # All fields treated equally, in envelope order: a "key:" line, then
-        # the value. Values containing newlines (or pretty-printed JSON) start
-        # on the next line; each of their lines is indented by two spaces.
-        # Nothing is dropped and no field is preferred over another.
-        blocks = []
-        for key, inner in decoded.items():
-            body = inner if isinstance(inner, str) else json.dumps(
-                inner, ensure_ascii=False, indent=2)
-            if "\n" in body:
-                indented = "\n".join("  " + l for l in body.split("\n"))
-                blocks.append(f"{key}:\n{indented}")
-            else:
-                blocks.append(f"{key}: {body}")
-        return "\n".join(blocks) if blocks else value
-    if isinstance(decoded, list):
-        parts = [str(item.get("text", item)) for item in decoded if isinstance(item, dict)]
-        return "\n\n".join(parts) if parts else json.dumps(decoded, ensure_ascii=False, indent=2)
-    # JSON scalars/numbers-as-strings (e.g. "12345"): keep as-is — decoding adds nothing.
-    return value
-
-
-def _content_to_str(content: Any) -> str:
-    """Readable single-string form of an OpenAI-format message's content."""
-    if isinstance(content, str):
-        return _maybe_decode_json_text(content)
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(_maybe_decode_json_text(part))
-            elif isinstance(part, dict):
-                text = part.get("text", "")
-                parts.append(_maybe_decode_json_text(text) if isinstance(text, str) else str(text))
-        return "\n\n".join(p for p in parts if p)
-    return str(content or "")
-
-
-def _wire_content_to_str(content: Any) -> str:
-    """Wire-form single-string content (no JSON decoding — as sent)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                parts.append(str(part.get("text", "")))
-        return "\n\n".join(p for p in parts if p)
-    return str(content or "")
+    raw_text: str = ""
 
 
 def _wire_tool_call_text(msg: Dict[str, Any]) -> str:
@@ -232,79 +157,6 @@ def _wire_tool_call_text(msg: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _tool_call_text(msg: Dict[str, Any]) -> str:
-    """Readable form of tool_calls attached to an assistant message."""
-    calls = msg.get("tool_calls") or []
-    if not calls:
-        return ""
-    blocks = []
-    for tc in calls:
-        fn = (tc or {}).get("function") or {}
-        raw_args = fn.get("arguments", "")
-        # Wire arguments arrive as a JSON *string* with escaped \n; parse it so
-        # the drill-down prints real line breaks instead of escape sequences.
-        if isinstance(raw_args, str):
-            try:
-                args = json.loads(raw_args)
-            except Exception:
-                args = raw_args
-        else:
-            args = raw_args
-
-        def _pretty(v: Any, ind: int = 0) -> str:
-            pad = "  " * ind
-            if isinstance(v, dict):
-                if not v:
-                    return "{}"
-                items = [
-                    f"{pad}  {json.dumps(k, ensure_ascii=False)}: {_pretty(x, ind + 1)}"
-                    for k, x in v.items()
-                ]
-                return "{\n" + ",\n".join(items) + f"\n{pad}}}"
-            if isinstance(v, list):
-                if not v:
-                    return "[]"
-                items = [f"{pad}  {_pretty(x, ind + 1)}" for x in v]
-                return "[\n" + ",\n".join(items) + f"\n{pad}]"
-            try:
-                return json.dumps(v, ensure_ascii=False)
-            except Exception:
-                return str(v)
-
-        try:
-            args_str = _pretty(args)
-        except Exception:
-            args_str = str(args)
-        blocks.append(f"{fn.get('name', '?')}:\n{args_str}")
-    return "\n".join(blocks)
-
-
-def _wire_message_node(msg: Any) -> Optional[MessageNode]:
-    """Build a MessageNode from one wire message dict, or None if not a dict."""
-    if not isinstance(msg, dict):
-        return None
-    role = msg.get("role")
-    if role == "system":
-        # The system prompt is tracked separately as tier components; skipping it
-        # here avoids double counting.
-        return None
-    if not role:
-        role = "?"
-    content = msg.get("content")
-    raw_reasoning = (msg.get("reasoning_content") or msg.get("reasoning") or "")
-    if not isinstance(raw_reasoning, str):
-        raw_reasoning = str(raw_reasoning)
-    return MessageNode(
-        role=str(role),
-        content=_content_to_str(content) if content is not None else "",
-        raw_content=content if isinstance(content, str) else _wire_content_to_str(content)
-                   if content is not None else "",
-        tool_text=_tool_call_text(msg),
-        raw_tool_text=_wire_tool_call_text(msg),
-        reasoning_text=raw_reasoning,
-    )
-
-
 # ── Records ──────────────────────────────────────────────────────────────
 
 
@@ -312,14 +164,15 @@ def _wire_message_node(msg: Any) -> Optional[MessageNode]:
 class PromptRecord:
     """What one API call's prompt consisted of, plus its provider token counts.
 
-    All text is stored on the nodes themselves; records hold references.
+    System-part text lives on the ComponentNodes referenced here. Message parts
+    are NOT held on the record: they come from prompt_capture's in-memory store
+    (the raw slices of the actual request body) and are read at render time —
+    same pattern as tool schemas and server parameters.
     """
 
     seq: int
     built_at: float = field(default_factory=time.time)
     system_components: List[ComponentNode] = field(default_factory=list)  # refs to canonical nodes
-    messages: List[MessageNode] = field(default_factory=list)             # in send order (no system)
-    tool_schemas: Optional[ComponentNode] = None
     label: str = ""
     # Filled after the API response lands (None until then):
     prompt_tokens: Optional[int] = None
@@ -347,7 +200,7 @@ class PromptManifest:
         self._records: List[PromptRecord] = []
         self._next_seq = 1     # monotonic prompt number for the "Prompt #N" header
         # line number (last render) -> (record_seq, kind, index), for get_line()
-        # kind in {sys, tools, msg}; index = item position in that record
+        # kind in {sys, wmsg, wtool, wenv, wtail}; index = item position
         self._line_to_seq: Dict[int, Tuple[int, str, int]] = {}
         # Last conversation-history entry at /pi call time (live tail); used by
         # the wtail drill-down. Set by render(); never part of any send path.
@@ -369,44 +222,24 @@ class PromptManifest:
         except Exception:
             pass  # observability must never break prompt build
 
-    @staticmethod
-    def _tool_schema_node(tools: Any) -> Optional[ComponentNode]:
-        """One ComponentNode holding the tool-schema payload as sent (compact JSON)."""
-        if not tools:
-            return None
-        try:
-            raw = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
-        except Exception:
-            raw = str(tools)[:8192]
-        return ComponentNode("tool schemas", raw, kind="hardcoded")
+    def record_send(self, agent: Any, label: str = "") -> Optional[PromptRecord]:
+        """Snapshot one send into a new PromptRecord.
 
-    def record_send(self, agent: Any, api_messages: Any, tools_for_api: Any = None,
-                    label: str = "", this_run_start_idx: Optional[int] = None) -> Optional[PromptRecord]:
-        """Snapshot the prompt about to be sent into a new PromptRecord.
-
-        Pass ``api_messages`` in its final wire form (post-sanitization) and
-        the tools list being sent.  Returns the record so callers can later
-        :meth:`fill_usage` it; the record is already stored.  Never raises.
+        Records the system parts attached to the agent and the send metadata;
+        conversation messages are NOT snapshotted here — /pi reads them at
+        render time from prompt_capture's in-memory store (the raw slices of
+        the actual captured request body).  Returns the record so callers can
+        later :meth:`fill_usage` it; the record is already stored. Never raises.
 
         Only the LAST prompt per agent is kept (MAX_RECORDS = 1): each send
         replaces the previous record.
-
-        ``this_run_start_idx`` (index into *api_messages*, usually the current
-        turn's user row) tags every message before it as "resumed from session
-        DB" and the rest as "this run".
         """
         try:
             with self._lock:
-                messages = [n for n in (_wire_message_node(m) for m in (api_messages or [])) if n]
-                if this_run_start_idx is not None:
-                    for i, node in enumerate(messages):
-                        node.origin = "resumed from session DB" if i < this_run_start_idx else "this run"
                 record = PromptRecord(
                     seq=self._next_seq,
                     built_at=time.time(),
                     system_components=list(getattr(agent, "_pm_system_nodes", None) or []),
-                    messages=messages,
-                    tool_schemas=self._tool_schema_node(tools_for_api),
                     label=label or "",
                 )
                 self._records.append(record)
@@ -444,18 +277,35 @@ class PromptManifest:
         return utf8_bytes(comp.text) if comp and comp.text else 0
 
     @staticmethod
-    def _message_bytes(m: MessageNode) -> int:
-        """UTF-8 bytes for one message (wire content + tool_calls + reasoning)."""
-        return (utf8_bytes(m.raw_content or "")
-                + utf8_bytes(m.raw_tool_text or "")
-                + utf8_bytes(m.reasoning_text or ""))
+    def _message_bytes(node: MessageNode) -> int:
+        """UTF-8 bytes of one message part (its held raw wire text)."""
+        return utf8_bytes(node.raw_text) if node and node.raw_text else 0
 
-    @classmethod
-    def _record_totals(cls, rec: PromptRecord) -> int:
-        """Total bytes of one prompt (computed from the held text)."""
-        return (sum(cls._component_bytes(c) for c in rec.system_components)
-                + sum(cls._message_bytes(m) for m in rec.messages)
-                + cls._component_bytes(rec.tool_schemas))
+    # -- wire-message parts -------------------------------------------------
+    # Conversation messages are rendered from the captured request body: the
+    # per-message raw-text slices prompt_capture stores in memory (exact wire
+    # text). Read at display time, like tool schemas and server parameters.
+
+    @staticmethod
+    def _wire_message_nodes() -> List[MessageNode]:
+        """MessageNode list built from the captured in-memory raw slices."""
+        try:
+            from agent.prompt_capture import get_message_parts
+            return [MessageNode(raw_text=t) for t in get_message_parts() if isinstance(t, str)]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _message_role_and_parsed(raw_text: str) -> Tuple[str, Any]:
+        """(role, parsed message dict) derived from one raw slice at render time."""
+        try:
+            obj = json.loads(raw_text)
+        except Exception:
+            obj = None
+        if not isinstance(obj, dict):
+            return "?", {}
+        role = obj.get("role")
+        return (str(role) if role else "?"), obj
 
     # -- drill-down -------------------------------------------------------
 
@@ -515,12 +365,14 @@ class PromptManifest:
                     return seq, "\n".join(lines) + "\n  text not available (not captured)"
                 return seq, "\n".join(lines) + f"\n\n{t}"
 
-            # Wire-truth parts: resolved from the stored wire body at call time.
+            # Wire-truth parts: resolved from the captured wire body and the
+            # captured per-message raw slices at call time.
             try:
                 from agent.prompt_capture import get_wire_body
                 wb = get_wire_body() or {}
             except Exception:
                 wb = {}
+            msg_nodes = self._wire_message_nodes()
             if kind == "wtool":
                 wtools = wb.get("tools") or []
                 if idx >= len(wtools):
@@ -551,39 +403,23 @@ class PromptManifest:
                 return seq, (f"[live tail] role={tail_item.get('role', '?')} ({size:,} bytes, {form})]\n\n"
                              + body)
 
-            m = rec.messages[idx]
-            msg_size = self._message_bytes(m)
-            parts = [f"[message] role={m.role} ({msg_size:,} bytes)"]
-            if m.origin:
-                parts.append(f"origin: {m.origin}")
-            # Raw mode: held strings verbatim; human mode: decoded forms.
-            if display_mode == "raw":
-                parts.append(self._node_body_text(m))
-            else:
-                content = self._content_for_mode(m.content, m.raw_content, display_mode)
-                parts.append(content or "(no content)")
-                reasoning = (m.reasoning_text or "").strip()
-                if reasoning:
-                    parts.append(f"reasoning ({utf8_bytes(reasoning):,} bytes):\n{reasoning}")
-                tool_text = self._content_for_mode(m.tool_text, m.raw_tool_text, display_mode)
-                if tool_text:
-                    parts.append(f"tool_calls:\n{tool_text}")
-            return seq, "\n".join(parts)
+            # Conversation messages: raw slices of the captured request body.
+            if kind == "wmsg":
+                if idx >= len(msg_nodes):
+                    return None
+                node = msg_nodes[idx]
+                raw = node.raw_text
+                role, parsed = self._message_role_and_parsed(raw)
+                size = utf8_bytes(raw)
+                form = "raw (as sent)" if display_mode != "human" else "human-readable JSON"
+                body = (raw if display_mode != "human"
+                        else json.dumps(parsed, ensure_ascii=False, indent=2))
+                return seq, f"[message] role={role} ({size:,} bytes, {form})]\n\n{body}"
+            return None
         except Exception:
             logger = logging.getLogger(__name__)
             logger.debug("prompt_manifest.get_line failed", exc_info=True)
             return None
-
-    @staticmethod
-    def _content_for_mode(readable: str, raw: str, mode: str) -> str:
-        """Pick the drill-down text form for one payload based on display mode.
-
-        "raw": as sent — JSON where it is JSON on the wire, text otherwise
-        (default); "human": decoded readable form.
-        """
-        if mode == "human":
-            return readable or raw
-        return raw or readable
 
     @staticmethod
     def _tool_name(t: Any) -> str:
@@ -643,10 +479,11 @@ class PromptManifest:
         return ""
 
     # -- message renderers --------------------------------------------------
-    # Two distinct bodies, two distinct sources:
-    #  - stored messages (msg): the held node strings ARE what we sent — print
-    #    them verbatim in wire order (reasoning_text, raw_content,
-    #    raw_tool_text); each field only when non-empty.
+    # Three distinct bodies, three distinct sources:
+    #  - captured messages (wmsg): raw slices of the request body held in
+    #    prompt_capture's in-memory store — printed verbatim.
+    #  - tool schemas (wtool) + server parameters (wenv): read from the same
+    #    in-memory wire body at display time.
     #  - live tail (wtail): never sent, so no wire form exists — rendered at
     #    /pi call time: reasoning_content in <reasoning> tags first, then the
     #    content as plain text.
@@ -666,12 +503,6 @@ class PromptManifest:
             parts.append(tool_text)
         return "\n".join(parts)
 
-    @staticmethod
-    def _node_body_text(m: MessageNode) -> str:
-        """Raw body of one stored record node: held strings verbatim, newline separated."""
-        return "\n".join(s for s in (m.reasoning_text, m.raw_content, m.raw_tool_text)
-                         if s and s.strip())
-
     @classmethod
     def _msg_body_bytes(cls, obj: Any) -> int:
         """Bytes of the live-tail row: exactly what its raw body prints."""
@@ -682,9 +513,10 @@ class PromptManifest:
     def render(self, agent: Any = None, live_tail: Any = None) -> str:
         """Tabular overview of the manifest's single stored prompt.
 
-        Renders system parts, tool schemas, and conversation messages from
-        the stored PromptRecord nodes; appends the live tail (last entry of
-        conversation_history) at the end when present.
+        Renders system parts from the stored PromptRecord nodes and conversation
+        messages / tool schemas / server parameters from prompt_capture's
+        in-memory wire stores (the captured request body); appends the live tail
+        (last entry of conversation_history) at the end when present.
 
         One numbered line per part, aligned columns; pass a number to
         ``get_line`` (via /pi <no>) for that part's full text.
@@ -700,20 +532,21 @@ class PromptManifest:
             line_map: Dict[int, Tuple[int, str, int]] = {}
             n = 0
             for rec in records:
-                # Read the captured wire body ONCE per render; all record rows
-                # below share it (there is at most one record anyway).
+                # Read the captured wire body + message slices ONCE per render;
+                # all record rows below share them (at most one record anyway).
                 try:
                     from agent.prompt_capture import get_wire_body
                     wb = get_wire_body() or {}
                 except Exception:
                     wb = {}
+                msg_nodes = self._wire_message_nodes()
                 wtools = [t for t in (wb.get("tools") or []) if isinstance(t, dict)]
                 wenv = {k: v for k, v in wb.items() if k not in ("messages", "tools")}
                 live_tail_clean = self._clean_tail_entry(live_tail) if isinstance(live_tail, dict) else None
 
                 # The parts shown determine the total bytes.
                 sys_bytes = sum(self._component_bytes(c) for c in rec.system_components)
-                msg_bytes = sum(self._message_bytes(m) for m in rec.messages)
+                msg_bytes = sum(self._message_bytes(node) for node in msg_nodes)
                 tools_bytes = (sum(self._wire_bytes(t) for t in wtools)
                                + (self._wire_bytes(wenv) if wenv else 0))
                 tail_bytes = (self._msg_body_bytes(live_tail_clean) if live_tail_clean else 0)
@@ -746,13 +579,13 @@ class PromptManifest:
                     rows.append([str(n), comp.kind + ":", self._cell(comp.description),
                                  f"{self._component_bytes(comp):,}"])
 
-                # Conversation messages in send order.
-                for i, m in enumerate(rec.messages):
-                    size = self._message_bytes(m)
+                # Conversation messages: raw slices of the captured request body.
+                for i, node in enumerate(msg_nodes):
+                    role, parsed = self._message_role_and_parsed(node.raw_text)
                     n += 1
-                    line_map[n] = (rec.seq, "msg", i)
-                    rows.append([str(n), m.role + ":", self._message_part_label(m),
-                                 f"{size:,}"])
+                    line_map[n] = (rec.seq, "wmsg", i)
+                    rows.append([str(n), role + ":", self._wire_msg_label(parsed),
+                                 f"{self._message_bytes(node):,}"])
 
                 # Server parameters + tool schemas from the CAPTURED wire body
                 # (in-memory copy of the SDK's own serialized request — same
@@ -827,21 +660,6 @@ class PromptManifest:
         """Single-line cell text (multi-line input folded onto one line)."""
         return " ".join(str(value or "").split())
 
-    @classmethod
-    def _message_part_label(cls, m: MessageNode) -> str:
-        """Generate a descriptive label for the 'part' column of message rows.
-
-        For user messages: use the start of the content text (first 40 chars).
-        For other roles: fall back to the role name.
-        """
-        # User messages get their content prefix as the description
-        if m.role == "user" and m.content:
-            label = cls._cell(m.content)  # fold to single line
-            if len(label) > 40:
-                return label[:37] + "..."
-            return label or m.role
-        return m.role
-
     def get_line_header(self, line_no: int) -> Optional[str]:
         """Tabular header line for one numbered part from the last render.
 
@@ -894,16 +712,16 @@ class PromptManifest:
                 row = [str(line_no), str(tail_item.get("role")) + ":",
                        self._wire_msg_label(tail_item),
                        f"{self._msg_body_bytes(tail_item):,}"]
+            elif kind == "wmsg":
+                nodes = self._wire_message_nodes()
+                if idx >= len(nodes):
+                    return None
+                node = nodes[idx]
+                role, parsed = self._message_role_and_parsed(node.raw_text)
+                row = [str(line_no), role + ":", self._wire_msg_label(parsed),
+                       f"{self._message_bytes(node):,}"]
             else:
-                m = rec.messages[idx]
-                size = self._message_bytes(m)
-                reason_bytes = utf8_bytes(m.reasoning_text or "")
-                tags = [t for t in (m.origin,
-                                    f"reasoning {reason_bytes:,} bytes" if m.reasoning_text.strip() else None)
-                        if t]
-                tag_s = (" [" + ", ".join(tags) + "]") if tags else ""
-                row = [str(line_no), f"{m.role}:", self._message_part_label(m),
-                       f"{size:,}{tag_s}"]
+                return None
             header = [("#", "r"), ("kind", "l"), ("description", "l"), ("bytes", "r")]
             return format_table(header, [row], show_header=False)[0]
         except Exception:

@@ -9,7 +9,15 @@ from __future__ import annotations
 import httpx
 from typing import Any
 
-from agent.prompt_capture import install_prompt_capture, prompt_capture_json_path, prompt_capture_path
+import pytest
+
+from agent.prompt_capture import (
+    get_message_parts,
+    install_prompt_capture,
+    prompt_capture_json_path,
+    prompt_capture_path,
+    set_message_parts,
+)
 
 
 def _sdk_with_hook() -> Any:
@@ -23,6 +31,14 @@ def _sdk_with_hook() -> Any:
     sdk._client = http_client
     install_prompt_capture(sdk)
     return sdk
+
+
+@pytest.fixture(autouse=True)
+def reset_message_parts():
+    # Module-global store; keep tests independent of capture order.
+    set_message_parts([])
+    yield
+    set_message_parts([])
 
 
 def test_captures_post_body_bytes(tmp_path, monkeypatch):
@@ -108,3 +124,43 @@ def test_path_resolves_from_env_live(tmp_path, monkeypatch):
     assert prompt_capture_path() == p1
     monkeypatch.setenv("HERMES_PROMPT_CAPTURE", p2)
     assert prompt_capture_path() == p2
+
+
+def test_hook_stores_message_parts_in_memory(tmp_path, monkeypatch):
+    """The capture hook stores each message's exact wire slice for /pi."""
+    monkeypatch.setenv("HERMES_PROMPT_CAPTURE", str(tmp_path / "prompt.txt"))
+    sdk = _sdk_with_hook()
+    body = (b'{"messages": [{"role": "user", "content": "hi"},'
+            b'{"role": "assistant", "content": "hello", '
+            b'"tool_calls": []}], "model": "m"}')
+    sdk._client.post("http://localhost/v1/chat/completions", content=body)
+
+    parts = get_message_parts()
+    assert len(parts) == 2
+    # Each part is the EXACT wire slice (nothing reassembled).
+    assert parts[0] == '{"role": "user", "content": "hi"}'
+    assert parts[1] == ('{"role": "assistant", "content": "hello", '
+                        '"tool_calls": []}')
+
+
+def test_message_parts_store_last_request_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_PROMPT_CAPTURE", str(tmp_path / "prompt.txt"))
+    sdk = _sdk_with_hook()
+    base = "http://localhost/v1/chat/completions"
+    sdk._client.post(base, content=b'{"messages": [{"role": "user", "content": "a"}]}')
+    sdk._client.post(base, content=b'{"messages": [{"role": "user", "content": "b"},'
+                                    b'{"role": "tool", "content": "c"}]}')
+    parts = get_message_parts()
+    assert [p for p in parts] == ['{"role": "user", "content": "b"}',
+                                  '{"role": "tool", "content": "c"}']
+
+
+def test_hook_invalid_body_no_message_parts(tmp_path, monkeypatch):
+    # Fail-open: a non-JSON body stores no parts (previous capture cleared).
+    monkeypatch.setenv("HERMES_PROMPT_CAPTURE", str(tmp_path / "prompt.txt"))
+    sdk = _sdk_with_hook()
+    base = "http://localhost/v1/chat/completions"
+    sdk._client.post(base, content=b'{"messages": [{"role": "user", "content": "a"}]}')
+    assert len(get_message_parts()) == 1
+    sdk._client.post(base, content=b"not-json-at-all")
+    assert get_message_parts() == []

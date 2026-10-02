@@ -15,7 +15,7 @@ import json
 import glob
 import logging
 import os
-from typing import Any
+from typing import Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -45,34 +45,27 @@ def _message_part_base() -> str:
     return path + "_part"
 
 
-def write_message_parts(raw: bytes) -> None:
-    """Split the captured body into per-message part files (raw slices).
+def _collect_message_slices(raw: bytes) -> List[str]:
+    """Split the captured body into per-message raw-text slices (wire-faithful).
 
     Walks the messages array with ``json.JSONDecoder.raw_decode``: at each '{'
     that opens a message, raw_decode returns where that message ends in the
     text (nested braces handled), so ``text[idx:end]`` is the exact wire slice.
-    Each part file holds only its slice; the parts in order reassemble exactly
-    the messages array content between the brackets. Fail-open: never raises.
+    The slices in order reassemble exactly the messages array content between
+    the brackets.  Fail-open: returns [] on any problem; never raises.
     """
+    slices: List[str] = []
     try:
         text = raw.decode("utf-8")
         kpos = text.find('"messages"')
         if kpos < 0:
-            return
+            return slices
         apos = text.find(":", kpos + len('"messages"'))
         bpos = text.find("[", apos + 1) if apos >= 0 else -1
         if bpos < 0:
-            return
+            return slices
         dec = json.JSONDecoder()
-        # Remove stale part files from a previous (larger) capture.
-        base = _message_part_base()
-        for f in glob.glob(glob.escape(base) + "_*.txt"):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
         idx = bpos + 1
-        i = 0
         while True:
             c = text[idx]
             if c == "]":
@@ -82,10 +75,32 @@ def write_message_parts(raw: bytes) -> None:
                 idx += 1
                 continue
             _, end = dec.raw_decode(text, idx)
-            with open(f"{base}_{i}.txt", "wb") as f:
-                f.write(text[idx:end].encode("utf-8"))
-            i += 1
+            slices.append(text[idx:end])
             idx = end
+    except Exception:
+        logger.debug("prompt capture message slices skipped", exc_info=True)
+    return slices
+
+
+def write_message_parts(slices: List[str]) -> None:
+    """Debug output only: one raw-slice file per message (/tmp/prompt_part_<n>.txt).
+
+    The in-memory store (:func:`set_message_parts`) is what /pi reads; these
+    files exist for offline inspection. Stale parts from a previous larger
+    capture are removed first. Fail-open: never raises.
+    """
+    try:
+        if not slices:
+            return
+        base = _message_part_base()
+        for f in glob.glob(glob.escape(base) + "_*.txt"):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        for i, s in enumerate(slices):
+            with open(f"{base}_{i}.txt", "wb") as f:
+                f.write(s.encode("utf-8"))
     except Exception:
         logger.debug("prompt capture message parts skipped", exc_info=True)
 
@@ -108,6 +123,25 @@ def set_wire_body(body: Any) -> None:
 def get_wire_body() -> Any:
     """Return the stored parsed body, or None if no capture happened yet."""
     return _last_wire_body
+
+
+# Per-message raw-text slices of the LAST captured request (exact wire text).
+# The /pi display builds its message parts from these.
+_message_parts: List[str] = []
+
+
+def set_message_parts(texts: List[str]) -> None:
+    """Store the per-message raw-text slices of the last captured request."""
+    global _message_parts
+    try:
+        _message_parts = list(texts)
+    except Exception:
+        logger.debug("message parts store skipped", exc_info=True)
+
+
+def get_message_parts() -> List[str]:
+    """Return stored per-message raw-text slices (empty if no capture yet)."""
+    return list(_message_parts)
 
 
 def install_prompt_capture(client: Any) -> None:
@@ -133,9 +167,11 @@ def install_prompt_capture(client: Any) -> None:
                 raw = bytes(data)
                 with open(prompt_capture_path(), "wb") as f:
                     f.write(raw)
-                # Per-message part files (raw slices of the same body).
+                # Per-message raw-text slices (exact wire text).
                 try:
-                    write_message_parts(raw)
+                    slices = _collect_message_slices(raw)
+                    write_message_parts(slices)
+                    set_message_parts(slices)
                 except Exception:
                     logger.debug("prompt capture message parts skipped", exc_info=True)
                 # Human-readable companion of the same body (.json, indent=2).

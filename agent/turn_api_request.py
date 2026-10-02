@@ -40,24 +40,6 @@ def _set_extra_header(api_kwargs: Any, key: str, value: str) -> None:
     api_kwargs["extra_headers"] = _xh
 
 
-def _find_this_run_start(api_messages: Any, user_message: Any) -> Optional[int]:
-    """Index of THIS turn's user row in the wire messages (the this-run boundary).
-
-    The current-turn user message is appended as ``{"role":"user","content":user_message}``
-    (a redirect folds its suffix into user_message up-front), so the LAST user row whose
-    content equals it is the boundary: everything before was resumed from the session DB,
-    this and after were produced in this run. Returns None when it can't be located so the
-    manifest simply omits origin tags (never wrong, never fatal).
-    """
-    if not isinstance(api_messages, list):
-        return None
-    for i in range(len(api_messages) - 1, -1, -1):
-        msg = api_messages[i]
-        if isinstance(msg, dict) and msg.get("role") == "user" and msg.get("content") == user_message:
-            return i
-    return None
-
-
 def _fire_pre_api_request_hook(
     agent: Any, api_kwargs: Any, api_messages: Any, _llm_middleware_trace: Any, *, messages: Any,
     original_user_message: Any, approx_tokens: Any, total_chars: Any, retry_count: Any,
@@ -144,9 +126,7 @@ def build_api_request(
     try:
         from agent.prompt_manifest import get_or_create_manifest
 
-        _pm_rec = get_or_create_manifest(agent).record_send(
-            agent, api_messages, tools_for_api, this_run_start_idx=_find_this_run_start(api_messages, original_user_message)
-        )
+        _pm_rec = get_or_create_manifest(agent).record_send(agent)
         agent._pm_current_seq = getattr(_pm_rec, "seq", None)
     except Exception:
         pass  # observability must never break the request path
