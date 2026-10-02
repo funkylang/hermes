@@ -296,18 +296,17 @@ def announce_api_call(
         agent._vprint(f"{agent.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (~{total_chars:,} chars)")
         agent._vprint(f"{agent.log_prefix}   🔧 Available tools: {len(agent.tools) if agent.tools else 0}")
     else:
-        # Animated thinking spinner in quiet mode
-        face = random.choice(KawaiiSpinner.get_thinking_faces())
-        verb = random.choice(KawaiiSpinner.get_thinking_verbs())
+        # Informative status in quiet mode: show query size instead of random verb
+        query_chars = total_chars or 0
         if agent.thinking_callback:
             # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
             # (works in both streaming and non-streaming modes)
-            agent.thinking_callback(f"{face} {verb}...")
+            agent.thinking_callback(f"Sent {query_chars:,} chars — waiting for reply")
         elif not agent._has_stream_consumers() and agent._should_start_quiet_spinner():
             # Raw KawaiiSpinner only when no streaming consumers and the
             # spinner output has a safe sink.
             spinner_type = random.choice(['brain', 'sparkle', 'pulse', 'moon', 'star'])
-            thinking_spinner = KawaiiSpinner(f"{face} {verb}...", spinner_type=spinner_type, print_fn=agent._print_fn)
+            thinking_spinner = KawaiiSpinner(f"Sent {query_chars:,} chars — waiting", spinner_type=spinner_type, print_fn=agent._print_fn)
             thinking_spinner.start()
 
     # Log request details if verbose
