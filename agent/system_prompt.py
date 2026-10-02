@@ -805,7 +805,6 @@ def _post_workspace_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
         _bot_parts = _bot_mode_parts(agent)
         for i, p in enumerate(_bot_parts):
             blocks.append((p, "bot-mode capability epoch" if i > 0 and _bot_parts[0] else "bot-mode protocol section"))
-    blocks.append((_active_profile_line(agent), "active profile line"))
     blocks.append((platform_hint(agent), "platform hint"))
     return blocks
 
@@ -1043,6 +1042,11 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     for t in _plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"):
         volatile_parts.append(t)
         volatile_sources.append("plugin system prompt sections")
+    # The profile line names this home's path, so it rides in the volatile tier: the stable
+    # prefix then stays byte-identical across every profile (and home) on the host.
+    # (upstream f29163388c; re-added after a rebase conflict dropped it.)
+    volatile_parts.append(_active_profile_line(agent))
+    volatile_sources.append("active profile line")
     _ts_text = _timestamp_line(agent)
     volatile_parts.append(_ts_text)
     volatile_sources.append("conversation timestamp")
