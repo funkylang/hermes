@@ -1560,6 +1560,13 @@ def _run_conversation_turn(
             user_message, persist_user_message
         )
 
+    # Standalone "done" control word: API-local wrap-up instruction for this turn only; the clean
+    # word itself is what gets persisted. Central here so every platform (CLI, TUI/desktop, ACP,
+    # API server) picking up a real user message gets the same behavior.
+    from agent.control_words import apply_done_control_word
+
+    user_message, persist_user_message = apply_done_control_word(user_message, persist_user_message)
+
     # The gateway caches agents across turns; compression state is per-turn, or a stale
     # in-place boundary would make a later uncompressed result look compacted.
     agent._last_compaction_in_place = agent._last_compression_attempt_recorded = False
