@@ -1490,6 +1490,17 @@ class CLITuiMixin:
         multimodal follow-ups, or a turn that finished in the race). queue → next turn.
         """
         from cli import CLI_CONFIG, _ACCENT, _DIM, _RST, _cprint, _hermes_home
+
+        # Standalone "stop" control word: always triggers emergency brake regardless of mode.
+        from agent.control_words import is_standalone_stop_control_word
+        if text and is_standalone_stop_control_word(text) and self.agent is not None:
+            try:
+                if self.agent.halt():
+                    _cprint(f"  {_ACCENT}⏹ Turn stopped (emergency brake){_RST}")
+                    return
+            except Exception:
+                pass
+
         _effective_mode = self.busy_input_mode
         redirected = False
         if _effective_mode == "steer":
