@@ -290,14 +290,22 @@ def announce_api_call(
     total_chars: Any,
 ) -> ApiCallAnnouncement:
     """Print the request summary (verbose) or start the quiet-mode thinking indicator."""
+    # Use real wire bytes from last capture if available, else fall back to estimate.
+    try:
+        from agent.prompt_capture import get_last_prompt_chars
+        wire_chars = get_last_prompt_chars()
+    except Exception:
+        wire_chars = 0
+    actual_chars = wire_chars or total_chars or 0
+
     thinking_spinner = None
     if not agent.quiet_mode:
         agent._vprint(f"\n{agent.log_prefix}🔄 Making API call #{api_call_count}/{agent.max_iterations}...")
-        agent._vprint(f"{agent.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (~{total_chars:,} chars)")
+        agent._vprint(f"{agent.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (~{actual_chars:,} chars)")
         agent._vprint(f"{agent.log_prefix}   🔧 Available tools: {len(agent.tools) if agent.tools else 0}")
     else:
         # Informative status in quiet mode: show query size instead of random verb
-        query_chars = total_chars or 0
+        query_chars = actual_chars
         if agent.thinking_callback:
             # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
             # (works in both streaming and non-streaming modes)

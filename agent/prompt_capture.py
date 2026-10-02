@@ -125,6 +125,24 @@ def get_wire_body() -> Any:
     return _last_wire_body
 
 
+# Byte length of the last captured prompt. Used for informative status display.
+_last_prompt_chars: int = 0
+
+
+def set_last_prompt_chars(chars: int) -> None:
+    """Store the byte length of the last captured prompt (fail-open)."""
+    global _last_prompt_chars
+    try:
+        _last_prompt_chars = chars
+    except Exception:
+        logger.debug("prompt chars store skipped", exc_info=True)
+
+
+def get_last_prompt_chars() -> int:
+    """Return stored byte length of the last captured prompt (0 if none yet)."""
+    return _last_prompt_chars
+
+
 # Per-message raw-text slices of the LAST captured request (exact wire text).
 # The /pi display builds its message parts from these.
 _message_parts: List[str] = []
@@ -167,6 +185,8 @@ def install_prompt_capture(client: Any) -> None:
                 raw = bytes(data)
                 with open(prompt_capture_path(), "wb") as f:
                     f.write(raw)
+                # Store byte length for informative status display.
+                set_last_prompt_chars(len(raw))
                 # Per-message raw-text slices (exact wire text).
                 try:
                     slices = _collect_message_slices(raw)
