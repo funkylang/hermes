@@ -561,6 +561,28 @@ def _timestamp_line(agent: Any) -> str:
     return timestamp_line + "".join(f"\n{label}: {value}" for label, value in trailer if value)
 
 
+def _rules_block(agent: Any) -> Optional[Tuple[str, str]]:
+    """RULES.md — general standing rules, injected BEFORE MEMORY.md.
+
+    No store/entry model and no API: the file itself is the source of truth
+    (edited by hand), read directly from the profile-scoped memories dir.
+    Absent or empty yields nothing, so prompt bytes are untouched until it has
+    content. The label carries its real path for /pi provenance."""
+    try:
+        from tools.memory_tool import get_memory_dir
+        path = get_memory_dir() / "RULES.md"
+        if not path.is_file():
+            return None
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            return None
+        sep = "═" * 46
+        block = f"{sep}\nRULES (general standing rules)\n{sep}\n{content}"
+        return (block, display_path(str(path)))
+    except Exception:
+        return None
+
+
 def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
     """Built-in memory/USER.md blocks plus the external provider block as
     ``(text, label)`` pairs in assembly order (absent kinds yield nothing), gated
@@ -569,6 +591,9 @@ def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
     provenance label in lockstep — the label is derived from what actually got
     appended, never from a parallel re-check."""
     blocks: List[Tuple[str, str]] = []
+    rules = _rules_block(agent)
+    if rules:
+        blocks.append(rules)
     if agent._memory_store:
         for enabled, kind in ((agent._memory_enabled, "memory"), (agent._user_profile_enabled, "user")):
             block = agent._memory_store.format_for_system_prompt(kind) if enabled else None
