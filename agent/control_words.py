@@ -77,7 +77,7 @@ def _read_control_word_file(filename: str, default_text: str) -> str:
 
         path = Path(get_hermes_home()) / "messages" / filename
         if path.is_file():
-            text = path.read_text(encoding="utf-8").strip()
+            text = path.read_text(encoding="utf-8-sig").strip()
             if text:
                 return text
     except Exception as exc:  # noqa: BLE001 — never let this raise into the turn loop

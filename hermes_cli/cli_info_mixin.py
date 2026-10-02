@@ -749,7 +749,7 @@ class CLIInfoMixin:
         # Dump the agent if it exists
         if self.agent:
             try:
-                with open('/tmp/agent.txt', 'w') as f:
+                with open('/tmp/agent.txt', 'w', encoding='utf-8') as f:
                     obj = self.agent
                     f.write(f"# Agent Object\n")
                     f.write(f"# Type: {type(obj).__name__}\n")
@@ -768,7 +768,7 @@ class CLIInfoMixin:
 
         # Dump the CLI object
         try:
-            with open('/tmp/cli.txt', 'w') as f:
+            with open('/tmp/cli.txt', 'w', encoding='utf-8') as f:
                 obj = self
                 f.write(f"# CLI Object\n")
                 f.write(f"# Type: {type(obj).__name__}\n")
@@ -788,7 +788,7 @@ class CLIInfoMixin:
         try:
             manifest = getattr(self.agent, '_prompt_manifest', None)
             if manifest is not None and hasattr(manifest, '__dict__'):
-                with open('/tmp/manifest.txt', 'w') as f:
+                with open('/tmp/manifest.txt', 'w', encoding='utf-8') as f:
                     obj = manifest
                     f.write(f"# PromptManifest Object\n")
                     f.write(f"# Type: {type(obj).__name__}\n")

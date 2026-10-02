@@ -574,7 +574,7 @@ def _memories_file_block(agent: Any, filename: str, title: str) -> Optional[Tupl
         path = get_memory_dir() / filename
         if not path.is_file():
             return None
-        content = path.read_text(encoding="utf-8").strip()
+        content = path.read_text(encoding="utf-8-sig").strip()
         if not content:
             return None
         sep = "═" * 46

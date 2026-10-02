@@ -183,7 +183,8 @@ def install_prompt_capture(client: Any) -> None:
             data = read() if callable(read) else None
             if isinstance(data, (bytes, bytearray)) and data:
                 raw = bytes(data)
-                with open(prompt_capture_path(), "wb") as f:
+                capture_path = prompt_capture_path()
+                with open(capture_path, "wb") as f:
                     f.write(raw)
                 # Store byte length for informative status display.
                 set_last_prompt_chars(len(raw))
@@ -197,7 +198,8 @@ def install_prompt_capture(client: Any) -> None:
                 # Human-readable companion of the same body (.json, indent=2).
                 try:
                     parsed = json.loads(raw)
-                    with open(prompt_capture_json_path(), "w", encoding="utf-8") as jf:
+                    json_path = prompt_capture_json_path()
+                    with open(json_path, "w", encoding="utf-8") as jf:
                         json.dump(parsed, jf, indent=2, ensure_ascii=False)
                     # In-memory copy for the /pi display (tools, server params).
                     set_wire_body(parsed)
