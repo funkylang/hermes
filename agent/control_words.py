@@ -4,9 +4,8 @@ model call so they can shape how ONE turn runs without changing what is durably 
 Currently implements "done" (Superhermes): the user types exactly ``done`` as a message and we
 tell the model to checkpoint its work (update memory/skills/notes, finish current activity)
 without starting new tasks — the pre-shutdown use case. The instruction text itself is
-user-editable via ``~/.hermes/done.md`` (root level; migrate to a subdir only if 5+ such files
-accumulate); a built-in default is used when that file is absent or blank, so the feature works
-out of the box.
+user-editable via ``~/.hermes/messages/DONE.md``; a built-in default is used when that file is
+absent or blank, so the feature works out of the box.
 
 Design notes:
 - Recognition is standalone-only: the stripped message must equal the word exactly,
@@ -31,9 +30,14 @@ logger = logging.getLogger(__name__)
 # The single recognized control word, matched exactly after strip() + lower().
 _DONE_WORD = "done"
 
-# Fallback instruction used when ~/.hermes/done.md is absent or blank. Written from the agent's
-# own perspective (second person "you") since it is injected as a system-style notice addressed
-# to the model, not shown to the user verbatim (the user sees their own typed word, "done").
+# Name of the user-editable file under ~/.hermes/messages/. Uppercase to match the convention
+# used by RULES.md / MEMORY.md / USER.md / HISTORY.md.
+_DONE_FILE_NAME = "DONE.md"
+
+# Fallback instruction used when ~/.hermes/messages/DONE.md is absent or blank. Written from
+# the agent's own perspective (second person "you") since it is injected as a system-style
+# notice addressed to the model, not shown to the user verbatim (the user sees their own typed
+# word, "done").
 DEFAULT_DONE_INSTRUCTION = (
     "[SYSTEM NOTICE — session wrap-up requested] The user has asked you to wrap up: the session "
     "or computer will be shut down soon. Before anything else, persist what is worth keeping: "
@@ -52,15 +56,17 @@ def is_standalone_control_word(message: Any, word: str) -> bool:
 
 
 def _read_control_word_file(filename: str, default_text: str) -> str:
-    """Read a user-editable instruction file from ``~/.hermes/``, falling back to ``default_text``.
+    """Read a user-editable instruction file from ``~/.hermes/messages/``, falling back to
+    ``default_text``.
 
-    Failures (unreadable file, permission error, etc.) log at warning and fall through to the
-    default — this hook must never break a turn because of a bad config file.
+    Failures (unreadable file, missing directory, permission error, etc.) log at warning and
+    fall through to the default — this hook must never break a turn because of a bad config
+    file or missing directory.
     """
     try:
         from hermes_constants import get_hermes_home
 
-        path = Path(get_hermes_home()) / filename
+        path = Path(get_hermes_home()) / "messages" / filename
         if path.is_file():
             text = path.read_text(encoding="utf-8").strip()
             if text:
@@ -81,7 +87,7 @@ def apply_done_control_word(user_message: Any, persist_user_message: Optional[An
     if not is_standalone_control_word(user_message, _DONE_WORD):
         return user_message, persist_user_message
 
-    note = _read_control_word_file("done.md", DEFAULT_DONE_INSTRUCTION)
+    note = _read_control_word_file(_DONE_FILE_NAME, DEFAULT_DONE_INSTRUCTION)
     prefixed = f"{note}\n\n{user_message}"
     clean = user_message if persist_user_message is None else persist_user_message
     logger.info(
