@@ -151,10 +151,10 @@ def run_tool_round(
         with suppress(Exception):
             agent.stream_delta_callback(None)
 
-    # Standalone "halt" control word: user typed "halt" — emergency brake, block all tools.
+    # Standalone "stop" control word: user typed "stop" — emergency brake, block all tools.
     if getattr(agent, "_tool_calls_blocked_this_turn", False):
-        _turn_exit_reason = "halt_control_word"
-        final_response = agent._halt_control_word_response()
+        _turn_exit_reason = "stop_control_word"
+        final_response = agent._stop_control_word_response()
         
         # Add synthetic tool results to satisfy API requirements (each tool_call needs a response)
         for tc in assistant_message.tool_calls:

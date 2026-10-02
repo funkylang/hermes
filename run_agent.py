@@ -1281,11 +1281,11 @@ class AIAgent(
             "different approach."
         )
 
-    def _halt_control_word_response(self) -> str:
-        # Shown when user types standalone "halt" — emergency brake, tools blocked immediately.
+    def _stop_control_word_response(self) -> str:
+        # Shown when user types standalone "stop" — emergency brake, tools blocked immediately.
         return (
-            "[SYSTEM] You have been halted by the user's 'halt' command. All tool calls are "
-            "now disabled for this turn. Please acknowledge the halt and wait for further "
+            "[SYSTEM] You have been stopped by the user's 'stop' command. All tool calls are "
+            "now disabled for this turn. Please acknowledge the stop and wait for further "
             "instructions. Do not proceed with any pending tasks until the user explicitly "
             "re-engages you."
         )

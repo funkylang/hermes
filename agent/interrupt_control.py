@@ -212,6 +212,47 @@ class InterruptControlMixin:
             print("\n⚡ Interrupt requested" + (f": '{message[:40]}...'" if message and len(message) > 40 else f": '{message}'" if message else ""))
         return True
 
+    def halt(self, message: Optional[str] = None) -> bool:
+        """Emergency brake (standalone "stop" control word): abort the in-flight model request
+        and stop the current turn WITHOUT signalling tool workers or child agents, so external
+        tools/processes already running keep going.
+
+        Deliberately narrower than ``interrupt()``: same model-request abort and
+        execution-thread interrupt publication, minus the tool-worker fan-out and child
+        propagation. Safe to call from any thread (control-word detection runs on platform
+        threads, not the conversation loop).
+        """
+        tool_interrupt_reason = _REASON_HARD_STOP
+
+        with _ic_lock(self, "_pending_redirect_lock"):
+            self._interrupt_requested = True
+            self._interrupt_message = None  # the typed word is a command, not content to replay
+            self._tool_interrupt_reason = tool_interrupt_reason
+            logger.info(
+                "Halt control word: turn stopped and model request aborted; running external tools preserved"
+            )
+            self._pending_redirect = None
+
+        # Codex app-server watches its own interrupt event.
+        _request_interrupt = _ic_codex_method(self, "request_interrupt")
+        if _request_interrupt is not None:
+            try:
+                _request_interrupt()
+            except Exception:
+                logger.debug("Failed to halt Codex app-server turn", exc_info=True)
+
+        # Close the live model connection (e.g. the llama-server stream socket).
+        _ic_abort_active_request(self, "halt_control_word_abort", "Failed to abort active request for halt")
+
+        # Signal the conversation-loop thread so it breaks at its next check. Tool workers run
+        # on their own tids and are deliberately NOT signalled — running tools keep going.
+        if self._execution_thread_id is not None:
+            _set_interrupt(True, self._execution_thread_id, reason=tool_interrupt_reason)
+            self._interrupt_thread_signal_pending = False
+        else:
+            self._interrupt_thread_signal_pending = True
+        return True
+
     def hard_interrupt(self, message: Optional[str] = None, *, tool_reason: Optional[str] = None) -> None:
         """Explicit stop preserving the ``interrupt()`` ABI (frontends feature-detect this and fall back to
         legacy ``interrupt()`` for third-party agents). Bypasses dynamic dispatch: legacy subclasses may
@@ -253,6 +294,12 @@ class InterruptControlMixin:
         if not text or not text.strip():
             return False
         cleaned = text.strip()
+        # Standalone "stop" mid-turn is the emergency brake, not model-facing text: abort the
+        # active turn (model request closed) without touching running external tools.
+        from agent.control_words import is_standalone_stop_control_word
+
+        if is_standalone_stop_control_word(cleaned):
+            return self.halt()
         with _ic_lock(self, "_pending_steer_lock"):
             existing = _ic_slot(self, "_pending_steer_lock", "_pending_steer")
             self._pending_steer = (existing + "\n" + cleaned) if existing else cleaned

@@ -4,7 +4,7 @@ Behavior contracts pinned here:
 
 1. RECOGNITION — only a message that is EXACTLY the control word, after whitespace
    stripping and case-folding, triggers anything. Anything else (extra words, punctuation
-   after "done" or "halt", multimodal content-part lists, etc.) passes through unchanged.
+   after "done" or "stop", multimodal content-part lists, etc.) passes through unchanged.
 2. DONE INJECTION — on recognition of "done", the model-facing copy of the user message carries a
    prepended instruction loaded from ~/.hermes/messages/DONE.md when present and non-blank,
    else a built-in default; the message body itself stays in place (appended after the note).
@@ -12,7 +12,7 @@ Behavior contracts pinned here:
    original clean text so the durable transcript row is exactly what the user typed.
 4. ROBUSTNESS — a missing/unreadable/blank DONE.md (or missing messages/ dir) must never
    raise or change behavior: the default instruction is used instead.
-5. HALT DETECTION — "halt" triggers an emergency brake flag that blocks tool execution;
+5. STOP DETECTION — "stop" triggers an emergency brake (model request aborted, turn stopped);
    recognition rules are identical to "done".
 """
 
@@ -87,34 +87,34 @@ class TestDoneInstructionContent:
         assert control_words._read_control_word_file("DONE.md", "FALLBACK") == "FALLBACK"
 
 
-class TestHaltControlWordRecognition:
+class TestStopControlWordRecognition:
     def test_exact_word_matches(self):
-        assert control_words.is_standalone_halt_control_word("halt")
+        assert control_words.is_standalone_stop_control_word("stop")
 
     def test_case_insensitive(self):
-        for variant in ("Halt", "HALT", "hAlT"):
-            assert control_words.is_standalone_halt_control_word(variant), variant
+        for variant in ("Stop", "STOP", "sToP"):
+            assert control_words.is_standalone_stop_control_word(variant), variant
 
     def test_surrounding_whitespace_ignored(self):
-        for variant in ("  halt  ", "\thalt\n", "halt ", " halt"):
-            assert control_words.is_standalone_halt_control_word(variant), variant
+        for variant in ("  stop  ", "\tstop\n", "stop ", " stop"):
+            assert control_words.is_standalone_stop_control_word(variant), variant
 
     @pytest.mark.parametrize("text", [
-        "halt the server",  # extra words should not trigger
-        "I'm halted.",
-        "not a halt yet",
-        "halted",
-        "hal t",
+        "stop the server",  # extra words should not trigger
+        "I've stopped.",
+        "not a stop yet",
+        "stopped",
+        "sto p",
         "",
         "   ",
-        "halt!\n",  # trailing punctuation is part of the message, not just whitespace
+        "stop!\n",  # trailing punctuation is part of the message, not just whitespace
     ])
     def test_non_exact_word_does_not_match(self, text):
-        assert not control_words.is_standalone_halt_control_word(text), text
+        assert not control_words.is_standalone_stop_control_word(text), text
 
     def test_non_string_input_never_matches(self):
-        for value in ([{"type": "text", "text": "halt"}], None, 42, ["halt"]):
-            assert not control_words.is_standalone_halt_control_word(value), value
+        for value in ([{"type": "text", "text": "stop"}], None, 42, ["stop"]):
+            assert not control_words.is_standalone_stop_control_word(value), value
 
 
 class TestApplyDoneControlWord:

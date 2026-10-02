@@ -80,6 +80,56 @@ class TestSteerDrain:
         assert agent._pending_steer is None
 
 
+class TestStopControlWord:
+    """A standalone "stop" mid-turn is the emergency brake, not model-facing text."""
+
+    def test_standalone_stop_triggers_halt_not_steer(self):
+        agent = _bare_agent()
+        called = {}
+        agent.halt = lambda *a, **kw: called.setdefault("halt", True) or True
+
+        assert agent.steer("stop") is True
+        assert called.get("halt") is True
+        assert agent._drain_pending_steer() is None  # the word is never enqueued for the model
+
+    def test_stop_case_insensitive_and_stripped(self):
+        for variant in ("STOP", " Stop \n"):
+            called = {}
+            agent = _bare_agent()
+            agent.halt = lambda *a, **kw: called.setdefault("halt", True) or True
+            agent.steer(variant)
+            assert called.get("halt") is True, variant
+            assert agent._drain_pending_steer() is None
+
+    def test_stop_with_extra_words_still_steers(self):
+        agent = _bare_agent()
+        agent.steer("stop the build")  # not standalone: normal steer text
+        assert agent._drain_pending_steer() == "stop the build"
+
+    def test_halt_closes_model_connection_and_flags_loop_only(self):
+        agent = _bare_agent()
+        aborts = []
+        agent._active_request_abort = lambda reason: aborts.append(reason)
+        # Fake worker tids for a concurrent tool batch: halt() must NOT signal these.
+        exec_tid, tool_tid_a, tool_tid_b = 910_001, 910_002, 910_003
+        agent._execution_thread_id = exec_tid
+        agent._tool_worker_threads = {tool_tid_a, tool_tid_b}
+        agent._tool_worker_threads_lock = threading.Lock()
+
+        assert agent.halt() is True
+
+        # The live model connection (e.g. the llama-server stream socket) is closed...
+        assert aborts == ["halt_control_word_abort"]
+        # ...the conversation loop is told to stop...
+        from tools.interrupt import is_thread_interrupted
+
+        assert agent._interrupt_requested is True
+        assert is_thread_interrupted(exec_tid) is True
+        # ...while running external tools (worker threads) keep going.
+        assert is_thread_interrupted(tool_tid_a) is False
+        assert is_thread_interrupted(tool_tid_b) is False
+
+
 
 class TestActiveTurnRedirect:
     def test_rejects_when_no_turn_is_active(self):
