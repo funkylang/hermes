@@ -151,6 +151,32 @@ def run_tool_round(
         with suppress(Exception):
             agent.stream_delta_callback(None)
 
+    # Standalone "halt" control word: user typed "halt" — emergency brake, block all tools.
+    if getattr(agent, "_tool_calls_blocked_this_turn", False):
+        _turn_exit_reason = "halt_control_word"
+        final_response = agent._halt_control_word_response()
+        
+        # Add synthetic tool results to satisfy API requirements (each tool_call needs a response)
+        for tc in assistant_message.tool_calls:
+            append_message(messages, {
+                "role": "tool",
+                "name": tc.function.name,
+                "tool_call_id": coalesce_tool_call_id(tc),
+                "content": "Tool call halted by user emergency brake ('halt' command).",
+            })
+        
+        # Append the final response AFTER tool results (correct API ordering)
+        append_message(messages, {"role": "assistant", "content": final_response})
+        
+        # Emit the halt so it isn't mistaken for a crash; the stream callback is still alive.
+        if final_response:
+            agent._safe_print(f"\n{final_response}\n")
+            if agent.stream_delta_callback:
+                with suppress(Exception):
+                    agent.stream_delta_callback(final_response)
+                    agent.stream_delta_callback(None)
+        return _verdict("break")
+
     agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
     from hermes_cli.observability.shared_metrics_harness import finish_tool_round
 

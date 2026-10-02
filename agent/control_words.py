@@ -7,9 +7,14 @@ without starting new tasks — the pre-shutdown use case. The instruction text i
 user-editable via ``~/.hermes/messages/DONE.md``; a built-in default is used when that file is
 absent or blank, so the feature works out of the box.
 
+Also implements "halt": an emergency brake command that immediately blocks all NEW tool calls for
+the current turn (does not interrupt running tools). The user types "halt" to prevent destructive
+operations when they notice the agent is about to do something dangerous. Detection only sets a
+flag; the actual gating happens in run_tool_round.py before execution.
+
 Design notes:
 - Recognition is standalone-only: the stripped message must equal the word exactly,
-  case-insensitive. Anything else (e.g. "done with step 3") passes through untouched.
+  case-insensitive. Anything else (e.g. "done with step 3" or "halt the server") passes through untouched.
 - The prepended instruction is API-local: only this turn's model-facing copy of the user message
   carries it. ``persist_user_message`` is pinned to the original clean text so the durable
   transcript row stays exactly what the user typed (mirrors how voice-input prefixes are handled
@@ -29,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 # The single recognized control word, matched exactly after strip() + lower().
 _DONE_WORD = "done"
+
+# The second control word for emergency halting of tool calls.
+_HALT_WORD = "halt"
 
 # Name of the user-editable file under ~/.hermes/messages/. Uppercase to match the convention
 # used by RULES.md / MEMORY.md / USER.md / HISTORY.md.
@@ -74,6 +82,11 @@ def _read_control_word_file(filename: str, default_text: str) -> str:
     except Exception as exc:  # noqa: BLE001 — never let this raise into the turn loop
         logger.warning("Failed to read control-word file %s (using default): %s", filename, exc)
     return default_text
+
+
+def is_standalone_halt_control_word(message: Any) -> bool:
+    """True when ``message`` is exactly "halt" after whitespace stripping, case-insensitive."""
+    return is_standalone_control_word(message, _HALT_WORD)
 
 
 def apply_done_control_word(user_message: Any, persist_user_message: Optional[Any]) -> Tuple[Any, Optional[Any]]:

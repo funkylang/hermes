@@ -1567,6 +1567,16 @@ def _run_conversation_turn(
 
     user_message, persist_user_message = apply_done_control_word(user_message, persist_user_message)
 
+    # Standalone "halt" control word: immediately blocks all NEW tool calls for this turn.
+    # The user uses this as an emergency brake before destructive operations; we set a flag on the
+    # agent that run_tool_round will check before executing tools.
+    from agent.control_words import is_standalone_halt_control_word
+
+    # Reset halt flag at turn start to prevent leakage from previous turns (agents are cached).
+    agent._tool_calls_blocked_this_turn = False
+    if is_standalone_halt_control_word(user_message):
+        agent._tool_calls_blocked_this_turn = True
+
     # The gateway caches agents across turns; compression state is per-turn, or a stale
     # in-place boundary would make a later uncompressed result look compacted.
     agent._last_compaction_in_place = agent._last_compression_attempt_recorded = False

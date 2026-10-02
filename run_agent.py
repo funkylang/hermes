@@ -1281,6 +1281,15 @@ class AIAgent(
             "different approach."
         )
 
+    def _halt_control_word_response(self) -> str:
+        # Shown when user types standalone "halt" — emergency brake, tools blocked immediately.
+        return (
+            "[SYSTEM] You have been halted by the user's 'halt' command. All tool calls are "
+            "now disabled for this turn. Please acknowledge the halt and wait for further "
+            "instructions. Do not proceed with any pending tasks until the user explicitly "
+            "re-engages you."
+        )
+
     def _append_guardrail_observation(self, tool_name: str, function_args: dict, function_result: str, *,
                                       failed: bool, tool_call_id: str = "") -> str:
         decision = self._tool_guardrails.after_call(tool_name, function_args, function_result, failed=failed)
