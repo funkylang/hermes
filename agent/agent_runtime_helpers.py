@@ -1988,7 +1988,21 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     from agent.served_model import install_served_model_capture
     install_served_model_capture(agent, client)
     # Wire-faithful prompt capture: /tmp/prompt.txt = last request body bytes.
-    from agent.prompt_capture import install_prompt_capture
+    # The on_prompt_sent callback fires when the wire bytes are known, so it can show the
+    # correct character count in the waiting status (the pre-call announcement cannot).
+    from agent.prompt_capture import install_prompt_capture, set_on_prompt_sent
+
+    def _on_prompt_sent(chars: int) -> None:
+        # Update the spinner/status text with the true wire byte count.
+        if getattr(agent, "thinking_callback", None):
+            agent.thinking_callback(f"Sent {chars:,} chars — waiting for reply")
+        elif getattr(agent, "_active_thinking_spinner", None) is not None:
+            try:
+                agent._active_thinking_spinner.update_text(f"Sent {chars:,} chars — waiting")
+            except Exception:
+                pass
+
+    set_on_prompt_sent(_on_prompt_sent)
     install_prompt_capture(client)
     _ra().logger.info("OpenAI client created (%s, shared=%s) %s", reason, shared, agent._client_log_context())
     return client

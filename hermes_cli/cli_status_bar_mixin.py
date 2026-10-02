@@ -564,7 +564,8 @@ class CLIStatusBarMixin:
         txt = getattr(self, "_spinner_text", "")
         if not txt:
             return ""
-        flow = self._spinner_token_flow()
+        # Token-flow readout removed: it showed stale output tokens during model-wait
+        # status ("Sent N chars — waiting for reply"), where no response exists yet.
         t0 = getattr(self, "_tool_start_time", 0) or 0
         if t0 > 0:
             elapsed = time.monotonic() - t0
@@ -574,26 +575,8 @@ class CLIStatusBarMixin:
                                 minutes=f"{int(elapsed // 60):02d}", seconds=f"{int(elapsed % 60):02d}")
             else:
                 elapsed_str = t("cli.shared.duration_s", seconds=f"{elapsed:5.1f}")
-            return f"  {txt}  ({elapsed_str} · {flow})" if flow else f"  {txt}  ({elapsed_str})"
-        return f"  {txt}  ({flow})" if flow else f"  {txt}"
-
-    def _spinner_token_flow(self) -> str:
-        """Cumulative output tokens for the running turn, for the spinner."""
-        if not getattr(self, "_spinner_token_flow_enabled", False):
-            return ""
-        if not getattr(self, "_agent_running", False):
-            return ""
-        agent = getattr(self, "agent", None)
-        if agent is None:
-            return ""
-        try:
-            from agent.turn_summary import format_token_flow
-
-            produced = (getattr(agent, "session_output_tokens", 0) or 0) - (
-                getattr(self, "_turn_token_baseline", 0) or 0)
-            return format_token_flow(produced)
-        except Exception:
-            return ""
+            return f"  {txt}  ({elapsed_str})"
+        return f"  {txt}"
 
     def _turn_summary_is_active(self) -> bool:
         """Whether the per-turn summary line renders here: off for the config key, quiet /
@@ -618,10 +601,6 @@ class CLIStatusBarMixin:
                 self._turn_summary_collector = collector
             collector.begin()
             self._turn_summary_start = time.monotonic()
-            agent = getattr(self, "agent", None)
-            self._turn_token_baseline = (
-                getattr(agent, "session_output_tokens", 0) or 0
-            ) if agent is not None else 0
         except Exception:
             self._turn_summary_collector = None
 

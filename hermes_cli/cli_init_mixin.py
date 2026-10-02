@@ -71,10 +71,8 @@ class CLIInitMixin:
 
         # Per-turn accounting: CLI-only chrome riding the tool-progress feed.
         self._turn_summary_enabled = bool(display.get("turn_summary", True))
-        self._spinner_token_flow_enabled = bool(display.get("spinner_token_flow", True))
         self._turn_summary_collector = None
         self._turn_summary_start = 0.0
-        self._turn_token_baseline = 0
         self._interactive_turn = False  # only run()-loop turns; keeps the summary line off -Q
 
         _ump = display.get("user_message_preview", {})

@@ -289,33 +289,30 @@ def announce_api_call(
     agent: Any, *, messages: Any, api_messages: Any, api_call_count: Any, approx_tokens: Any,
     total_chars: Any,
 ) -> ApiCallAnnouncement:
-    """Print the request summary (verbose) or start the quiet-mode thinking indicator."""
-    # Use real wire bytes from last capture if available, else fall back to estimate.
-    try:
-        from agent.prompt_capture import get_last_prompt_chars
-        wire_chars = get_last_prompt_chars()
-    except Exception:
-        wire_chars = 0
-    actual_chars = wire_chars or total_chars or 0
+    """Print the request summary (verbose) or start the quiet-mode thinking indicator.
 
+    The character count is shown by the on_prompt_sent callback when the wire bytes are
+    known — not here — so the waiting status can't display a stale estimate."""
     thinking_spinner = None
     if not agent.quiet_mode:
+        # Verbose mode still shows approximate size (clearly marked as such)
         agent._vprint(f"\n{agent.log_prefix}🔄 Making API call #{api_call_count}/{agent.max_iterations}...")
-        agent._vprint(f"{agent.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (~{actual_chars:,} chars)")
+        agent._vprint(f"{agent.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (estimate)")
         agent._vprint(f"{agent.log_prefix}   🔧 Available tools: {len(agent.tools) if agent.tools else 0}")
     else:
-        # Informative status in quiet mode: show query size instead of random verb
-        query_chars = actual_chars
+        # Informative status in quiet mode: neutral placeholder — the real character count
+        # arrives via the on_prompt_sent hook when the wire bytes are actually known.
         if agent.thinking_callback:
             # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
-            # (works in both streaming and non-streaming modes)
-            agent.thinking_callback(f"Sent {query_chars:,} chars — waiting for reply")
+            agent.thinking_callback("Waiting for reply")
         elif not agent._has_stream_consumers() and agent._should_start_quiet_spinner():
             # Raw KawaiiSpinner only when no streaming consumers and the
             # spinner output has a safe sink.
             spinner_type = random.choice(['brain', 'sparkle', 'pulse', 'moon', 'star'])
-            thinking_spinner = KawaiiSpinner(f"Sent {query_chars:,} chars — waiting", spinner_type=spinner_type, print_fn=agent._print_fn)
+            thinking_spinner = KawaiiSpinner("Waiting for reply", spinner_type=spinner_type, print_fn=agent._print_fn)
             thinking_spinner.start()
+            # Store reference so _on_prompt_sent can update the text with real character count
+            agent._active_thinking_spinner = thinking_spinner
 
     # Log request details if verbose
     if agent.verbose_logging:

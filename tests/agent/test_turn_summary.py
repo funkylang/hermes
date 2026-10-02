@@ -13,7 +13,6 @@ from agent.turn_summary import (
     TurnSummaryCollector,
     TurnTally,
     format_elapsed,
-    format_token_flow,
     format_turn_summary,
 )
 
@@ -112,23 +111,9 @@ def test_begin_resets_previous_turn():
 
 
 
-# ── spinner token flow (PART B) ────────────────────────────────────────────
-
-
-
-
-def test_format_token_flow_bad_input_is_empty():
-    assert format_token_flow(None) == ""
-    assert format_token_flow("lots") == ""
-
 
 # ── gating: quiet mode / config false / non-interactive ────────────────────
 
-
-class _StubAgent:
-    def __init__(self, quiet_mode=False, session_output_tokens=0):
-        self.quiet_mode = quiet_mode
-        self.session_output_tokens = session_output_tokens
 
 
 def _make_cli(**overrides):
@@ -141,14 +126,12 @@ def _make_cli(**overrides):
 
     class _Stub:
         _turn_summary_enabled = True
-        _spinner_token_flow_enabled = True
         tool_progress_mode = "all"
         _interactive_turn = True
         _agent_running = True
         agent = None
         _turn_summary_collector = None
         _turn_summary_start = 0.0
-        _turn_token_baseline = 0
         _spinner_text = "⚡ reading file"
         _tool_start_time = 0
 
@@ -156,7 +139,6 @@ def _make_cli(**overrides):
         _turn_summary_begin = cli_module.HermesCLI._turn_summary_begin
         _turn_summary_record = cli_module.HermesCLI._turn_summary_record
         _turn_summary_emit = cli_module.HermesCLI._turn_summary_emit
-        _spinner_token_flow = cli_module.HermesCLI._spinner_token_flow
         _render_spinner_text = cli_module.HermesCLI._render_spinner_text
 
     stub = _Stub()
@@ -191,10 +173,6 @@ def test_gating_enabled_prints_summary(monkeypatch):
 
 
 
-def test_spinner_token_flow_appears_when_enabled():
-    stub = _make_cli(agent=_StubAgent(session_output_tokens=1200))
-    assert stub._spinner_token_flow() == "↓ 1.2k tok"
-    assert "↓ 1.2k tok" in stub._render_spinner_text()
 
 
 

@@ -143,6 +143,26 @@ def get_last_prompt_chars() -> int:
     return _last_prompt_chars
 
 
+# Display callback invoked when a prompt is written to /tmp/prompt.txt. Receives
+# the exact wire byte count so the "Sent N chars — waiting" status can show the
+# correct value (the pre-call announcement cannot know it).
+_on_prompt_sent = None
+
+
+def set_on_prompt_sent(callback) -> None:
+    """Register a callback invoked when a prompt is sent (fail-open, best-effort)."""
+    global _on_prompt_sent
+    try:
+        _on_prompt_sent = callback
+    except Exception:
+        logger.debug("prompt sent callback registration skipped", exc_info=True)
+
+
+def get_on_prompt_sent():
+    """Return the registered on_prompt_sent callback, or None."""
+    return _on_prompt_sent
+
+
 # Per-message raw-text slices of the LAST captured request (exact wire text).
 # The /pi display builds its message parts from these.
 _message_parts: List[str] = []
@@ -188,6 +208,14 @@ def install_prompt_capture(client: Any) -> None:
                     f.write(raw)
                 # Store byte length for informative status display.
                 set_last_prompt_chars(len(raw))
+                # The waiting-status callback fires here — at the moment the wire
+                # bytes are known — so it can show the correct character count.
+                cb = get_on_prompt_sent()
+                if cb is not None:
+                    try:
+                        cb(len(raw))
+                    except Exception:
+                        logger.debug("on_prompt_sent callback skipped", exc_info=True)
                 # Per-message raw-text slices (exact wire text).
                 try:
                     slices = _collect_message_slices(raw)

@@ -30,6 +30,11 @@ def stop_thinking_spinner(agent: Any, thinking_spinner: Any) -> None:
         thinking_spinner.stop("")
     if agent.thinking_callback:
         agent.thinking_callback("")
+    # Clear stored reference so on_prompt_sent doesn't update a stale spinner.
+    try:
+        agent._active_thinking_spinner = None
+    except AttributeError:
+        pass
     return None
 
 

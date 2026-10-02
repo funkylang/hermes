@@ -936,8 +936,6 @@ DEFAULT_CONFIG = {
         # CLI-only post-turn line: "⋯ 12.4s · edited 2 files +18 -3 · read 4 files · ran 3
         # commands". Never in quiet/non-interactive or gateway surfaces (own footer).
         "turn_summary": True,
-        # CLI-only: cumulative turn output tokens on the live spinner ("· ↓ 1.2k tok").
-        "spinner_token_flow": True,
         # Gateway tool-progress grouping where edits are supported: "accumulate" edits one bubble |
         # "separate" one message per tool (noisier). Needs tool_progress enabled. Per-platform:
         # display.platforms.<platform>.tool_progress_grouping.

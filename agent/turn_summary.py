@@ -4,7 +4,6 @@
 events carry the tool name and raw result) and tallies what a turn did — no agent-loop state
 is threaded through. :func:`format_turn_summary` renders a tally plus wall-clock duration
 into one dim line: ``⋯ 12.4s · edited 2 files +18 -3 · read 4 files · ran 3 commands``.
-:func:`format_token_flow` is the spinner-side cumulative token readout (``↓ 1.2k tok``).
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ __all__ = [
     "TurnSummaryCollector",
     "TurnTally",
     "format_turn_summary",
-    "format_token_flow",
     "format_elapsed",
 ]
 
@@ -191,19 +189,3 @@ def format_turn_summary(elapsed_seconds: float, tally: TurnTally | None, *, max_
         segments = segments[:max_segments] + [f"+{hidden} more"]
 
     return f"{SUMMARY_PREFIX} " + " · ".join([format_elapsed(elapsed_seconds)] + segments)
-
-
-def format_token_flow(output_tokens: Any, *, arrow: str = "↓") -> str:
-    """Cumulative turn tokens for the live spinner (``↓ 1.2k tok``); ``""`` for a
-    non-positive count so nothing misleading shows before the first response."""
-    try:
-        count = int(output_tokens)
-    except (TypeError, ValueError):
-        return ""
-    if count <= 0:
-        return ""
-    if count < 1000:
-        return f"{arrow} {count} tok"
-    if count < 1_000_000:
-        return f"{arrow} {count / 1000:.1f}k tok"
-    return f"{arrow} {count / 1_000_000:.1f}M tok"
