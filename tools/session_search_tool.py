@@ -462,7 +462,7 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
                                "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
 
 
-def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
+def _read_scoped(db, sid: str, profile: Optional[str], read_head=None, read_tail=None) -> str:
     """Read shape scoped to ONE store: the caller's profile, or the profile it named.
 
     A miss is a miss. Profiles are isolated islands, so a bare id never falls through to
@@ -470,11 +470,13 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
     transcript to any caller holding the id (#106761). The hint tells the model how to
     ask properly: ``@session:<profile>/<id>`` or ``profile=``.
     """
-    result = _read_session(db, sid, link_profile=profile)
+    head = read_head if read_head is not None else 20
+    tail = read_tail if read_tail is not None else 10
+    result = _read_session(db, sid, head=head, tail=tail, link_profile=profile)
     if json.loads(result).get("success") is not False or profile:
         return result
     return tool_error(f"session_id not found in this profile: {sid}. If it belongs to another "
-                      "profile, pass profile=<name> (or the @session:<profile>/<id> link).", success=False)
+                      f"profile, pass profile=<name> (or the @session:<profile>/<id> link).", success=False)
 
 
 def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_profile: str = None) -> str:
@@ -516,6 +518,43 @@ def _clamp_int(value, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         value = default
     return max(lo, min(value, hi))
+
+
+def _resolve_tilde_index(db, tilde_str: str, current_session_id=None) -> Optional[str]:
+    """Resolve ~N syntax (e.g., ~1, ~2) to an actual session_id.
+
+    Returns the Nth most recent non-current session, or None if not found.
+    """
+    if not tilde_str or not tilde_str.startswith("~"):
+        return None
+
+    try:
+        index = int(tilde_str[1:])  # Extract number after ~
+    except ValueError:
+        return None
+
+    if index < 1:
+        return None
+
+    # Get enough recent sessions to cover the requested index
+    try:
+        sessions = db.list_recent_sessions_bounded(
+            limit=index + 10,
+            exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+            timeout_seconds=3.0)
+    except Exception:
+        return None
+
+    # Hide current session (same logic as _list_recent_sessions)
+    hidden = {current_session_id}
+    if current_session_id:
+        current_root, has_compression_hop = _resolve_to_parent(db, current_session_id)
+        if has_compression_hop and current_root:
+            hidden.add(current_root)
+
+    # Find the Nth most recent non-current session
+    recent_sessions = [s for s in sessions if s.get("id", "") not in hidden]
+    return recent_sessions[index - 1]["id"] if index - 1 < len(recent_sessions) else None
 
 
 def _anchor_in_live_context(db, anchor_state, anchor_sid: str, current_session_id: str) -> bool:
@@ -576,7 +615,7 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
 
 def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
               around_message_id, window, sort, profile, detail, owned_dbs,
-              after=None, before=None, exclude_session_ids=None) -> str:
+              after=None, before=None, exclude_session_ids=None, read_head=None, read_tail=None) -> str:
     """Mode dispatch (see module docstring); scroll wins when an anchor is set.
     Profile DBs opened here are appended to *owned_dbs* for the caller to close."""
     # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
@@ -587,6 +626,14 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
             session_id = emb_id
             if emb_profile and (profile is None or not str(profile).strip()):
                 profile = emb_profile
+
+    # Handle ~N syntax for session reference by index
+    if isinstance(session_id, str) and session_id.startswith("~"):
+        resolved_sid = _resolve_tilde_index(db, session_id, current_session_id)
+        if not resolved_sid:
+            return tool_error(f"could not resolve session index {session_id} (not enough sessions or index out of range)", success=False)
+        session_id = resolved_sid
+
     # Cross-profile: swap in the named profile's DB (read-only) for every shape;
     # current-lineage guards key off ids that won't collide, so they stay inert.
     try:
@@ -599,7 +646,10 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
     if isinstance(session_id, str) and session_id.strip():
         if around_message_id is not None:
             return _scroll(db, session_id.strip(), around_message_id, window, current_session_id)
-        return _read_scoped(db, session_id.strip(), profile)
+        # Clamp read_head and read_tail to reasonable values
+        head = _clamp_int(read_head, 20, 1, 50) if read_head else None
+        tail = _clamp_int(read_tail, 10, 1, 50) if read_tail else None
+        return _read_scoped(db, session_id.strip(), profile, head, tail)
     limit = _clamp_int(limit, 3, 1, 10)
     if not query or not isinstance(query, str) or not query.strip():
         return _list_recent_sessions(db, limit, current_session_id, link_profile=profile)
@@ -619,7 +669,8 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
 def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=None,
                    current_session_id: str = None, session_id: str = None, around_message_id: int = None,
                    window: int = 5, sort: str = None, profile: str = None, detail: str = "adaptive",
-                   after: str = None, before: str = None, exclude_session_ids: Optional[List[str]] = None) -> str:
+                   after: str = None, before: str = None, exclude_session_ids: Optional[List[str]] = None,
+                   read_head: int = None, read_tail: int = None) -> str:
     """Run session search, closing DBs opened here. Positional order is frozen for old callers;
     new parameters are appended after ``detail``."""
     from hermes_state import format_session_db_unavailable
@@ -633,7 +684,8 @@ def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=
     try:
         return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
                          around_message_id, window, sort, profile, detail, owned_dbs,
-                         after=after, before=before, exclude_session_ids=exclude_session_ids)
+                         after=after, before=before, exclude_session_ids=exclude_session_ids,
+                         read_head=read_head, read_tail=read_tail)
     finally:
         for owned_db in reversed(owned_dbs):
             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
@@ -775,6 +827,20 @@ SESSION_SEARCH_SCHEMA = {
                     "Omit to use the current profile."
                 ),
             },
+            "read_head": {
+                "type": "integer",
+                "description": (
+                    "Read shape only. Number of messages from the start of the session "
+                    "to return (default 20). Use with or without read_tail."
+                ),
+            },
+            "read_tail": {
+                "type": "integer",
+                "description": (
+                    "Read shape only. Number of messages from the end of the session "
+                    "to return (default 10). Useful for resuming where you left off."
+                ),
+            },
         },
         "required": [],
     },
@@ -791,6 +857,6 @@ registry.register(
         query=args.get("query") or "", limit=args.get("limit", 3), window=args.get("window", 5),
         detail=args.get("detail", "adaptive"), db=kw.get("db"), current_session_id=kw.get("current_session_id"),
         **{k: args.get(k) for k in ("role_filter", "session_id", "around_message_id", "sort", "profile",
-                                    "after", "before", "exclude_session_ids")}),
+                                    "after", "before", "exclude_session_ids", "read_head", "read_tail")}),
     check_fn=check_session_search_requirements,
     emoji="🔍")
