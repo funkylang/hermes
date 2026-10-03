@@ -6,6 +6,7 @@ import logging
 import re
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1436,6 +1437,36 @@ def _opt_int(args: List[str], flag: str, default: int) -> int:
     return _int_or(_opt_value(args, flag, str(default), last=True), default)
 
 
+def _slash_loaded(args, c):
+    """List skills loaded this session via skill_view (in-session observability)."""
+    from rich.table import Table
+    from tools.skill_load_tracking import get_session_skill_loads
+
+    task_id = getattr(c, "hermes_task_id", None)
+    events = get_session_skill_loads(task_id)
+    if not events:
+        c.print("[dim]No skills loaded this session yet. They appear here when skill_view "
+                "is called (by the agent or via /<skill> commands).[/]\n")
+        return
+
+    table = Table(title=f"Skills Loaded This Session ({len(events)} unique)", show_lines=False)
+    table.add_column("#", style="dim", width=3, justify="right")
+    table.add_column("Time", style="cyan", width=8)
+    table.add_column("Skill", style="bold cyan", max_width=32)
+    table.add_column("File", style="dim", max_width=26)
+    table.add_column("Loads", width=6, justify="right")
+
+    for i, e in enumerate(events, start=1):
+        tstr = time.strftime("%H:%M:%S", time.localtime(e["first_ts"]))
+        table.add_row(str(i), tstr, e["name"], e["file_path"] or "(SKILL.md)", str(e.get("count", 1)))
+
+    c.print(table)
+    total_loads = sum(e.get("count", 1) for e in events)
+    tail = f"{len(events)} unique skill(s), {total_loads} load(s)" if total_loads != len(events) \
+        else f"{len(events)} unique skill(s)"
+    c.print(f"[dim]{tail}[/]\n")
+
+
 def _slash_search(args, c):
     source, limit, as_json, query_parts, i = "all", 25, False, [], 0
     while i < len(args):
@@ -1483,6 +1514,7 @@ _SLASH_ACTIONS = {
     "list": lambda args, c: do_list(
         source_filter=_opt_value(args, "--source", "all"),
         enabled_only="--enabled-only" in args or "--enabled" in args, console=c),
+    "loaded": _slash_loaded,
     "check": lambda args, c: do_check(name=args[0] if args else None, console=c),
     "update": lambda args, c: do_update(
         name=next((a for a in args if not a.startswith("--")), None), console=c,
@@ -1552,6 +1584,7 @@ def _print_skills_help(console: Console) -> None:
         "  [cyan]inspect[/] <identifier>        Preview a skill without installing\n"
         "  [cyan]list[/] [--source hub|builtin|local] [--enabled-only]\n"
         "       List installed skills; --enabled-only filters to the active profile's live set\n"
+        "  [cyan]loaded[/]                     Skills loaded this session (timestamps + repeat views)\n"
         "  [cyan]check[/] [name]                Check hub skills for upstream updates\n"
         "  [cyan]update[/] [name]               Update hub skills with upstream changes\n"
         "  [cyan]audit[/] [name]                Re-scan hub skills for security\n"

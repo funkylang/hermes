@@ -725,6 +725,8 @@ def _skill_view_with_bump(args, **kw):
     """Invoke skill_view, then bump view_count/use on success (best-effort). Repeat-view dedup
     mirrors read_file's unchanged-stub: a SAME, unchanged skill file already loaded in this
     session returns a short stub (cache cleared on context compression)."""
+    from tools.skill_load_tracking import record_skill_load
+
     name = args.get("name", "")
     task_id = kw.get("task_id")
     # The background-review fork shares the parent's task_id (prefix-cache parity). A stub there
@@ -733,11 +735,13 @@ def _skill_view_with_bump(args, **kw):
     # out of the parent's bucket.
     dedup_task_id = None if is_background_review() else task_id
     if (stub := _check_skill_view_dedup(dedup_task_id, name, args.get("file_path"))) is not None:
+        record_skill_load(task_id, name, args.get("file_path"), repeat=True)  # repeat load signal
         return stub
     result = skill_view(name, file_path=args.get("file_path"), task_id=task_id)
     with suppress(Exception):
         parsed = json.loads(result)
         if isinstance(parsed, dict) and parsed.get("success"):
+            record_skill_load(task_id, name, args.get("file_path"))
             _record_skill_view(dedup_task_id, name, args.get("file_path"), parsed)
             if resolved := parsed.get("name") or name:  # qualified forms return the canonical name
                 from tools.skill_usage import bump_use, bump_view

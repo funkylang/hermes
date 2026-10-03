@@ -885,6 +885,7 @@ class ChatConsole:
         from io import StringIO
         self._buffer = StringIO()
         self._inner = Console(file=self._buffer, force_terminal=True, color_system="truecolor", highlight=False)
+        self.hermes_task_id: str | None = None  # session id for /skills loaded context
 
     def print(self, *args, **kwargs):
         from cli import _OSC_ESCAPE_RE, _cprint
