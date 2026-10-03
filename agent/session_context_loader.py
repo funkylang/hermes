@@ -1,9 +1,6 @@
-"""Fetch context from previous sessions for automatic injection into new conversations."""
-
-from __future__ import annotations
-
+"""Load context from previous session to inject at the start of new conversations."""
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -14,73 +11,74 @@ def get_previous_session_context(
     min_messages_required: int = 10,
     max_messages_to_return: int = 16,
 ) -> List[Dict[str, Any]]:
-    """Fetch messages from the most recent eligible previous session.
+    """Get the last N messages from the most recent previous session.
 
     Args:
-        session_db: The SessionDB instance (can be None)
-        current_session_id: ID of the current session to exclude
-        min_messages_required: Minimum message count for a session to be eligible
-        max_messages_to_return: Maximum number of messages to return from that session
+        session_db: The SessionDatabase instance (can be None)
+        current_session_id: Current session ID to exclude
+        min_messages_required: Minimum message count for a session to be considered
+        max_messages_to_return: Maximum number of messages to return
 
     Returns:
-        List of message dicts in API format (role, content) or empty list if no eligible session
+        List of message dicts with role and content, in chronological order (oldest first).
     """
-    if not session_db:
+    if not session_db or not current_session_id:
         return []
 
     try:
-        # Query recent sessions, ordered by last_active DESC (most recent first)
-        # Exclude the current session
-        sessions = session_db.list_sessions_rich(
-            order_by_last_active=True,
-            limit=20,  # Look through up to 20 most recent sessions
-        )
+        db = session_db._db
+        # Find the most recent previous session by looking at sessions table
+        rows = db.execute("""
+            SELECT id FROM sessions
+            WHERE id != ?
+            ORDER BY last_activity_at DESC
+            LIMIT 10
+        """, (current_session_id,)).fetchall()
 
-        for session in sessions:
-            session_id = session.get('id')
-            if not session_id or session_id == current_session_id:
+        for row in rows:
+            prev_session_id = row[0]
+
+            # Check that this session has enough messages to be useful context
+            count_row = db.execute("""
+                SELECT COUNT(*) FROM messages
+                WHERE session_id = ? AND active = 1
+            """, (prev_session_id,)).fetchone()
+
+            if not count_row or count_row[0] < min_messages_required:
                 continue
 
-            message_count = session.get('message_count', 0)
-            if message_count < min_messages_required:
-                # Keep looking - try the next older session
+            # Get the last N user/assistant messages with content in chronological order
+            # Using id DESC + reverse = most recent messages, oldest-first output.
+            msgs = db.execute("""
+                SELECT role, content, reasoning_content
+                FROM messages
+                WHERE session_id = ? AND active = 1
+                AND role IN ('user', 'assistant')
+                AND content IS NOT NULL AND LENGTH(content) > 0
+                ORDER BY id DESC
+                LIMIT ?
+            """, (prev_session_id, max_messages_to_return)).fetchall()
+
+            if not msgs:
                 continue
 
-            # Found an eligible session, fetch its recent messages
-            # Use latest=True to get most recent messages first
-            messages = session_db.get_messages(
-                session_id=session_id,
-                limit=max_messages_to_return,
-                latest=True,
+            # Reverse so oldest message is first
+            msgs = list(reversed(msgs))
+
+            context_messages = []
+            for role, content, reasoning in msgs:
+                msg = {"role": role, "content": content}
+                if reasoning and reasoning.strip():
+                    msg["reasoning_content"] = reasoning
+                context_messages.append(msg)
+
+            logger.debug(
+                "Previous session context loaded: session=%s messages=%d",
+                prev_session_id[:8], len(context_messages)
             )
+            return context_messages
 
-            if not messages:
-                continue
-
-            # Convert to API format (only user and assistant roles)
-            api_messages = []
-            for msg in reversed(messages):  # Reverse back to chronological order
-                role = msg.get('role')
-                content = msg.get('content') or ''
-                if role in ('user', 'assistant') and content.strip():
-                    # Strip reasoning_content, finish_reason and other non-wire fields
-                    api_msg = {
-                        'role': role,
-                        'content': content
-                    }
-                    api_messages.append(api_msg)
-
-            # Only return if we found some valid messages
-            if api_messages:
-                logger.debug(
-                    "Previous session context loaded: session=%s, messages=%d",
-                    session_id, len(api_messages),
-                )
-                return api_messages
-
-        # No eligible session found with sufficient messages
         return []
-
     except Exception as exc:
-        logger.warning("Failed to fetch previous session context: %s", exc)
+        logger.debug("Failed to load previous session context: %s", exc)
         return []

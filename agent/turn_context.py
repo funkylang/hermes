@@ -1295,12 +1295,16 @@ def build_api_messages(
 
     # Automatically inject previous session context for new conversations.
     # Only inject if:
-    # 1. This is near the start of the conversation (few messages)
+    # 1. This is the first API call of the conversation (no assistant response yet)
     # 2. We haven't already fetched it for this agent instance
-    if len(canonical_messages) < 5 and not hasattr(agent, '_previous_session_context'):
+    has_assistant_response = any(
+        m.get("role") == "assistant" for m in canonical_messages if isinstance(m, dict)
+    )
+    
+    if not has_assistant_response and not hasattr(agent, '_previous_session_context'):
         try:
             from agent.session_context_loader import get_previous_session_context
-            session_db = agent._get_session_db() if hasattr(agent, '_get_session_db') else getattr(agent, '_session_db', None)
+            session_db = getattr(agent, '_session_db', None)
             prev_ctx = get_previous_session_context(
                 session_db=session_db,
                 current_session_id=agent.session_id or '',
@@ -1318,7 +1322,8 @@ def build_api_messages(
     if effective_system:
         api_messages_new.append({"role": "system", "content": effective_system})
 
-    # Inject previous session context (if any) right after system prompt
+    # Inject previous session context (if any) right after system prompt,
+    # BEFORE the current conversation starts
     prev_ctx = getattr(agent, '_previous_session_context', None) or []
     if prev_ctx:
         api_messages_new.extend(prev_ctx)
