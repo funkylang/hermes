@@ -1292,6 +1292,38 @@ def build_api_messages(
     effective_system = active_system_prompt or ""
     if agent.ephemeral_system_prompt:
         effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+
+    # Automatically inject previous session context for new conversations.
+    # Only inject if:
+    # 1. This is near the start of the conversation (few messages)
+    # 2. We haven't already fetched it for this agent instance
+    if len(canonical_messages) < 5 and not hasattr(agent, '_previous_session_context'):
+        try:
+            from agent.session_context_loader import get_previous_session_context
+            session_db = agent._get_session_db() if hasattr(agent, '_get_session_db') else getattr(agent, '_session_db', None)
+            prev_ctx = get_previous_session_context(
+                session_db=session_db,
+                current_session_id=agent.session_id or '',
+                min_messages_required=10,
+                max_messages_to_return=16,
+            )
+            agent._previous_session_context = prev_ctx  # Cache (empty list is also valid)
+        except Exception as exc:
+            logger.debug("Previous session context injection failed: %s", exc)
+            agent._previous_session_context = []
+
+    # Assemble final message list: system prompt → previous context → current conversation
+    api_messages_new = []
+
     if effective_system:
-        api_messages = [{"role": "system", "content": effective_system}] + api_messages
-    return api_messages, effective_system
+        api_messages_new.append({"role": "system", "content": effective_system})
+
+    # Inject previous session context (if any) right after system prompt
+    prev_ctx = getattr(agent, '_previous_session_context', None) or []
+    if prev_ctx:
+        api_messages_new.extend(prev_ctx)
+
+    # Add the current conversation messages
+    api_messages_new.extend(api_messages)
+
+    return api_messages_new, effective_system
