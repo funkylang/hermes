@@ -101,6 +101,11 @@ def _write_reply_capture(content: str | None, finish_reason: str,
                          tool_calls: list | None = None) -> None:
     """Write the complete wire response to /tmp/reply_N.txt for debugging."""
     try:
+        # Debug trace: log every call with key params
+        with open("/tmp/reply_capture_debug.log", "a") as _dbg:
+            import time as _t
+            tc_names = [tc.get('function', {}).get('name', '?') if isinstance(tc, dict) else getattr(getattr(tc, 'function', None), 'name', '?') for tc in (tool_calls or [])]
+            _dbg.write(f"{_t.strftime('%H:%M:%S')} content={'Y' if content else 'N'} reasoning={'Y' if reasoning else 'N'} tool_calls={len(tool_calls) if tool_calls else 0} finish={finish_reason}\n")
         parts: list[str] = []
         if reasoning:
             parts.append(f"== REASONING ==\n{reasoning}")
@@ -108,7 +113,8 @@ def _write_reply_capture(content: str | None, finish_reason: str,
             parts.append(f"== CONTENT ==\n{content}")
         if tool_calls:
             import json as _json
-            parts.append(f"== TOOL CALLS ==\n{_json.dumps(tool_calls, indent=2)}")
+            from types import SimpleNamespace as _NS
+            parts.append(f"== TOOL CALLS ==\n{_json.dumps(tool_calls, indent=2, default=lambda o: vars(o) if isinstance(o, _NS) else str(o))}")
         parts.append(f"[[{finish_reason}]]")
         capture_text = "\n\n".join(parts)
         with open(_next_reply_capture_path(), "w", encoding="utf-8") as f:
