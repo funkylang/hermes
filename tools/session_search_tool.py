@@ -707,15 +707,15 @@ SESSION_SEARCH_SCHEMA = {
         "scroll inside one. Four shapes, picked by args: `query` = discovery "
         "(top-N matching sessions, top result fully hydrated); `session_id` + "
         "`around_message_id` = scroll (window of messages around an anchor); "
-        "`session_id` alone = read a whole session — how you resolve an "
-        "`@session:<profile>/<id>` link (split on '/' into profile + id); no "
-        "args = browse recent sessions. Results are actual DB messages, no LLM. "
-        "Searches conversation history ONLY — when the user gave a direct "
-        "source (URL, file, contact, live system), inspect that first; never "
-        "conclude 'not found' from history alone. Use for questions about past "
-        "conversations: 'what did we do about X', 'where did we leave Y'. When "
-        "referring the user to a session, write its `link` value verbatim "
-        "inline (it renders as a titled link)."
+        "`session_id` alone = read a whole session — use '~1' to directly recall "
+        "the previous session (or '~2', '~3', etc. for older ones); no args = "
+        "browse recent sessions. Results are actual DB messages, no LLM. Searches "
+        "conversation history ONLY — when the user gave a direct source (URL, file, "
+        "contact, live system), inspect that first; never conclude 'not found' from "
+        "history alone. Use for questions about past conversations: 'what did we do "
+        "about X', 'where did we leave Y', or when you need context from a previous "
+        "session. When referring the user to a session, write its `link` value "
+        "verbatim inline (it renders as a titled link)."
     ),
     "parameters": {
         "type": "object",
@@ -788,9 +788,14 @@ SESSION_SEARCH_SCHEMA = {
             "session_id": {
                 "type": "string",
                 "description": (
-                    "Scroll shape. Session to read inside. Use the session_id returned "
-                    "from a prior discovery call. Must be paired with "
-                    "around_message_id."
+                    "Session to read or scroll inside. Two usage patterns:\n"
+                    "1. Read shape (session_id alone): use '~N' shorthand (e.g., '~1') "
+                    "to directly reference the Nth most recent previous session — this is "
+                    "the standard way to recall what was discussed last session. Use a "
+                    "concrete session_id from discovery results to read other sessions.\n"
+                    "2. Scroll shape (session_id + around_message_id): pair with "
+                    "around_message_id to get a window around a specific message.\n"
+                    "Always use '~N' directly instead of browsing for IDs first."
                 ),
             },
             "around_message_id": {
@@ -831,14 +836,18 @@ SESSION_SEARCH_SCHEMA = {
                 "type": "integer",
                 "description": (
                     "Read shape only. Number of messages from the start of the session "
-                    "to return (default 20). Use with or without read_tail."
+                    "to return (default 20). Use with session_id='~1' to recall how the "
+                    "previous session began, or use a specific session_id for other "
+                    "sessions. Can combine with read_tail."
                 ),
             },
             "read_tail": {
                 "type": "integer",
                 "description": (
                     "Read shape only. Number of messages from the end of the session "
-                    "to return (default 10). Useful for resuming where you left off."
+                    "to return (default 10). Use with session_id='~1' to recall where "
+                    "the previous session left off, or use a specific session_id for "
+                    "other sessions. Can combine with read_head."
                 ),
             },
         },

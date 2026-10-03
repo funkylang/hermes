@@ -66,4 +66,32 @@ The injected memory files were reorganized on 2026-10-02 to separate concerns cl
 | `~/.hermes/memories/HISTORY.md` | Index of all projects worked on together. Keywords and pointers for each project, so context is recognized without loading details. |
 | `~/.hermes/SOUL.md` | Persona file (unchanged from upstream). |
 
-Procedural knowledge lives in skills (loaded only when relevant), not in these files. Memory has a strict character budget; overflow is handled by replacing stale entries, never by expanding the limit.
+---
+
+## Session Search Improvements (2026-10-03)
+
+Clear documentation for using `~N` shorthand to recall previous sessions directly, avoiding unnecessary browsing steps.
+
+### Problem
+
+Previous implementation required agents to first browse for session IDs then query by explicit ID, leading to confusion and potential hallucination about what was actually called.
+
+### Solution
+
+Enhanced tool schema documentation in three places:
+
+1. **Main tool description**: Now explicitly mentions using `~1` to recall the previous session
+2. **session_id parameter**: Documents two usage patterns - read shape (with `~N` or concrete ID) and scroll shape (with around_message_id)
+3. **read_head/read_tail parameters**: Both mention pairing with `~1` for their respective use cases (session start/end context)
+
+### Usage Pattern
+
+```python
+# Recall previous session context directly
+session_search(session_id='~1', read_tail=10)  # Where did we leave off?
+session_search(session_id='~1', read_head=5)   # How did it start?
+```
+
+This makes the recall workflow explicit in the tool's own documentation, reducing reliance on memory/rules alone.
+
+---
