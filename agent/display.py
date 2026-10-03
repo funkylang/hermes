@@ -4,6 +4,7 @@ Pure display functions with no AIAgent dependency; used for CLI feedback.
 """
 
 import logging
+import json
 import os
 import re
 import sys
@@ -1257,4 +1258,134 @@ def get_cute_tool_message(tool_name: str, args: dict, duration: float, result: s
         safe_name = tool_name[:9] if isinstance(tool_name, str) and tool_name else t("display.cute.fallback_tool_name")
         safe_duration = f"{duration:.1f}s" if isinstance(duration, (int, float)) else t("display.cute.fallback_done")
         return t("display.cute.completed", tool=f"{safe_name:9}", duration=safe_duration)
+
+
+# ── Transparent tool message (CLI scrollback): real name, full args, resolved paths, status ──
+
+_TRANSPARENT_ARG_MAX = 60  # per-arg cap when no preview length is configured
+_TRANSPARENT_PATH_KEYS = {"path", "file_path", "file", "filepath", "workdir", "dir", "directory"}
+
+
+def _transparent_value(key: str, value) -> str | None:
+    """One arg for display; None hides empty values. Path-like args resolve '.' / '~/...' to absolute."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if value is None or value == "" or value == [] or value == {}:
+        return None
+    limit = _tool_preview_max_len or _TRANSPARENT_ARG_MAX
+    if key in _TRANSPARENT_PATH_KEYS and isinstance(value, str):
+        # Resolve implicit defaults (path="." is common) then ~-shorten for readability.
+        text = display_path(os.path.abspath(os.path.expanduser(value)))
+    elif isinstance(value, (int, float)):
+        text = str(value)
+    else:
+        raw = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        text = _oneline(raw)
+    return _tail_trunc(text, limit)
+
+
+def _transparent_args_line(tool_name: str, args: dict) -> list[str]:
+    """``key=value`` pieces for every argument, longest first so the essentials stay visible."""
+    if not isinstance(args, dict):
+        return []
+    pieces = []
+    for key, value in args.items():
+        text = _transparent_value(str(key), value)
+        if text:
+            pieces.append(f"{key}={text}")
+    return pieces
+
+
+def _transparent_summary(tool_name: str, result, args) -> str | None:
+    """Brief outcome summary from the actual result data (None when not derivable)."""
+    data = result if isinstance(result, dict) else safe_json_loads(result)
+    if not isinstance(data, dict):
+        return None
+    try:
+        if tool_name == "terminal":
+            code = data.get("exit_code")
+            if isinstance(code, int):
+                return f"exit {code}"
+        elif tool_name == "search_files":
+            count = data.get("total_count")
+            items = data.get("matches") or data.get("files")
+            if not isinstance(count, int) and isinstance(items, list):
+                count = len(items)
+            if isinstance(count, int):
+                word = "file" if isinstance(args, dict) and args.get("target") == "files" else "match"
+                if count == 1:
+                    return f"1 {word}"
+                return f"{count} {word}{'es' if word.endswith('ch') else 's'}"
+        elif tool_name == "read_file":
+            lines = data.get("total_lines")
+            if isinstance(lines, int):
+                size = data.get("file_size")
+                return f"{lines} lines" + (f", {size} bytes" if isinstance(size, int) and size else "")
+        elif tool_name in {"write_file", "patch"}:
+            size = data.get("file_size") or data.get("size")
+            if isinstance(size, int):
+                return f"{size} bytes"
+    except Exception:
+        pass
+    return None
+
+
+def _transparent_error_message(tool_name: str, result) -> str | None:
+    """Human-readable failure text reusing the established detection logic."""
+    _, suffix = _detect_tool_failure(tool_name, result)
+    text = suffix.strip()
+    if not text:
+        return None
+    for opener, closer in ((" [", "]"), ("[", "]")):
+        if text.startswith(opener) and text.endswith(closer):
+            text = text[len(opener):-len(closer)].strip()
+            break
+    return text or None
+
+
+def _get_transparent_tool_message(tool_name: str, args: dict | None, duration: float, result: str | None = None) -> str:
+    args = redact_tool_args_for_display(tool_name, args) or (args if isinstance(args, dict) else {})
+    emoji = tool_row_emoji(tool_name, args or None)
+    is_failure = _detect_tool_failure(tool_name, result)[0]
+
+    def _duration_part() -> str:
+        return f"  {duration:.1f}s" if isinstance(duration, (int, float)) else ""
+
+    arg_pieces = _transparent_args_line(tool_name, args)
+    if not arg_pieces:
+        lines = [f"┊ {emoji} {tool_name}{_duration_part()}"]
+    elif len(arg_pieces) == 1:
+        # Short single-arg calls stay one line; long ones wrap with the status.
+        line = f"┊ {emoji} {tool_name} {arg_pieces[0]}{_duration_part()}"
+        lines = [line] if len(line) <= _transparent_arg_limit() else [f"┊ {emoji} {tool_name}", f"    {arg_pieces[0]}{_duration_part()}"]
+    else:
+        # Many args: header line plus one indented line per arg (all of them).
+        lines = [f"┊ {emoji} {tool_name} ({len(arg_pieces)} args){_duration_part()}"]
+        for piece in arg_pieces:
+            lines.append(f"    {piece}")
+
+    if is_failure:
+        message = _transparent_error_message(tool_name, result)
+        status = f"✗ ERROR{': ' + message if message else ''}"
+    else:
+        summary = _transparent_summary(tool_name, result, args)
+        status = f"✓ SUCCESS{f' — {summary}' if summary else ''}"
+    lines.append(f"    {status}")
+
+    prefix = get_skin_tool_prefix()
+    return "\n  ".join(row.replace("┊", prefix, 1) for row in lines)
+
+
+def _transparent_arg_limit() -> int:
+    """Max chars on a single-line transparent entry (args move to their own line beyond it)."""
+    return 100
+
+
+def get_transparent_tool_message(tool_name: str, args: dict | None, duration: float, result: str | None = None) -> str:
+    """Render a full-detail completion line without letting cosmetic failures escape."""
+    try:
+        return _get_transparent_tool_message(tool_name, args, duration, result=result)
+    except Exception as exc:  # noqa: BLE001 — display must never abort a turn
+        logger.debug("Transparent tool label failed for %s: %s", tool_name, exc)
+        return f"┊ {tool_row_emoji(tool_name)} {tool_name or '?'}  {'✗ ERROR' if result and _detect_tool_failure(str(tool_name), result)[0] else '✓ SUCCESS'}"
 
