@@ -789,6 +789,10 @@ from hermes_cli.model_setup_flows import (
     _is_profile_plugin_flow_provider,
 )
 logger = logging.getLogger(__name__)
+# CLI options that persist for the entire process lifetime (set once from argparse, never change)
+FRESH_MODE_ENABLED = False  # --fresh flag: skip previous session context injection
+
+
 from hermes_cli.main_agent_cmds import (
     cmd_acp,
     cmd_insights,
@@ -1858,6 +1862,10 @@ def cmd_chat(args):
     # entries and preloaded skills (AIAgent(skip_context_files, skip_memory)).
     if getattr(args, "ignore_rules", False):
         os.environ["HERMES_IGNORE_RULES"] = "1"
+    # --fresh: skip previous session context injection at startup.
+    global FRESH_MODE_ENABLED
+    if getattr(args, "fresh", False):
+        FRESH_MODE_ENABLED = True
     # --source: tag session source for filtering (e.g. 'tool' for integrations)
     if getattr(args, "source", None):
         os.environ["HERMES_SESSION_SOURCE"] = args.source

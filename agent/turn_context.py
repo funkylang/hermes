@@ -1297,11 +1297,15 @@ def build_api_messages(
     # Only inject if:
     # 1. This is the first API call of the conversation (no assistant response yet)
     # 2. We haven't already fetched it for this agent instance
+    # 3. --fresh mode is not set
     has_assistant_response = any(
         m.get("role") == "assistant" for m in canonical_messages if isinstance(m, dict)
     )
     
-    if not has_assistant_response and not hasattr(agent, '_previous_session_context'):
+    # Check the --fresh CLI flag (set once at startup, never changes)
+    from hermes_cli.main import FRESH_MODE_ENABLED
+    
+    if not has_assistant_response and not hasattr(agent, '_previous_session_context') and not FRESH_MODE_ENABLED:
         try:
             from agent.session_context_loader import get_previous_session_context
             session_db = getattr(agent, '_session_db', None)
