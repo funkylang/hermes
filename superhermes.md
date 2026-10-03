@@ -95,3 +95,47 @@ session_search(session_id='~1', read_head=5)   # How did it start?
 This makes the recall workflow explicit in the tool's own documentation, reducing reliance on memory/rules alone.
 
 ---
+
+## Previous-Session Context Injection (2026-10-03)
+
+When a session starts with `--continue`, the last exchange from the previous session is injected as context on the first API call, so the model retains recency even after compression or restart.
+
+- Injected exactly once per session: only when no assistant response exists yet.
+- Retrieves both user and assistant messages from the handoff (previous version retrieved assistant-only).
+- Implemented in `agent/session_context_loader.py` / `agent/turn_context.py`.
+
+### `--fresh` flag
+
+`hermes --fresh` skips previous-session context injection entirely and starts clean. Use when the carried-over context is stale or harmful to the current task.
+
+---
+
+## /skills loaded — Skill Observability (2026-10-03)
+
+`/skills loaded` lists every skill loaded in the current session via `skill_view`, with load timestamp and cumulative load count per (skill, file). Similar purpose to `/pi` but for skill usage.
+
+Tracking records at both full-load and deduplication paths; deliberately not reset on context compression, since skills remain available in summarized context until the session ends.
+
+---
+
+## Transparent Tool-Call Display (2026-10-03)
+
+Replaces the "friendly verb" renderer in CLI scrollback with a transparent format: real tool name, all arguments (with `path="."` resolved to absolute), and a result line — `✓ SUCCESS — <summary>` or `✗ ERROR: <message>`.
+
+Example output:
+
+```
+⚡ search_files (3 args)  0.4s
+    pattern=def get_cute_tool_message
+    path=/home/hermes/workspace/hermes
+    file_glob=*.py
+    ✓ SUCCESS — 5 matches
+```
+
+Outcome summaries are tool-specific where derivable: match counts, exit codes, line/byte totals. Secret redaction unchanged. CLI-only; other interfaces keep the friendly labels.
+
+Implementation: `get_transparent_tool_message()` in `agent/display.py`, called from `_on_tool_progress` in `hermes_cli/cli_stream_mixin.py`.
+
+Status: deployed and live-verified (2060a1fab0).
+
+---
