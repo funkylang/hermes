@@ -73,6 +73,21 @@ _FALLBACK_EXHAUSTED_COOLDOWN_S = 5.0
 # double traffic every attempt, while later turns re-arm automatically.
 _STREAM_5XX_PROBE_WINDOW_S = 60.0
 
+# Reply capture for debugging interruptions: stores the complete generated output + finish_reason
+_REPLY_CAPTURE_PATH = "/tmp/reply.txt"
+
+
+def _write_reply_capture(content: str, finish_reason: str) -> None:
+    """Write the complete reply content with finish reason to /tmp/reply.txt for debugging."""
+    try:
+        # Format: <content>\n\n[[finish_reason]]
+        capture_text = f"{content}\n\n[[{finish_reason}]]"
+        with open(_REPLY_CAPTURE_PATH, "w", encoding="utf-8") as f:
+            f.write(capture_text)
+    except Exception:
+        # Never break a turn on observability write failure
+        logger.debug("Failed to write reply capture", exc_info=True)
+
 
 def _context_thread_target(callback):
     """Bind a no-argument thread target to the caller's ContextVars."""
@@ -3416,6 +3431,9 @@ class _StreamingCall(StreamingWaitMonitor):
                 "call's arguments were still incomplete (tools=%s). The server or a proxy closed the stream "
                 "cleanly; not an output-length truncation.",
                 _dropped_names)
+            # Capture reply for debugging interruptions
+            if full_content:
+                _write_reply_capture(full_content, "interrupted")
             return _build_partial_stream_stub(
                 role, full_content, full_reasoning, model_name, usage_obj, dropped_tool_names=_dropped_names or None,
                 clean_eof=True)
@@ -3427,6 +3445,9 @@ class _StreamingCall(StreamingWaitMonitor):
             logger.warning(
                 "Clean EOF, no finish_reason: server ended the stream (no transport exception) after delivering "
                 "text with no tool calls. The server or a proxy closed the stream cleanly.")
+            # Capture reply for debugging interruptions
+            if full_content:
+                _write_reply_capture(full_content, "interrupted")
             return _build_partial_stream_stub(role, full_content, full_reasoning, model_name, usage_obj, clean_eof=True)
         effective_finish_reason = "length" if has_truncated_tool_args else (finish_reason or "stop")
         provider_stream_error = _provider_stream_error_from_text(
@@ -3449,6 +3470,9 @@ class _StreamingCall(StreamingWaitMonitor):
         # releasing its text here would show the provider failure as assistant output.
         if not is_router_timeout_shim(response):
             flush_pending()
+        # Capture reply for debugging interruptions
+        if full_content:
+            _write_reply_capture(full_content, effective_finish_reason)
         return response
 
     # ── anthropic_messages wire ─────────────────────────────────────────
