@@ -166,10 +166,12 @@ class CLITuiRuntimeMixin:
         # deferred as "worth its own review" and never re-landed (#20271).
         self._drain_interrupt_queue_to_pending_input()
 
-        # /goal continuation (queued user input still preempts), then /loop tick completion.
+        # /goal continuation (queued user input still preempts), then /loop tick completion,
+        # then input_hook (auto-reply if configured).
         for hook, what in (
             (self._maybe_continue_goal_after_turn, "goal continuation"),
             (self._maybe_complete_loop_tick_after_turn, "loop completion"),
+            (self._maybe_run_input_hook, "input hook"),
         ):
             try:
                 hook()
