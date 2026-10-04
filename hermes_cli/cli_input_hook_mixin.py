@@ -57,7 +57,7 @@ class CLIInputHookMixin:
             except Exception:
                 pass
 
-            # Get context metrics (optional, best-effort)
+            # Get context metrics (always available via fallback approach)
             context_used = None
             context_total = None
             try:
@@ -65,12 +65,19 @@ class CLIInputHookMixin:
                 if agent and hasattr(agent, "context_compressor"):
                     compressor = agent.context_compressor
                     context_total = getattr(compressor, "context_length", None)
-                    # Try to get current usage - different implementations vary
-                    # Look at usage_anchor or similar state
+                    
+                    # Try anchored tokens first (most accurate when available)
                     from agent.usage_anchor import anchored_context_tokens
                     messages = self.conversation_history
                     anchor = getattr(agent, "_usage_anchor", None)
-                    context_used = anchored_context_tokens(messages, anchor) if anchor else None
+                    if anchor:
+                        context_used = anchored_context_tokens(messages, anchor)
+                    
+                    # Fall back to last_prompt_tokens from compressor (always updated on API calls)
+                    if context_used is None:
+                        last_prompt = getattr(compressor, "last_prompt_tokens", 0) or 0
+                        context_used = max(0, int(last_prompt))
+                        
             except Exception as exc:
                 logging.debug("input_hook context metrics unavailable: %s", exc)
 
