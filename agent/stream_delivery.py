@@ -365,6 +365,15 @@ class StreamDeliveryMixin:
         """Notify the display layer that the model is generating tool call arguments (spinner for large payloads)."""
         self._call_quietly(self.tool_gen_callback, tool_name)
 
+    def _fire_tool_args_progress(self, elapsed_seconds: float) -> None:
+        """Periodically notify display layer during long argument generation.
+
+        Called from the streaming loop while tool call arguments are being streamed in.
+        Allows UI layers to show ongoing feedback (elapsed time, bytes received) instead
+        of appearing frozen.
+        """
+        self._call_quietly(self.tool_args_progress_callback, elapsed_seconds)
+
     def _has_stream_consumers(self) -> bool:
         """Return True if any streaming consumer is registered."""
         try:

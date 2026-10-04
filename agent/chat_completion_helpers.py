@@ -2848,12 +2848,44 @@ class _ToolCallAccumulator:
         # Argument deltas are collected per slot and joined once in ``materialize`` —
         # ``+=`` per chunk rebuilds the whole string every delta (quadratic on big args).
         self._argument_parts: dict[int, list[str]] = {}
+        # Track when argument generation started for progress feedback
+        self._args_gen_start: float | None = None
+        self._last_progress_update: float = 0.0
 
     def materialize(self) -> dict:
         """Join buffered argument deltas into each entry's ``arguments``; idempotent. Returns ``acc``."""
         for idx, parts in self._argument_parts.items():
             self.acc[idx]["function"]["arguments"] = "".join(parts)
         return self.acc
+
+    def start_args_generation(self) -> None:
+        """Mark when argument generation begins (first tool_call delta with name)."""
+        if self._args_gen_start is None:
+            self._args_gen_start = time.monotonic()
+            self._last_progress_update = 0.0
+
+    def should_report_progress(self, agent) -> bool:
+        """Should we fire a progress update now? True every ~0.5s during args generation."""
+        if self._args_gen_start is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_progress_update >= 0.5 and hasattr(agent, '_fire_tool_args_progress'):
+            # Only report if there's actually a callback to receive it
+            if getattr(agent, 'tool_args_progress_callback', None) is not None:
+                self._last_progress_update = now
+                return True
+        return False
+
+    def get_elapsed_args_generation(self) -> float | None:
+        """Return elapsed seconds for args generation tracking, or None if not started."""
+        if self._args_gen_start is None:
+            return None
+        return time.monotonic() - self._args_gen_start
+
+    def reset_progress(self) -> None:
+        """Clear progress tracking when tool generation completes or fails."""
+        self._args_gen_start = None
+        self._last_progress_update = 0.0
 
     def feed(self, tc_delta) -> Optional[str]:
         """Merge one delta; return the tool name the first time it is complete."""
@@ -3234,7 +3266,8 @@ class _StreamingCall(StreamingWaitMonitor):
             pending_parts = list(pending_text_parts)
             pending_text_parts.clear()
             for text in pending_parts:
-                (self._route_suppressed_text if tool_calls_acc else self._emit_text)(text)
+                # Show all streaming content including tool-call preambles (for debugging runaway generation)
+                self._emit_text(text)
 
         from agent import relay_llm
         stream = self._set_managed_stream(relay_llm.stream(self.api_kwargs, _open_stream,
@@ -3335,9 +3368,9 @@ class _StreamingCall(StreamingWaitMonitor):
             delta_content = flatten_message_text(getattr(delta, "content", None), sep="")
             if delta_content:
                 content_parts.append(delta_content)
-                if tool_calls_acc:
-                    self._route_suppressed_text(delta_content)
-                elif (pending_text_parts or _provider_stream_text_may_be_sse(delta_content)
+                # Show all streaming content including tool-call preambles (for debugging runaway generation)
+                # But still respect SSE buffering logic
+                if (pending_text_parts or _provider_stream_text_may_be_sse(delta_content)
                         # A shim cannot follow text already released to the display, so the
                         # whole-content re-join runs only until the first emitted delta.
                         or (not self.deltas_were_sent["yes"] and router_timeout_shim_may_follow("".join(content_parts)))):
@@ -3356,11 +3389,20 @@ class _StreamingCall(StreamingWaitMonitor):
                     name = tool_calls.feed(tc_delta)
                     if name is not None:
                         self._emit_tool_started(name)
+                        # Start progress tracking when first tool_call with name arrives.
+                        tool_calls.start_args_generation()
                         # Lets the stub-builder warn if streaming dies before the args
                         # complete instead of silently discarding the action.
                         self.result["partial_tool_names"].append(name)
 
+                # Periodically report progress while arguments are streaming in.
+                if tool_calls.should_report_progress(self.agent):
+                    elapsed = tool_calls.get_elapsed_args_generation() or 0.0
+                    self.agent._fire_tool_args_progress(elapsed)
+
         tool_calls.materialize()
+        # Reset progress tracking when args generation completes.
+        tool_calls.reset_progress()
         self._close_managed_stream()
         if self._stream_attempt_was_cancelled(stream_attempt_id):
             raise _httpx.RemoteProtocolError(f"stream attempt {stream_attempt_id} was superseded")

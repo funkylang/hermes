@@ -693,10 +693,11 @@ class CLIAgentSetupMixin:
                 checkpoint_max_file_size_mb=self.checkpoint_max_file_size_mb,
                 pass_session_id=self.pass_session_id, skip_context_files=self.ignore_rules,
                 skip_memory=self.ignore_rules, tool_progress_callback=self._on_tool_progress,
-                tool_start_callback=self._on_tool_start if self._inline_diffs_enabled else None,
-                tool_complete_callback=self._on_tool_complete if self._inline_diffs_enabled else None,
-                stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
-                tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
+ tool_start_callback=self._on_tool_start if self._inline_diffs_enabled else None,
+ tool_complete_callback=self._on_tool_complete if self._inline_diffs_enabled else None,
+ stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
+ tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
+ tool_args_progress_callback=self._on_tool_args_progress if self.streaming_enabled else None,
                 notice_callback=self._on_notice, notice_clear_callback=self._on_notice_clear,
                 reaction_callback=self._on_reaction)
             # Reference for atexit memory-provider shutdown: ``_run_cleanup`` in cli.py
