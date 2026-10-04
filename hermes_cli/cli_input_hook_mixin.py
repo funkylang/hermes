@@ -97,7 +97,7 @@ class CLIInputHookMixin:
             if auto_reply:
                 from cli import _DIM, _RST, _cprint
                 preview = auto_reply[:60] + ("..." if len(auto_reply) > 60 else "")
-                _cprint(f"  {_DIM}⚡ [input_hook] Auto-reply: {preview}{_RST}")
+                _cprint(f"  {_DIM}⚡ Input hook auto-reply: {preview}{_RST}")
                 self._pending_input.put(auto_reply)
 
         except Exception as exc:

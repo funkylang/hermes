@@ -140,9 +140,12 @@ def run_input_hook(
             check=False,  # We handle the exit code ourselves
         )
 
-        # Display stderr (diagnostics) if present
+        # Display stderr (diagnostics) if present — label first, then content on fresh lines
         if proc.stderr.strip():
-            print(f"  [input_hook] {proc.stderr.strip()}", file=sys.stderr)
+            print("⚠️  Input hook warning/error:", file=sys.stderr)
+            # Print the stderr content with a leading space for visual alignment
+            for line in proc.stderr.rstrip("\n").splitlines():
+                print(f"  {line}", file=sys.stderr)
 
         # Apply decision logic
         if proc.returncode == 0 and proc.stdout.strip():
