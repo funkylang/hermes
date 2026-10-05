@@ -668,7 +668,11 @@ class CLIChatTurnMixin:
                     display_reasoning += f"\n{_DIM}  {t('cli.chat.reasoning_more_lines', count=len(lines) - 10)}{_RST}"
                 else:
                     display_reasoning = reasoning.strip()
-                _cprint(f"\n{r_top}\n{_DIM}{display_reasoning}{_RST}\n{r_bot}")
+                from hermes_cli.cli_stream_mixin import _wrap_box_line
+                w = self._scrollback_box_width() - 2
+                wrapped = "\n".join(
+                    ln for line in display_reasoning.split("\n") for ln in _wrap_box_line(line, w))
+                _cprint(f"\n{r_top}\n{_DIM}{wrapped}{_RST}\n{r_bot}")
 
     def _chat_print_response_panel(self, turn, response):
         """Response box (close TTS-drawn box / post-stream transform / Rich Panel), then billing CTA."""

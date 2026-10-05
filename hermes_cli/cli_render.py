@@ -521,6 +521,34 @@ def _record_output_history(text: str, *, force: bool = False) -> None:
         _cli()._OUTPUT_HISTORY.extend(lines)
 
 
+# Accumulator for inline fragments (``_cprint_inline``): they continue the current visual line,
+# so they must be recorded as ONE output-history entry when the line is finally terminated.
+_INLINE_HISTORY_PENDING: list[str] = []
+
+
+def _record_output_history_inline(text: str, *, force: bool = False) -> None:
+    """Buffer an inline fragment for output-history recording; ``flush_inline_output_history``
+    commits the accumulated fragments as a single painted line when it terminates."""
+    from cli import _output_history_recording
+    if force or _output_history_recording():
+        _INLINE_HISTORY_PENDING.append(str(text).replace("\r", ""))
+
+
+def flush_inline_output_history() -> None:
+    """Commit buffered inline fragments to the output history as one painted line.
+
+    Called where a streamed line is known to be complete (reasoning-box footer, stream
+    flush) so resize-recovery replays show the full line instead of losing it."""
+    from cli import _output_history_recording
+    if not _INLINE_HISTORY_PENDING:
+        return
+    if _output_history_recording():
+        entry = _PaintedLine("".join(_INLINE_HISTORY_PENDING))
+        entry.width = _painted_columns()
+        _cli()._OUTPUT_HISTORY.append(entry)
+    del _INLINE_HISTORY_PENDING[:]
+
+
 _ANSI_SEQUENCE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 
 
@@ -739,7 +767,23 @@ def _cprint(text: str):
     From a background thread while an Application runs, a direct print races the input
     redraw and gets buried, so those are painted on the app's loop via ``call_soon_threadsafe``.
     """
+    _cprint_impl(text, add_newline=True)
+
+
+def _cprint_inline(text: str):
+    """Print ANSI text without a trailing newline, continuing the current line (live streaming).
+
+    Use for word fragments that flow on one physical line; the caller manages line breaks.
+    The next regular ``_cprint`` (or explicit newline) will terminate this line.
+    """
+    _cprint_impl(text, add_newline=False)
+
+
+def _cprint_impl(text: str, *, add_newline: bool = True):
+    """Shared implementation for both ``_cprint`` and ``_cprint_inline``."""
     from cli import _PT_ANSI, _output_history_recording, _pt_print, _pt_print_ansi, _record_output_history
+    
+    end_char = "\n" if add_newline else ""
     recording = _output_history_recording()
     seq = next(_PAINT_SEQ)
 
@@ -748,11 +792,17 @@ def _cprint(text: str):
         # neither print rows still queued for the loop nor size them at a stale width.
         def _paint():
             if recording:
-                _record_output_history(text, force=True)
+                # For inline fragments without newline, don't record as a complete line yet
+                if add_newline:
+                    _record_output_history(text, force=True)
+                else:
+                    # Record but don't treat as terminated line (caller manages line state)
+                    _record_output_history_inline(text)
             paint()
         return _paint
-    paint_pt = _painted(lambda: _pt_print(_PT_ANSI(text)))
-    paint_fallback = _painted(lambda: _pt_print_ansi(text))
+    
+    paint_pt = _painted(lambda: _pt_print(_PT_ANSI(text), end=end_char))
+    paint_fallback = _painted(lambda: _pt_print_ansi(text + (end_char if add_newline else "")))
 
     try:
         from prompt_toolkit.application import get_app_or_none, run_in_terminal
@@ -793,7 +843,10 @@ def _cprint(text: str):
         from prompt_toolkit.formatted_text import to_formatted_text
         from prompt_toolkit.renderer import print_formatted_text as _paint_formatted_text
         from prompt_toolkit.styles import Style
-        _paint_formatted_text(app.output, to_formatted_text(_PT_ANSI(text)) + [("", "\n")], Style([]))
+        # Add newline only when add_newline is True
+        suffix = [("", "\n")] if add_newline else []
+        _paint_formatted_text(app.output, to_formatted_text(_PT_ANSI(text)) + suffix, Style([]))
+    
     paint_now = _painted(_print_now)
 
     def _schedule():
@@ -823,7 +876,14 @@ def _cprint(text: str):
             renderer.erase()
             paint_now()
             renderer.reset()
-            printed = sum(_line_rows(line, columns) for line in text.split("\n"))
+            # Calculate how many visual lines this print adds to scrollback
+            # Inline fragments don't create new rows themselves (they continue existing line)
+            if add_newline:
+                printed = sum(_line_rows(line, columns) for line in text.split("\n"))
+            else:
+                # Only count as 1 additional row if this fragment would wrap past current width
+                # In practice, our inline fragments are short enough to never cause wrapping
+                printed = 0
             if app.output.get_size().columns != columns:
                 _add_suspect_rows(printed)
             if floor is not None:

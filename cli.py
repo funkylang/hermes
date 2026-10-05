@@ -104,6 +104,7 @@ from hermes_cli.cli_render import (  # noqa: F401,E402
     _cli_visible_print,
     _coerce_output_history_limit,
     _cprint,
+    _cprint_inline,
     _d,
     _detect_light_mode_uncached,
     _heal_cooked_mode_drift,
@@ -139,6 +140,7 @@ from hermes_cli.cli_render import (  # noqa: F401,E402
     _tty_wrap,
     _wrap_panel_text,
     _wrap_panel_text_keep_ws,
+    flush_inline_output_history,
 )
 from hermes_cli.cli_config_load import (  # noqa: F401,E402
     _AUXILIARY_TASK_ENV,
