@@ -425,6 +425,7 @@ class CLIStreamMixin:
         # Close a still-open reasoning box on the first content token so the answer streams
         # token-by-token; _close_reasoning_box renders the reasoning tail first, so ordering holds.
         self._close_reasoning_box()
+        self._close_tool_args_box()  # arguments fully generated: close any live args box
 
         # Open the response box header on the very first visible text
         if not self._stream_box_opened:
@@ -502,6 +503,7 @@ class CLIStreamMixin:
             self._emit_stream_text(self._stream_prefilt)
             self._stream_prefilt = ""
         self._close_reasoning_box()  # in case no content tokens arrived
+        self._close_tool_args_box()  # end-of-stream: close any live args box
         # A trailing partial table row joins the table buffer so the whole block is re-aligned
         # together (else the final row prints under-padded).
         if (
@@ -534,6 +536,9 @@ class CLIStreamMixin:
         self._reasoning_box_opened = False
         self._reasoning_buf = ""
         self._reasoning_preview_buf = ""
+        self._tool_args_box_opened = False
+        self._tool_args_buf = ""
+        self._tool_args_box_tool = None
         # A batch cancelled/errored before any tool.started would otherwise mute the next turn's line.
         self.__dict__.pop("_tool_gen_announced", None)
         self._stream_table_buf = []
@@ -652,6 +657,7 @@ class CLIStreamMixin:
             self._flush_stream()
             self._stream_box_opened = False
         self._close_reasoning_box()
+        self._close_tool_args_box()
         announced = self.__dict__.setdefault("_tool_gen_announced", set())
         if tool_name in announced:
             return
@@ -672,6 +678,59 @@ class CLIStreamMixin:
             self._invalidate()
         except Exception:
             pass
+
+    def _on_tool_args_stream(self, tool_name: str, text_chunk: str) -> None:
+        """Stream raw tool-call argument fragments into a dim box (reasoning-box style).
+
+        The JSON being generated is shown as it arrives — meaningful for big payloads
+        (write_file content, long queries), honest noise otherwise. Box opens on the first
+        chunk, re-labels if a different call streams next, closes when the tool actually
+        starts or content/stream boundaries hit."""
+        from cli import _DIM, _RST, _cprint, datetime
+        if not text_chunk:
+            return
+        # A new call (or generation cycle) takes over: close the previous box first.
+        current = getattr(self, "_tool_args_box_tool", None)
+        if getattr(self, "_tool_args_box_opened", False) and tool_name and tool_name != current:
+            self._close_tool_args_box()
+        if not getattr(self, "_tool_args_box_opened", False):
+            self._tool_args_box_opened = True
+            self._tool_args_buf = ""
+            self._tool_args_box_tool = tool_name or None
+            label = f" Tool args{': ' + tool_name if tool_name else ''}"
+            if self.show_timestamps:
+                label += f" {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
+            else:
+                label += " "
+            w = self._scrollback_box_width()
+            _cprint(f"\n{_DIM}┌─{label}{'─' * max(w - 3 - len(label), 0)}┐{_RST}")
+        # Update the label once the provider delivers the name after an empty first chunk.
+        if tool_name and self._tool_args_box_tool != tool_name:
+            self._tool_args_box_tool = tool_name
+
+        self._tool_args_buf = getattr(self, "_tool_args_buf", "") + text_chunk
+        # JSON rarely contains real newlines; emit on newline and force-flush long partials
+        # (same policy as the reasoning box) so generation is visible in real time.
+        while "\n" in self._tool_args_buf:
+            line, self._tool_args_buf = self._tool_args_buf.split("\n", 1)
+            _cprint(f"{_DIM}{line}{_RST}")
+        if len(self._tool_args_buf) > 80:
+            _cprint(f"{_DIM}{self._tool_args_buf}{_RST}")
+            self._tool_args_buf = ""
+
+    def _close_tool_args_box(self) -> None:
+        """Close the live tool-args box if open (renders the buffered argument tail)."""
+        from cli import _DIM, _RST, _cprint
+        if not getattr(self, "_tool_args_box_opened", False):
+            return
+        buf = getattr(self, "_tool_args_buf", "")
+        if buf:
+            _cprint(f"{_DIM}{buf}{_RST}")
+            self._tool_args_buf = ""
+        w = self._scrollback_box_width()
+        _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
+        self._tool_args_box_opened = False
+        self._tool_args_box_tool = None
 
     def _on_tool_progress(self, event_type: str, function_name: str = None, preview: str = None, function_args: dict = None, **kwargs):
         """Tool lifecycle events (tool.started / tool.completed / reasoning.* / moa.*).
@@ -711,6 +770,7 @@ class CLIStreamMixin:
         if event_type == "tool.started":
             self._pet_reasoning = False
             self.__dict__.pop("_tool_gen_announced", None)
+            self._close_tool_args_box()  # args done streaming: tool is running now
         elif event_type == "tool.completed" and kwargs.get("is_error"):
             self._pet_turn_error = True
         elif event_type and event_type.startswith("reasoning"):

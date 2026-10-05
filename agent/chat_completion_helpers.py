@@ -2887,8 +2887,21 @@ class _ToolCallAccumulator:
         self._args_gen_start = None
         self._last_progress_update = 0.0
 
-    def feed(self, tc_delta) -> Optional[str]:
-        """Merge one delta; return the tool name the first time it is complete."""
+    def name_for_delta(self, tc_delta) -> str:
+        """Return the tool name currently streaming for this delta (may be "" pre-name)."""
+        raw_idx = getattr(tc_delta, "index", None)
+        if raw_idx is None:
+            raw_idx = 0
+        idx = self._active_slot_by_idx.get(raw_idx)
+        if idx is None or idx not in self.acc:
+            return ""
+        return self.acc[idx]["function"]["name"]
+
+    def feed(self, tc_delta):
+        """Merge one delta; return (announced_name_or_None, args_chunk_or_None).
+
+        announced_name: the tool name the first time it is complete.
+        args_chunk: the raw argument fragment in this delta (for display streaming)."""
         raw_idx = getattr(tc_delta, "index", None)
         if raw_idx is None:
             raw_idx = 0
@@ -2908,6 +2921,7 @@ class _ToolCallAccumulator:
             idx, {"id": tc_id or "", "type": "function", "function": {"name": "", "arguments": ""}, "extra_content": None},
         )
         parts = self._argument_parts.setdefault(idx, [])
+        args_chunk = None
         if tc_id:
             entry["id"] = tc_id
         tc_function = getattr(tc_delta, "function", None)
@@ -2918,6 +2932,7 @@ class _ToolCallAccumulator:
                 entry["function"]["name"] = tc_function.name
             if getattr(tc_function, "arguments", None):
                 parts.append(tc_function.arguments)
+                args_chunk = tc_function.arguments
         extra = getattr(tc_delta, "extra_content", None)
         if extra is None and hasattr(tc_delta, "model_extra"):
             extra = (tc_delta.model_extra if isinstance(tc_delta.model_extra, dict) else {}).get("extra_content")
@@ -2926,8 +2941,8 @@ class _ToolCallAccumulator:
         name = entry["function"]["name"]
         if name and idx not in self._notified:
             self._notified.add(idx)
-            return name
-        return None
+            return (name, args_chunk)
+        return (None, args_chunk)
 
 
 class _StreamingCall(StreamingWaitMonitor):
@@ -3386,7 +3401,7 @@ class _StreamingCall(StreamingWaitMonitor):
             if delta_tool_calls:
                 _flush_pending_stream_text()
                 for tc_delta in delta_tool_calls:
-                    name = tool_calls.feed(tc_delta)
+                    name, args_chunk = tool_calls.feed(tc_delta)
                     if name is not None:
                         self._emit_tool_started(name)
                         # Start progress tracking when first tool_call with name arrives.
@@ -3394,6 +3409,10 @@ class _StreamingCall(StreamingWaitMonitor):
                         # Lets the stub-builder warn if streaming dies before the args
                         # complete instead of silently discarding the action.
                         self.result["partial_tool_names"].append(name)
+                    # Stream raw argument fragments to the display layer as they arrive.
+                    if args_chunk and getattr(self.agent, "tool_args_stream_callback", None) is not None:
+                        self.agent._fire_tool_args_stream(
+                            tool_calls.name_for_delta(tc_delta), args_chunk)
 
                 # Periodically report progress while arguments are streaming in.
                 if tool_calls.should_report_progress(self.agent):

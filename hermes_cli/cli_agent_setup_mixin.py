@@ -698,6 +698,7 @@ class CLIAgentSetupMixin:
  stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
  tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
  tool_args_progress_callback=self._on_tool_args_progress if self.streaming_enabled else None,
+ tool_args_stream_callback=self._on_tool_args_stream if self.streaming_enabled else None,
                 notice_callback=self._on_notice, notice_clear_callback=self._on_notice_clear,
                 reaction_callback=self._on_reaction)
             # Reference for atexit memory-provider shutdown: ``_run_cleanup`` in cli.py

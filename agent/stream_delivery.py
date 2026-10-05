@@ -374,6 +374,14 @@ class StreamDeliveryMixin:
         """
         self._call_quietly(self.tool_args_progress_callback, elapsed_seconds)
 
+    def _fire_tool_args_stream(self, tool_name: str, text_chunk: str) -> None:
+        """Notify display layer of each raw argument fragment as it streams in.
+
+        Lets UI layers render the arguments being generated (live JSON stream), not just
+        a frozen 'generating…' spinner. Called from the streaming loop per argument chunk;
+        ``tool_name`` is best-effort (empty string until the provider sends the name)."""
+        self._call_quietly(self.tool_args_stream_callback, tool_name, text_chunk)
+
     def _has_stream_consumers(self) -> bool:
         """Return True if any streaming consumer is registered."""
         try:
