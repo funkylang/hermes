@@ -286,7 +286,7 @@ class CLIStreamMixin:
         response box is open further reasoning is suppressed — a late thinking block (e.g. after
         an interrupt) would otherwise draw a reasoning box inside the response box.
         """
-        from cli import _DIM, _RST, _cprint, _cprint_inline, datetime
+        from cli import _DIM, _RST, _cprint, datetime
         from wcwidth import wcswidth
 
         def print_one_line(text):

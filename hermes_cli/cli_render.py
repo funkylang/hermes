@@ -770,14 +770,6 @@ def _cprint(text: str):
     _cprint_impl(text, add_newline=True)
 
 
-def _cprint_inline(text: str):
-    """Print ANSI text without a trailing newline, continuing the current line (live streaming).
-
-    Use for word fragments that flow on one physical line; the caller manages line breaks.
-    The next regular ``_cprint`` (or explicit newline) will terminate this line.
-    """
-    _cprint_impl(text, add_newline=False)
-
 
 def _cprint_impl(text: str, *, add_newline: bool = True):
     """Shared implementation for both ``_cprint`` and ``_cprint_inline``."""
