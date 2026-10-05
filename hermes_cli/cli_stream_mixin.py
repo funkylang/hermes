@@ -50,6 +50,46 @@ def _terminal_columns(default: int = 80) -> int:
         return default
 
 
+def _wrap_box_line(line: str, width: int) -> list[str]:
+    """Word-wrap a box content line to the interior width (no-op when it fits).
+
+    Fits-in-width lines pass through untouched so code indentation and exact spacing are
+    preserved. Over-width lines wrap at word boundaries; the first physical line keeps the
+    original leading indent. Tokens longer than a full physical line are hard-split."""
+    if not line or len(line) <= width:
+        return [line]
+    m = re.match(r"[ \t]+", line)
+    indent = m.group(0) if m else ""
+    out, cur = [], ""
+
+    def emit(word_part: str) -> None:
+        """Place word_part on the current physical line or open a new one."""
+        nonlocal cur
+        # Hard-split pieces that exceed even an empty physical line.
+        while len(word_part) > width - (len(indent) if not out and not cur else 0):
+            room = width - len(cur) - (1 if cur else 0)
+            if room < 4:
+                out.append(cur)
+                cur = ""
+                room = width - (len(indent) if not out else 0)
+            out.append((cur + " " if cur else "") + word_part[:room])
+            cur = ""                          # that content is committed to `out` now
+            word_part = word_part[room:]
+        if not cur:
+            cur = (indent + word_part) if (not out and indent) else word_part
+        elif len(cur) + 1 + len(word_part) <= width:
+            cur += " " + word_part
+        else:
+            out.append(cur)
+            cur = word_part
+
+    for word in line.strip().split():
+        emit(word)
+    if cur:
+        out.append(cur)
+    return [ln.rstrip() for ln in out]
+
+
 class CLIStreamMixin:
     """Streaming output, reasoning preview, tool progress callbacks, and busy-command spinner for the interactive CLI"""
 
@@ -246,28 +286,254 @@ class CLIStreamMixin:
         response box is open further reasoning is suppressed — a late thinking block (e.g. after
         an interrupt) would otherwise draw a reasoning box inside the response box.
         """
-        from cli import _DIM, _RST, _cprint, datetime
+        from cli import _DIM, _RST, _cprint, _cprint_inline, datetime
+        from wcwidth import wcswidth
+
+        def print_one_line(text):
+            """Print text that fits in box_width, return the remainder."""
+
+            within_text = False
+            width = 0
+            last_space_position = 0
+
+            for i, ch in enumerate(text):
+                if ch == ' ':
+                    width += 1
+                    if within_text:
+                        last_space_position = i
+                elif ch == '\t':
+                    width += 8
+                else:
+                    within_text = True
+                    width += wcswidth(ch)
+
+                # Check after adding char - does it exceed box_width?
+                if width > box_width:
+                    if last_space_position:
+                        # Soft break
+                        part = text[:last_space_position] # text before the space
+                        _cprint(f"{_DIM}{part}{_RST}")
+                        return text[last_space_position+1:] # text behind the space
+                    else:
+                        # Hard break
+                        part = _cprint(text[:i])
+                        _cprint(f"{_DIM}{part}{_RST}")
+                        return text[i:]
+
+            # Text fits - print all of it
+            _cprint(f"{_DIM}{text}{_RST}")
+            return ""
+
         if not text:
             return
         self._reasoning_shown_this_turn = True
         if getattr(self, "_stream_box_opened", False):
             return
+        box_width = self._scrollback_box_width()
         if not getattr(self, "_reasoning_box_opened", False):
             self._reasoning_box_opened = True
-            w = self._scrollback_box_width()
             r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
-            r_fill = w - 2 - len(r_label)
+            r_fill = box_width - 2 - len(r_label)
             _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
 
-        self._reasoning_buf = getattr(self, "_reasoning_buf", "") + text
-        # Emit complete lines; force-flush long partial lines so reasoning is visible in
-        # real-time even without newlines.
-        while "\n" in self._reasoning_buf:
-            line, self._reasoning_buf = self._reasoning_buf.split("\n", 1)
-            _cprint(f"{_DIM}{line}{_RST}")
-        if len(self._reasoning_buf) > 80:
-            _cprint(f"{_DIM}{self._reasoning_buf}{_RST}")
-            self._reasoning_buf = ""
+        # Initialize _line_buf if it doesn't exist yet
+        if not hasattr(self, "_line_buf"):
+            self._line_buf = ""
+
+        # Extract a line from the buffer for processing.
+        self._line_buf += text
+        if "\n" in self._line_buf:
+            # complete line (newline arrived)
+            line, self._line_buf = self._line_buf.split("\n", 1)
+            while line:
+                line = print_one_line(line)
+        else:
+            line = self._line_buf
+            width = wcwidth(line)
+            if width > box_width:
+                # print all but the last partial line
+                while width > box_width:
+                    line = print_one_line(line)
+                    width = wcswidth(line)
+                self._line_buf = line
+
+    def _flush_reasoning_buffer(self, width: int) -> None:
+        """Print everything in the reasoning buffer that is placeable now (live streaming).
+
+        Scans left-to-right for terminators. A unit = leading whitespace + word + its terminator
+        (space or newline); it prints as soon as its terminator lands — but only if that terminator
+        follows at least one printable character (a lone leading space is never a wrapping point).
+        A unit prints on the current line when its content fits in the remaining width, otherwise
+        after a wrap with leading whitespace dropped. Superlong tokens (no terminator, display
+        width > interior width) stream live from a fresh line. Position tracked in display width
+        (wcwidth: wide chars = 2 cols). State: _reasoning_buf / _reasoning_pos.
+
+        Uses ``_cprint_inline`` for word fragments so they flow on one physical line; the line is
+        terminated by an explicit newline ``_cprint`` at wraps and stream end.
+
+        Args:
+            width: Interior width in display columns
+        """
+        from cli import _DIM, _RST, _cprint_inline
+        from wcwidth import wcswidth
+
+        buf = self._reasoning_buf
+        pos = getattr(self, "_reasoning_pos", 0)
+
+        while True:
+            # Find the first real wrapping point: a space (or newline) that terminates at least
+            # one printable character — leading whitespace is never a wrapping point on its own.
+            sp = nl = -1
+            for i, ch in enumerate(buf):
+                if ch == "\n":
+                    nl = i
+                    break  # a newline finalizes the line; stop scanning
+                if ch == " " and buf[:i].strip():
+                    sp = i
+                    break
+
+            if sp == -1 and nl == -1:
+                # No wrapping point yet — only an in-progress word. It streams live once it is
+                # longer than the whole interior width (URLs, hashes, identifiers).
+                if self._emit_reasoning_superlong(width):
+                    continue  # buffer/pos updated; re-check with fresh remainder
+                break  # hold until more pieces arrive
+
+            if nl != -1 and (sp == -1 or nl < sp):
+                # Newline terminator: the segment is a complete hard line.
+                segment, remainder = buf[:nl], buf[nl + 1:]
+                emitted = self._emit_reasoning_words(segment, pos, width)
+                if emitted < len(segment):
+                    # A superlong word in a finalized line that still does not fill one fresh
+                    # line — hold the rest together with the newline (buffer/pos already saved).
+                    self._reasoning_buf = segment[emitted:] + "\n" + remainder
+                    return
+                pos = 0  # after the newline, back at column 0
+                # Emit the hard newline to terminate this physical line
+                from cli import _DIM, _RST, _cprint
+                _cprint(f"{_DIM}{_RST}")
+                self._reasoning_buf = remainder
+                continue
+
+            # Space terminator: unit = buf[:sp] (leading whitespace + completed word).
+            unit, remainder = buf[:sp], buf[sp + 1:]
+            content = unit.lstrip()
+            fits = pos + wcswidth(content, -1) <= width
+            if fits:
+                # Space and word travel together on the current line.
+                text_to_print = unit
+            else:
+                # Wrap first; leading whitespace is dropped, the word starts at column 0.
+                from cli import _DIM, _RST, _cprint
+                _cprint(f"{_DIM}{_RST}")  # newline to terminate previous line
+                pos = 0
+                text_to_print = content
+
+            _cprint_inline(f"{_DIM}{text_to_print}{_RST}")
+            pos = wcswidth(text_to_print, -1)
+            self._reasoning_buf = remainder
+            # Loop: the remainder may already hold further complete units (multi-word pieces).
+
+        self._reasoning_pos = pos
+
+    def _emit_reasoning_words(self, text: str, pos: int, width: int) -> int:
+        """Place words of a FINALIZED segment (hard line or flush tail) on the box lines.
+
+        Unlike _flush_reasoning_buffer's live path, every word here is complete — even a
+        trailing one without its space — so each word may wrap individually. Words print with
+        ``_cprint_inline`` (flowing onto the partial current line); wraps are explicit
+        newlines. Leading whitespace of a segment travels with its word and drops on wrap.
+        Returns characters consumed from text.
+        """
+        from cli import _DIM, _RST, _cprint, _cprint_inline
+        from wcwidth import wcswidth
+
+        # Split into [content, spaces, content, spaces, ...]; leading spaces attach to the
+        # following word and are dropped if it wraps.
+        tokens = re.split(r"( +)", text)
+        consumed = 0
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if not token:
+                i += 1
+                continue
+            if token.startswith(" "):
+                # Pending separator for the next word.
+                spaces, word = token, tokens[i + 1] if i + 1 < len(tokens) else ""
+                word_width = wcswidth(word, -1) if word else 0
+                if word and pos > 0 and pos + word_width > width:
+                    # Wrap: the separator drops with it.
+                    _cprint(f"{_DIM}{_RST}")
+                    pos = 0
+                    emit_text = word
+                elif word:
+                    emit_text = spaces + word
+                else:
+                    emit_text = ""
+                if emit_text:
+                    _cprint_inline(f"{_DIM}{emit_text}{_RST}")
+                    pos = wcswidth(emit_text, -1)
+                consumed += len(spaces) + len(word)
+                i += 2
+                continue
+            # Bare word with no leading space (segment start).
+            word_width = wcswidth(token, -1)
+            if pos > 0 and pos + word_width > width:
+                _cprint(f"{_DIM}{_RST}")  # wrap before this word
+                pos = 0
+            _cprint_inline(f"{_DIM}{token}{_RST}")
+            pos = wcswidth(token, -1)
+            consumed += len(token)
+            i += 1
+        self._reasoning_pos = pos
+        return consumed
+
+    def _emit_reasoning_superlong(self, width: int) -> bool:
+        """Stream an in-flight token that already exceeds the interior width (no terminators yet).
+
+        It will never fit as a word, so print it live: on a fresh line when not already at column
+        0, filling full lines and leaving the tail in the buffer for follow-up pieces.
+        """
+        from cli import _DIM, _RST, _cprint, _cprint_inline
+        from wcwidth import wcswidth
+
+        buf = self._reasoning_buf
+        pos = getattr(self, "_reasoning_pos", 0)
+        if not buf or " " in buf or "\n" in buf:
+            return False
+        if wcswidth(buf, -1) <= width:
+            return False  # could still be a normal word — keep holding for its terminator
+
+        if pos > 0 and pos < width:
+            _cprint(f"{_DIM}{_RST}")  # fresh line before the token (line is neither empty nor full)
+            pos = 0
+
+        emitted = False
+        while True:
+            # Take as much of the token as fits into the remaining display columns.
+            cut, cw = 0, 0
+            for i, ch in enumerate(buf):
+                chw = wcswidth(ch, -1) or 0
+                if pos + cw + chw > width:
+                    break
+                cw += chw
+                cut = i + 1
+            if cut == 0:
+                break  # nothing fits at this position (should not normally happen)
+            _cprint_inline(f"{_DIM}{buf[:cut]}{_RST}")
+            emitted = True
+            pos += cw
+            buf = buf[cut:]
+            if not buf or pos >= width:
+                break  # token done, or line full — the rest continues on later pieces
+            # Line still has room but no more fits (wide-char edge): wrap to a fresh line.
+            _cprint(f"{_DIM}{_RST}")
+            pos = 0
+
+        self._reasoning_buf = buf
+        self._reasoning_pos = pos
+        return emitted
 
     def _agent_status_print(self, *args, **kwargs) -> None:
         """``agent._print_fn`` for the interactive CLI: agent status lines (subagent completion ``✓ [set n · i/N]``,
@@ -290,15 +556,24 @@ class CLIStreamMixin:
 
     def _close_reasoning_box(self) -> None:
         """Close the live reasoning box if it's open (renders the buffered reasoning tail)."""
-        from cli import _DIM, _RST, _cprint
+        from cli import _DIM, _RST, _cprint, flush_inline_output_history
         if not getattr(self, "_reasoning_box_opened", False):
             return
+        width = self._scrollback_box_width()
+        pos = getattr(self, "_reasoning_pos", 0)
         buf = getattr(self, "_reasoning_buf", "")
+        # A hard newline terminates the line the footer will draw beneath; when the cursor sits
+        # mid-line (inline fragments in flight), _cprint's own LF ends exactly that partial line.
         if buf:
-            _cprint(f"{_DIM}{buf}{_RST}")
+            self._emit_reasoning_words(buf, pos, width)  # tail: every word is complete now
+            pos = getattr(self, "_reasoning_pos", 0)
             self._reasoning_buf = ""
         w = self._scrollback_box_width()
+        # A mid-line cursor would glue the footer to the partial inline content; terminate first.
+        if 0 < pos < width:
+            _cprint(f"{_DIM}{_RST}")
         _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
+        flush_inline_output_history()  # commit inline fragments as finished lines for replay
         self._reasoning_box_opened = False
         if not getattr(self, "_stream_box_live", False):
             self._release_held_status_lines()
@@ -391,12 +666,21 @@ class CLIStreamMixin:
                 self._stream_prefilt = self._stream_prefilt[-_MAX_CLOSE_TAG_LEN:]
             return
 
-    def _emit_stream_line(self, printed_line: str) -> None:
-        """Print one response line with the skin's true-color text escape (if any)."""
+    def _emit_stream_line(self, printed_line: str, wrap: bool = True) -> None:
+        """Print one response line with the skin's true-color text escape (if any).
+
+        ``wrap=True`` word-wraps over-wide lines to the box interior so they never run
+        past the right border. Table rows pass wrap=False: they are re-aligned as a block
+        by _flush_stream_table_buf and must keep their column geometry."""
         from cli import _RST, _STREAM_PAD, _cprint
         _tc = getattr(self, "_stream_text_ansi", "")
-        _cprint(
-            f"{_STREAM_PAD}{_tc}{printed_line}{_RST}" if _tc else f"{_STREAM_PAD}{printed_line}")
+        if not wrap:
+            lines = [printed_line]
+        else:
+            lines = _wrap_box_line(printed_line, self._scrollback_box_width())
+        for ln in lines:
+            _cprint(
+                f"{_STREAM_PAD}{_tc}{ln}{_RST}" if _tc else f"{_STREAM_PAD}{ln}")
 
     def _flush_stream_table_buf(self) -> None:
         """Emit the held table block re-aligned as a whole. Cell-level markdown is stripped FIRST
@@ -413,7 +697,7 @@ class CLIStreamMixin:
             joined = _strip_markdown_syntax(joined)
         block = realign_markdown_tables(joined, _terminal_width_for_streaming())
         for ln in block.split("\n"):
-            self._emit_stream_line(ln)
+            self._emit_stream_line(ln, wrap=False)
 
     def _emit_stream_text(self, text: str) -> None:
         """Emit filtered text to the streaming display."""
@@ -535,6 +819,7 @@ class CLIStreamMixin:
         self._stream_last_was_newline = True
         self._reasoning_box_opened = False
         self._reasoning_buf = ""
+        self._reasoning_pos = 0
         self._reasoning_preview_buf = ""
         self._tool_args_box_opened = False
         self._tool_args_buf = ""
@@ -709,13 +994,17 @@ class CLIStreamMixin:
             self._tool_args_box_tool = tool_name
 
         self._tool_args_buf = getattr(self, "_tool_args_buf", "") + text_chunk
-        # JSON rarely contains real newlines; emit on newline and force-flush long partials
-        # (same policy as the reasoning box) so generation is visible in real time.
+        # JSON rarely contains real newlines; emit on newline and force-flush partials once
+        # they exceed one interior line (same policy as the reasoning box) so generation is
+        # visible in real time.
+        w = self._scrollback_box_width()
         while "\n" in self._tool_args_buf:
             line, self._tool_args_buf = self._tool_args_buf.split("\n", 1)
-            _cprint(f"{_DIM}{line}{_RST}")
-        if len(self._tool_args_buf) > 80:
-            _cprint(f"{_DIM}{self._tool_args_buf}{_RST}")
+            for wrapped in _wrap_box_line(line, w):
+                _cprint(f"{_DIM}{wrapped}{_RST}")
+        if len(self._tool_args_buf) > w:
+            for wrapped in _wrap_box_line(self._tool_args_buf, w):
+                _cprint(f"{_DIM}{wrapped}{_RST}")
             self._tool_args_buf = ""
 
     def _close_tool_args_box(self) -> None:
@@ -725,7 +1014,8 @@ class CLIStreamMixin:
             return
         buf = getattr(self, "_tool_args_buf", "")
         if buf:
-            _cprint(f"{_DIM}{buf}{_RST}")
+            for wrapped in _wrap_box_line(buf, self._scrollback_box_width()):
+                _cprint(f"{_DIM}{wrapped}{_RST}")
             self._tool_args_buf = ""
         w = self._scrollback_box_width()
         _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
