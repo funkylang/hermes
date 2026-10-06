@@ -345,8 +345,11 @@ class CLIStreamMixin:
         if "\n" in self._line_buf:
             # complete line (newline arrived)
             line, self._line_buf = self._line_buf.split("\n", 1)
-            while line:
-                line = print_one_line(line)
+            if line == "":
+                _cprint("")
+            else:
+                while line:
+                    line = print_one_line(line)
         else:
             line = self._line_buf
             width = wcwidth(line)
