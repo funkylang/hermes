@@ -26,9 +26,14 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, drain_truncation_warnings,
 )
 from agent import prompt_builder as _pb
-
 from agent.path_display import display_path
 from agent.prompt_manifest import utf8_bytes
+from agent.prompt_provenance import (
+    HARDCODED_CONSTANTS,
+    context_file_labels_for_block,
+    memories_file_block,
+    skills_index_sources,
+)
 from agent.runtime_cwd import resolve_agent_cwd, resolve_context_cwd
 from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
@@ -363,30 +368,9 @@ def _auto_load_parts(agent: Any) -> List[Tuple[str, str]]:
     return [(prompt, label)]
 
 
-_SKILL_INDEX_ENTRY_RE = re.compile(r"(?m)^    - ([^\s:：][^:：]*?)[:：]")
-
-
 def _skills_index_sources(agent: Any, index_text: str) -> List[Tuple[str, int]]:
-    """Per-skill provenance for the rendered skills index.
-
-    The index is a deterministic list of ``  - <name>: <desc>`` lines (see
-    ``_render_skills_index``); splitting on those lines yields one entry per
-    listed skill with its real line size. Labels are the plain skill names —
-    the directory is constant for all rows and adds no information. Falls
-    back to a coarse "skills index" label when no entries are found (e.g.
-    demoted names-only format), so provenance is best-effort and never breaks
-    prompt build."""
-    if not index_text or not index_text.strip():
-        return []
-    matches = list(_SKILL_INDEX_ENTRY_RE.finditer(index_text))
-    if not matches:
-        return [("skills index", utf8_bytes(index_text))]
-    out: List[Tuple[str, int]] = []
-    for i, m in enumerate(matches):
-        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(index_text)
-        name = m.group(1).strip()
-        out.append((f"skill {name}", utf8_bytes(index_text[m.start():body_end])))
-    return out
+    """Per-skill provenance for the rendered skills index."""
+    return skills_index_sources(index_text)
 
 
 def _bot_mode_parts(agent: Any) -> List[str]:
@@ -562,26 +546,8 @@ def _timestamp_line(agent: Any) -> str:
 
 
 def _memories_file_block(agent: Any, filename: str, title: str) -> Optional[Tuple[str, str]]:
-    """A hand-edited memories/ context file (RULES.md, HISTORY.md), injected
-    before MEMORY.md.
-
-    No store/entry model and no API: the file itself is the source of truth
-    (edited by hand), read directly from the profile-scoped memories dir.
-    Absent or empty yields nothing, so prompt bytes are untouched until it has
-    content. The label carries its real path for /pi provenance."""
-    try:
-        from tools.memory_tool import get_memory_dir
-        path = get_memory_dir() / filename
-        if not path.is_file():
-            return None
-        content = path.read_text(encoding="utf-8-sig").strip()
-        if not content:
-            return None
-        sep = "═" * 46
-        block = f"{sep}\n{title}\n{sep}\n{content}"
-        return (block, display_path(str(path)))
-    except Exception:
-        return None
+    """A hand-edited memories/ context file (RULES.md, HISTORY.md), injected before MEMORY.md."""
+    return memories_file_block(agent, filename, title)
 
 
 def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
@@ -830,48 +796,12 @@ def _join_tier(parts: Sequence[Optional[str]]) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-_CONTEXT_SECTION_RE = re.compile(r"(?m)^## (.+?)\n\n")
-
-
 def _context_file_labels_for_block(agent: Any, block_text: str) -> List[Tuple[str, int]]:
-    """Per-file provenance for one context-files block, as ``(label, chars)``.
-
-    The block is a concatenation of ``## <label>`` sections (one per file, see
-    ``build_context_files_prompt``); splitting on its own headers yields the
-    real per-file sizes. Labels resolve to full paths through the same
-    discovery walk the builder uses (``context_file_sources_for_agent``); on
-    any failure the relative label from the header stands in — provenance is
-    best-effort and must never break prompt build."""
-    if not block_text or not block_text.strip():
-        return []
-    path_by_label: Dict[str, str] = {}
-    try:
-        from agent.context_file_sources import context_file_sources_for_agent
-        for e in context_file_sources_for_agent(agent):
-            if e.get("loaded"):
-                path_by_label[str(e["label"])] = str(e["path"])
-    except Exception:
-        pass  # labels stay as the section header (relative path)
-    # Only headers that the builder wrote as file boundaries (known labels from
-    # ``context_file_sources_for_agent``) split the block; any other ``## ...`` line is an
-    # internal section header of the file and belongs to its source, not a new one.
-    out: List[Tuple[str, int]] = []
-    matches = [m for m in _CONTEXT_SECTION_RE.finditer(block_text) if m.group(1).strip() in path_by_label]
-    for i, m in enumerate(matches):
-        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(block_text)
-        label = m.group(1).strip()
-        out.append((path_by_label[label], body_end - m.start()))
-    return out
+    """Per-file provenance for one context-files block as ``(label, chars)``."""
+    return context_file_labels_for_block(agent, block_text)
 
 
-# Static constants whose text never changes within the prompt (no builder, no loader);
-# their parts are published with kind = "hardcoded".
-_HARDCODED_CONSTANTS = {
-    "default identity", "hermes-agent help guidance",
-    "task completion guidance", "parallel tool call guidance",
-    "steering channel note", "tool-use enforcement guidance",
-    "execution discipline guidance", "google model operational guidance",
-}
+# (HARDCODED_CONSTANTS now imported from prompt_provenance.py)
 
 
 def _part_kind_for_label(label: str) -> str:
@@ -881,7 +811,7 @@ def _part_kind_for_label(label: str) -> str:
     point text is appended so the /pi kind column is data, not decoration.
     (To be refined as more parts get honest kinds; kept simple on purpose.)
     """
-    if label in _HARDCODED_CONSTANTS or "hardcoded" in label:
+    if label in HARDCODED_CONSTANTS or "hardcoded" in label:
         return "hardcoded"
     # Real file-backed content: memory files, SOUL.md, skills, AGENTS/CLAUDE, etc.
     if (label.startswith("~/.hermes/memories/") or "memories/MEMORY.md" in label
