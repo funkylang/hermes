@@ -358,7 +358,7 @@ class CLIStreamMixin:
                     line = print_one_line(line)
         else:
             line = self._line_buf
-            width = wcwidth(line)
+            width = wcswidth(line)
             if width > box_width:
                 # print all but the last partial line
                 while width > box_width:
