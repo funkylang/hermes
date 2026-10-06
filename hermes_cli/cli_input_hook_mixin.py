@@ -101,11 +101,12 @@ class CLIInputHookMixin:
                 metadata_block=metadata_block,
             )
 
-            # If we got an auto-reply, queue it as the next user message
+            # If we got an auto-reply, notify and queue it as the next user
+            # message. No preview text on the notice line: the queued text is
+            # already shown when submitted as a normal user message.
             if auto_reply:
                 from cli import _DIM, _RST, _cprint
-                preview = auto_reply[:60] + ("..." if len(auto_reply) > 60 else "")
-                _cprint(f"  {_DIM}⚡ Input hook auto-reply: {preview}{_RST}")
+                _cprint(f"  {_DIM}⚡ Input hook auto-reply{_RST}")
                 self._pending_input.put(auto_reply)
 
         except Exception as exc:
