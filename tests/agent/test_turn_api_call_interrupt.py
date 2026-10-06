@@ -6,7 +6,7 @@ from __future__ import annotations
 import threading
 import time
 
-from agent.agent_runtime_helpers import _INTERRUPTED_PLACEHOLDER
+from agent.agent_runtime_helpers import _INTERRUPTED_API_CALL_PLACEHOLDER
 from agent.repetition_guard import REPETITION_LOOP_INTERRUPTED
 from agent.turn_api_call import handle_api_interrupt
 from agent.turn_retry_state import TurnRetryState
@@ -49,7 +49,7 @@ def test_repetition_dominated_partial_is_not_kept_as_the_interrupted_row():
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"] == ""
     assert messages[-1]["display_kind"] == "hidden"
-    assert messages[-1]["api_content"] == _INTERRUPTED_PLACEHOLDER
+    assert messages[-1]["api_content"] == _INTERRUPTED_API_CALL_PLACEHOLDER
     assert verdict.final_response == REPETITION_LOOP_INTERRUPTED
     assert "I. I. I." not in verdict.final_response
 

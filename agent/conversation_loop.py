@@ -349,8 +349,8 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
             # Hidden row, but a non-empty neutral api_content so the pre-call sanitizer
             # does not re-heal it every call (#88955). Never _INTERRUPT_SCAFFOLD_MARKER:
             # as assistant text the model echoes it (#81841).
-            from agent.agent_runtime_helpers import _INTERRUPTED_PLACEHOLDER
-            placeholder["api_content"] = _INTERRUPTED_PLACEHOLDER
+            from agent.agent_runtime_helpers import _INTERRUPTED_STEER_PLACEHOLDER
+            placeholder["api_content"] = _INTERRUPTED_STEER_PLACEHOLDER
         append_message(messages, placeholder)
     # Transcript shows the user's own words; the provider replays the scaffolded form.
     append_message(messages, {"role": "user", "content": text, "api_content": correction})

@@ -2592,6 +2592,15 @@ def repair_tool_call(agent, tool_name: str) -> str | None:
 # placeholder in chat_completion_helpers so healed transcripts read consistently.
 _INTERRUPTED_PLACEHOLDER = "[response interrupted]"
 
+# Source-annotated variants of the interrupted placeholder, one per write site, so a persisted
+# occurrence can be traced back to the path that produced it (diagnosing what triggers interrupts).
+# The legacy ``_INTERRUPTED_PLACEHOLDER`` is retained as the matcher for rows already in state.db and
+# for tests; new writes use the annotated variants below.
+_INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER = "[response interrupted - empty message filled at wire assembly]"
+_INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER = "[response interrupted - empty message repaired by pre-send sanitizer]"
+_INTERRUPTED_STEER_PLACEHOLDER = "[response interrupted - user sent a mid-turn correction]"
+_INTERRUPTED_API_CALL_PLACEHOLDER = "[response interrupted - aborted during API call]"
+
 # Escalate repeated heals once per session window, then stay quiet. Default threshold; tunable via
 # ``agent.sanitizer_heal_escalation_threshold`` (<= 0 disables).
 # Repeated heals of the same poisoned transcript used to WARNING on every send (#96870).
@@ -2648,7 +2657,7 @@ def fill_empty_non_final_wire_payload(msg: Dict[str, Any], *, is_final: bool) ->
         return False
     if _msg_has_payload(msg):
         return False
-    msg["content"] = _INTERRUPTED_PLACEHOLDER
+    msg["content"] = _INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER
     return True
 
 
@@ -2757,7 +2766,7 @@ def repair_empty_non_final_messages(messages: List[Dict[str, Any]]) -> List[Dict
         # Tool results are checked by their own pairing pass; empty ones are a separate concern.
         if idx != last_idx and isinstance(msg, dict) and msg.get("role") in ("assistant", "user") and not _msg_has_payload(msg):
             # Shallow-copy so stored history / prompt caching stays byte-stable.
-            repaired.append({**msg, "content": _INTERRUPTED_PLACEHOLDER})
+            repaired.append({**msg, "content": _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER})
             healed += 1
         else:
             repaired.append(msg)

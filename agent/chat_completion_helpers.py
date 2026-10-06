@@ -76,24 +76,38 @@ _STREAM_5XX_PROBE_WINDOW_S = 60.0
 
 # Reply capture for debugging interruptions: stores the complete generated output + finish_reason
 _REPLY_COUNTER = 0
+_REPLY_CAPTURE_ENV = "HERMES_REPLY_CAPTURE"
+_REPLY_DEFAULT_DIR = "/tmp"
+
+
+def _reply_capture_dir() -> str:
+    """Directory for reply captures (env override wins; read live, never cached).
+
+    Defaults to /tmp (the live session's log location that downstream replay tooling
+    reads). Parallel test runs must set HERMES_REPLY_CAPTURE to an isolated dir so their
+    first-write cleanup glob cannot delete the live session's reply_*.txt files.
+    """
+    return os.environ.get(_REPLY_CAPTURE_ENV) or _REPLY_DEFAULT_DIR
 
 
 def _next_reply_capture_path() -> str:
     """Return a numbered path for the next reply capture (increments each call).
 
-    On the very first call in this process, cleans up any leftover reply_*.txt
-    files from previous sessions.
+    On the very first call in this process, cleans up any leftover reply_*.txt files from
+    previous sessions — within the capture dir only. The dir is configurable via
+    HERMES_REPLY_CAPTURE so parallel test runs never touch the live session's logs.
     """
     global _REPLY_COUNTER
+    base = _reply_capture_dir()
     if _REPLY_COUNTER == 0:
-        # First reply of this process — clear stale captures from previous runs
+        # First reply of this process — clear stale captures from previous runs (own dir only)
         try:
-            for path in glob.glob("/tmp/reply_*.txt"):
+            for path in glob.glob(os.path.join(base, "reply_*.txt")):
                 os.unlink(path)
         except Exception:
             pass
     _REPLY_COUNTER += 1
-    return f"/tmp/reply_{_REPLY_COUNTER}.txt"
+    return os.path.join(base, f"reply_{_REPLY_COUNTER}.txt")
 
 
 def _write_reply_capture(content: str | None, finish_reason: str,
@@ -101,8 +115,8 @@ def _write_reply_capture(content: str | None, finish_reason: str,
                          tool_calls: list | None = None) -> None:
     """Write the complete wire response to /tmp/reply_N.txt for debugging."""
     try:
-        # Debug trace: log every call with key params
-        with open("/tmp/reply_capture_debug.log", "a") as _dbg:
+        # Debug trace: log every call with key params (isolated dir honors HERMES_REPLY_CAPTURE)
+        with open(os.path.join(_reply_capture_dir(), "reply_capture_debug.log"), "a") as _dbg:
             import time as _t
             tc_names = [tc.get('function', {}).get('name', '?') if isinstance(tc, dict) else getattr(getattr(tc, 'function', None), 'name', '?') for tc in (tool_calls or [])]
             _dbg.write(f"{_t.strftime('%H:%M:%S')} content={'Y' if content else 'N'} reasoning={'Y' if reasoning else 'N'} tool_calls={len(tool_calls) if tool_calls else 0} finish={finish_reason}\n")

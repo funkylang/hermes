@@ -14,7 +14,8 @@ import logging
 import pytest
 
 from agent.agent_runtime_helpers import (
-    _INTERRUPTED_PLACEHOLDER,
+    _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER,
+    _INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER,
     _empty_heal_log_state,
     _empty_heal_pending_notice,
     _empty_heal_user_notified,
@@ -51,12 +52,12 @@ class TestFillEmptyNonFinalWirePayload:
     def test_fills_empty_non_final_assistant(self):
         msg = {"role": "assistant", "content": ""}
         assert fill_empty_non_final_wire_payload(msg, is_final=False) is True
-        assert msg["content"] == _INTERRUPTED_PLACEHOLDER
+        assert msg["content"] == _INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER
 
     def test_fills_empty_non_final_user(self):
         msg = {"role": "user", "content": None}
         assert fill_empty_non_final_wire_payload(msg, is_final=False) is True
-        assert msg["content"] == _INTERRUPTED_PLACEHOLDER
+        assert msg["content"] == _INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER
 
     def test_skips_final_turn(self):
         msg = {"role": "assistant", "content": ""}
@@ -100,7 +101,7 @@ class TestHealLogEscalation:
                 out = repair_empty_non_final_messages(
                     [dict(m) for m in durable]
                 )
-                assert out[1]["content"] == _INTERRUPTED_PLACEHOLDER
+                assert out[1]["content"] == _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
                 assert durable[1]["content"] == ""
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -126,7 +127,7 @@ class TestHealLogEscalation:
     def test_owner_still_heals_wire_copy_only(self):
         durable = _poisoned_rows()
         out = repair_empty_non_final_messages(durable)
-        assert out[1]["content"] == _INTERRUPTED_PLACEHOLDER
+        assert out[1]["content"] == _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
         assert durable[1]["content"] == ""
         assert out is not durable
 
@@ -332,7 +333,7 @@ class TestProjectionStopsReheal:
 
         wire = agent.client.chat.completions.create.call_args.kwargs["messages"]
         wire_assistants = [m for m in wire if m.get("role") == "assistant"]
-        assert wire_assistants[0]["content"] == _INTERRUPTED_PLACEHOLDER
+        assert wire_assistants[0]["content"] == _INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER
         assert history[1]["content"] == ""
         assert "api_content" not in history[1]
 
