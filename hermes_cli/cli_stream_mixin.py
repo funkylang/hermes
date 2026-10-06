@@ -287,11 +287,31 @@ class CLIStreamMixin:
         an interrupt) would otherwise draw a reasoning box inside the response box.
         """
         from cli import _DIM, _RST, _cprint, datetime
+
+        if not text:
+            return
+        self._reasoning_shown_this_turn = True
+        if getattr(self, "_stream_box_opened", False):
+            return
+        box_width = self._scrollback_box_width()
+        if not getattr(self, "_reasoning_box_opened", False):
+            self._reasoning_box_opened = True
+            r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
+            r_fill = box_width - 2 - len(r_label)
+            _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
+
+        # Process the text with line buffering and wrapping.
+        self._process_dim_box_text(text)
+
+    def _process_dim_box_text(self, text: str) -> None:
+        """Buffer dim box text (reasoning/tool args) and print complete lines with word-wrapping."""
+        from cli import _DIM, _RST, _cprint
         from wcwidth import wcswidth
+
+        box_width = self._scrollback_box_width()
 
         def print_one_line(text):
             """Print text that fits in box_width, return the remainder."""
-
             within_text = False
             width = 0
             last_space_position = 0
@@ -311,30 +331,16 @@ class CLIStreamMixin:
                 if width > box_width:
                     if last_space_position:
                         # Soft break
-                        part = text[:last_space_position] # text before the space
-                        _cprint(f"{_DIM}{part}{_RST}")
-                        return text[last_space_position+1:] # text behind the space
+                        _cprint(f"{_DIM}{text[:last_space_position]}{_RST}")
+                        return text[last_space_position+1:]
                     else:
                         # Hard break
-                        part = _cprint(text[:i])
-                        _cprint(f"{_DIM}{part}{_RST}")
+                        _cprint(f"{_DIM}{text[:i]}{_RST}")
                         return text[i:]
 
             # Text fits - print all of it
             _cprint(f"{_DIM}{text}{_RST}")
             return ""
-
-        if not text:
-            return
-        self._reasoning_shown_this_turn = True
-        if getattr(self, "_stream_box_opened", False):
-            return
-        box_width = self._scrollback_box_width()
-        if not getattr(self, "_reasoning_box_opened", False):
-            self._reasoning_box_opened = True
-            r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
-            r_fill = box_width - 2 - len(r_label)
-            _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
 
         # Initialize _line_buf if it doesn't exist yet
         if not hasattr(self, "_line_buf"):
@@ -388,6 +394,7 @@ class CLIStreamMixin:
         line_buf = getattr(self, "_line_buf", "")
         if line_buf:
             _cprint(f"{_DIM}{line_buf}{_RST}")
+            self._line_buf = ""
         w = self._scrollback_box_width()
         # Print the box footer
         _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
@@ -638,7 +645,6 @@ class CLIStreamMixin:
         self._reasoning_box_opened = False
         self._reasoning_preview_buf = ""
         self._tool_args_box_opened = False
-        self._tool_args_buf = ""
         self._tool_args_box_tool = None
         # A batch cancelled/errored before any tool.started would otherwise mute the next turn's line.
         self.__dict__.pop("_tool_gen_announced", None)
@@ -786,7 +792,8 @@ class CLIStreamMixin:
         The JSON being generated is shown as it arrives — meaningful for big payloads
         (write_file content, long queries), honest noise otherwise. Box opens on the first
         chunk, re-labels if a different call streams next, closes when the tool actually
-        starts or content/stream boundaries hit."""
+        starts or content/stream boundaries hit. Text rendering is shared with the
+        reasoning box via _process_dim_box_text."""
         from cli import _DIM, _RST, _cprint, datetime
         if not text_chunk:
             return
@@ -796,7 +803,6 @@ class CLIStreamMixin:
             self._close_tool_args_box()
         if not getattr(self, "_tool_args_box_opened", False):
             self._tool_args_box_opened = True
-            self._tool_args_buf = ""
             self._tool_args_box_tool = tool_name or None
             label = f" Tool args{': ' + tool_name if tool_name else ''}"
             if self.show_timestamps:
@@ -809,30 +815,19 @@ class CLIStreamMixin:
         if tool_name and self._tool_args_box_tool != tool_name:
             self._tool_args_box_tool = tool_name
 
-        self._tool_args_buf = getattr(self, "_tool_args_buf", "") + text_chunk
-        # JSON rarely contains real newlines; emit on newline and force-flush partials once
-        # they exceed one interior line (same policy as the reasoning box) so generation is
-        # visible in real time.
-        w = self._scrollback_box_width()
-        while "\n" in self._tool_args_buf:
-            line, self._tool_args_buf = self._tool_args_buf.split("\n", 1)
-            for wrapped in _wrap_box_line(line, w):
-                _cprint(f"{_DIM}{wrapped}{_RST}")
-        if len(self._tool_args_buf) > w:
-            for wrapped in _wrap_box_line(self._tool_args_buf, w):
-                _cprint(f"{_DIM}{wrapped}{_RST}")
-            self._tool_args_buf = ""
+        # Render via the shared dim-box line buffer (same behavior as reasoning box).
+        self._process_dim_box_text(text_chunk)
 
     def _close_tool_args_box(self) -> None:
         """Close the live tool-args box if open (renders the buffered argument tail)."""
         from cli import _DIM, _RST, _cprint
         if not getattr(self, "_tool_args_box_opened", False):
             return
-        buf = getattr(self, "_tool_args_buf", "")
-        if buf:
-            for wrapped in _wrap_box_line(buf, self._scrollback_box_width()):
-                _cprint(f"{_DIM}{wrapped}{_RST}")
-            self._tool_args_buf = ""
+        # Print any remaining text in the line buffer (partial line that didn't get printed)
+        line_buf = getattr(self, "_line_buf", "")
+        if line_buf:
+            _cprint(f"{_DIM}{line_buf}{_RST}")
+            self._line_buf = ""
         w = self._scrollback_box_width()
         _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
         self._tool_args_box_opened = False
