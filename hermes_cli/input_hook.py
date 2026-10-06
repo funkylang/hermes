@@ -67,6 +67,7 @@ def build_metadata(
     context_total: Optional[int],
     total_messages: Optional[int],
     finish_reason: Optional[str],
+    session_id: str,
 ) -> dict[str, str]:
     """Build the metadata dict passed to the script as a multi-line key=value block.
 
@@ -75,6 +76,7 @@ def build_metadata(
         context_total: Total context window size (or None if unavailable)
         total_messages: Number of messages in conversation history
         finish_reason: The last API call's finish_reason (stop, tool_calls, etc.)
+        session_id: The current session ID
 
     Returns:
         A dict that will be formatted as multi-line key=value pairs
@@ -88,6 +90,8 @@ def build_metadata(
         meta["total_messages"] = str(total_messages)
     if finish_reason:
         meta["finish_reason"] = finish_reason
+    if session_id:
+        meta["session_id"] = session_id
     return meta
 
 
@@ -110,7 +114,7 @@ def run_input_hook(
     Args:
         reasoning: The assistant's reasoning if available (may be empty)
         content: The assistant's final response text
-        metadata_block: Multi-line key=value metadata string
+        metadata_block: Multi-line key=value metadata string (includes session_id)
 
     Returns:
         The auto-reply text to queue as the next user message, or None to prompt human

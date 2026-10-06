@@ -83,13 +83,14 @@ class CLIInputHookMixin:
 
             total_messages = len(self.conversation_history or [])
 
-            # Build metadata
+            # Build metadata (including session_id)
             from hermes_cli.input_hook import build_metadata, format_metadata_block
             metadata = build_metadata(
                 context_used=context_used,
                 context_total=context_total,
                 total_messages=total_messages,
                 finish_reason=finish_reason,
+                session_id=getattr(self, "session_id", ""),
             )
             metadata_block = format_metadata_block(metadata)
 

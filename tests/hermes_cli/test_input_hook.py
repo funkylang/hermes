@@ -110,12 +110,14 @@ class TestBuildMetadata:
             context_total=262144,
             total_messages=10,
             finish_reason="stop",
+            session_id="sess-abc-123",
         )
         assert meta == {
             "context_used": "5000",
             "context_size": "262144",
             "total_messages": "10",
             "finish_reason": "stop",
+            "session_id": "sess-abc-123",
         }
 
     def test_skips_none_values(self):
@@ -125,18 +127,25 @@ class TestBuildMetadata:
             context_total=262144,
             total_messages=None,
             finish_reason="stop",
+            session_id="sess-xyz-456",
         )
         assert "context_used" not in meta
         assert "total_messages" not in meta
         assert meta == {
             "context_size": "262144",
             "finish_reason": "stop",
+            "session_id": "sess-xyz-456",
         }
 
     def test_empty_when_all_none(self):
-        """Return empty dict when all values are None."""
-        meta = build_metadata(None, None, None, None)
-        assert meta == {}
+        """Return only session_id when all other values are None."""
+        meta = build_metadata(None, None, None, None, session_id="sess-123")
+        assert meta == {"session_id": "sess-123"}
+
+    def test_session_id_empty_string_skipped(self):
+        """Omit session_id when empty string."""
+        meta = build_metadata(5000, 262144, 10, "stop", session_id="")
+        assert "session_id" not in meta
 
 
 # ── Metadata formatting tests ─────────────────────────────────────────
