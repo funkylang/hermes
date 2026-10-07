@@ -2368,7 +2368,7 @@ _CALLBACK_PARAMS = (
     "read_window_below_callback", "connection_callback", "tour_callback",
     "step_callback", "stream_delta_callback", "interim_assistant_callback",
     "status_callback", "notice_callback", "notice_clear_callback",
-    "event_callback", "reaction_callback", "tool_gen_callback", "tool_args_progress_callback",
+    "event_callback", "reaction_callback", "tool_gen_callback",
     "tool_args_stream_callback",
 )
 
@@ -2393,7 +2393,7 @@ def init_agent(
     tour_callback: callable = None, step_callback: callable = None,
     stream_delta_callback: callable = None, interim_assistant_callback: callable = None,
     tool_gen_callback: callable = None, status_callback: callable = None,
-    tool_args_progress_callback: callable = None, tool_args_stream_callback: callable = None,
+    tool_args_stream_callback: callable = None,
     notice_callback: callable = None, notice_clear_callback: callable = None,
     event_callback: Optional[Callable[[str, dict], None]] = None,
     reaction_callback: Optional[Callable[[str], None]] = None, max_tokens: int = None,

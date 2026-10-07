@@ -772,19 +772,6 @@ class CLIStreamMixin:
         from agent.display import bridge_generating_phrase, get_tool_emoji
         what = bridge_generating_phrase(tool_name) or tool_name
         _cprint(f"  ┊ {t('cli.stream.tool_preparing', emoji=get_tool_emoji(tool_name, default='⚡'), what=what)}")
-        # Record when argument generation started for periodic progress updates.
-        self._tool_args_gen_start = time.monotonic()
-
-    def _on_tool_args_progress(self, elapsed_seconds: float) -> None:
-        """Periodically called while tool arguments are streaming in to show ongoing feedback.
-
-        Updates the spinner text with elapsed time so users know the system is still working
-        even during long argument generation phases."""
-        try:
-            self._spinner_text = f"generating arguments... {int(elapsed_seconds)}s"
-            self._invalidate()
-        except Exception:
-            pass
 
     def _on_tool_args_stream(self, tool_name: str, text_chunk: str) -> None:
         """Stream raw tool-call argument fragments into a dim box (reasoning-box style).

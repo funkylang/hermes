@@ -2802,44 +2802,12 @@ class _ToolCallAccumulator:
         # Argument deltas are collected per slot and joined once in ``materialize`` —
         # ``+=`` per chunk rebuilds the whole string every delta (quadratic on big args).
         self._argument_parts: dict[int, list[str]] = {}
-        # Track when argument generation started for progress feedback
-        self._args_gen_start: float | None = None
-        self._last_progress_update: float = 0.0
 
     def materialize(self) -> dict:
         """Join buffered argument deltas into each entry's ``arguments``; idempotent. Returns ``acc``."""
         for idx, parts in self._argument_parts.items():
             self.acc[idx]["function"]["arguments"] = "".join(parts)
         return self.acc
-
-    def start_args_generation(self) -> None:
-        """Mark when argument generation begins (first tool_call delta with name)."""
-        if self._args_gen_start is None:
-            self._args_gen_start = time.monotonic()
-            self._last_progress_update = 0.0
-
-    def should_report_progress(self, agent) -> bool:
-        """Should we fire a progress update now? True every ~0.5s during args generation."""
-        if self._args_gen_start is None:
-            return False
-        now = time.monotonic()
-        if now - self._last_progress_update >= 0.5 and hasattr(agent, '_fire_tool_args_progress'):
-            # Only report if there's actually a callback to receive it
-            if getattr(agent, 'tool_args_progress_callback', None) is not None:
-                self._last_progress_update = now
-                return True
-        return False
-
-    def get_elapsed_args_generation(self) -> float | None:
-        """Return elapsed seconds for args generation tracking, or None if not started."""
-        if self._args_gen_start is None:
-            return None
-        return time.monotonic() - self._args_gen_start
-
-    def reset_progress(self) -> None:
-        """Clear progress tracking when tool generation completes or fails."""
-        self._args_gen_start = None
-        self._last_progress_update = 0.0
 
     def name_for_delta(self, tc_delta) -> str:
         """Return the tool name currently streaming for this delta (may be "" pre-name)."""
@@ -3358,8 +3326,6 @@ class _StreamingCall(StreamingWaitMonitor):
                     name, args_chunk = tool_calls.feed(tc_delta)
                     if name is not None:
                         self._emit_tool_started(name)
-                        # Start progress tracking when first tool_call with name arrives.
-                        tool_calls.start_args_generation()
                         # Lets the stub-builder warn if streaming dies before the args
                         # complete instead of silently discarding the action.
                         self.result["partial_tool_names"].append(name)
@@ -3368,14 +3334,7 @@ class _StreamingCall(StreamingWaitMonitor):
                         self.agent._fire_tool_args_stream(
                             tool_calls.name_for_delta(tc_delta), args_chunk)
 
-                # Periodically report progress while arguments are streaming in.
-                if tool_calls.should_report_progress(self.agent):
-                    elapsed = tool_calls.get_elapsed_args_generation() or 0.0
-                    self.agent._fire_tool_args_progress(elapsed)
-
         tool_calls.materialize()
-        # Reset progress tracking when args generation completes.
-        tool_calls.reset_progress()
         self._close_managed_stream()
         if self._stream_attempt_was_cancelled(stream_attempt_id):
             raise _httpx.RemoteProtocolError(f"stream attempt {stream_attempt_id} was superseded")

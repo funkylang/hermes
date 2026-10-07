@@ -743,46 +743,8 @@ class CLIInfoMixin:
         self._emit_pi_line("")
 
     def _dump_debug_objects(self):
-        """Dump agent and CLI object state to /tmp for debugging. Never raises."""
+        """Dump prompt manifest state to /tmp for debugging. Never raises."""
         import pprint
-
-        # Dump the agent if it exists
-        if self.agent:
-            try:
-                with open('/tmp/agent.txt', 'w', encoding='utf-8') as f:
-                    obj = self.agent
-                    f.write(f"# Agent Object\n")
-                    f.write(f"# Type: {type(obj).__name__}\n")
-                    f.write(f"# ID: {id(obj):#x}\n\n")
-                    if hasattr(obj, '__dict__'):
-                        # Create a readable version (exclude large/heavy objects)
-                        d = dict(vars(obj))
-                        for key, val in list(d.items()):
-                            if isinstance(val, (list, dict)) and len(str(val)) > 10000:
-                                d[key] = f"<{type(val).__name__} with {len(val)} items>"
-                            elif hasattr(val, '__dict__') and not isinstance(val, (str, int, float, bool)):
-                                d[key] = f"<{type(val).__name__} at {id(val):#x}>"
-                        pprint.pprint(d, stream=f, sort_dicts=False, width=20000)
-            except Exception as e:
-                print(f"  (Could not dump agent: {e})")
-
-        # Dump the CLI object
-        try:
-            with open('/tmp/cli.txt', 'w', encoding='utf-8') as f:
-                obj = self
-                f.write(f"# CLI Object\n")
-                f.write(f"# Type: {type(obj).__name__}\n")
-                f.write(f"# ID: {id(obj):#x}\n\n")
-                if hasattr(obj, '__dict__'):
-                    d = dict(vars(obj))
-                    for key, val in list(d.items()):
-                        if isinstance(val, (list, dict)) and len(str(val)) > 10000:
-                            d[key] = f"<{type(val).__name__} with {len(val)} items>"
-                        elif hasattr(val, '__dict__') and not isinstance(val, (str, int, float, bool)):
-                            d[key] = f"<{type(val).__name__} at {id(val):#x}>"
-                    pprint.pprint(d, stream=f, sort_dicts=False, width=20000)
-        except Exception as e:
-            print(f"  (Could not dump CLI: {e})")
 
         # Dump the prompt manifest structure (same style: pprint of attributes)
         try:
