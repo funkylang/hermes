@@ -1417,10 +1417,10 @@ class _LoopState:
     failed: bool = False
     codex_ack_continuations: int = 0
     length_continue_retries: int = 0
-    # Per-turn backstop for the refunding restarts (redirect / rebuilt-for-fallback).
-    # Unlike ``retry_count`` (rebound to 0 each iteration) this accumulates for the whole
-    # turn so a runaway interrupt/redirect that keeps re-arming a restart flag cannot
-    # refund the iteration budget forever and hold the turn lease indefinitely.
+    # Backstop for the refunding restarts (redirect / rebuilt-for-fallback). Unlike
+    # ``retry_count`` (rebound to 0 each iteration) this survives across iterations until a
+    # response arrives, so a runaway interrupt/redirect that keeps re-arming a restart flag
+    # cannot refund the iteration budget forever and hold the turn lease indefinitely.
     restart_count: int = 0
     _outer_error_count: int = 0  # outer-loop exceptions this turn (#92450), see _MAX_OUTER_LOOP_ERRORS
     truncated_tool_call_retries: int = 0
@@ -1612,6 +1612,10 @@ def _run_conversation_turn(
         )
     except PreflightCompressionTimedOut as _preflight_timeout_exc:
         return _preflight_timeout_result(agent, _preflight_timeout_exc, conversation_history)
+    # Voice turns may run on auxiliary.voice_chat: bound after the prompt/row/compaction were settled
+    # against the main model, undone in finalize_turn (and run_conversation's finally on early exits).
+    from agent.voice_turn_route import begin_voice_turn_route
+    _ctx.active_system_prompt = begin_voice_turn_route(agent, _ctx.messages, _ctx.active_system_prompt)
 
     # Per-turn agent state (the gateway caches agents across turns, so none of this may
     # leak into the next message): interim-commentary dedup spans the whole turn but not
@@ -1732,27 +1736,31 @@ def run_conversation(
     addresses, after every history rewrite including post-turn micro-compaction.
     """
     from agent.turn_context import export_current_turn_boundary
+    from agent.voice_turn_route import end_voice_turn_route
     from tools.vision_tools_history_budget import native_turn_images
 
     # Images attached natively to this user turn stay visible to vision_analyze for the turn, so
     # it does not embed the same pixels a second time into the same request (#76411).
     with native_turn_images(user_message):
-        result = _run_conversation_turn(
-            agent,
-            user_message,
-            system_message=system_message,
-            conversation_history=conversation_history,
-            task_id=task_id,
-            stream_callback=stream_callback,
-            persist_user_message=persist_user_message,
-            persist_user_timestamp=persist_user_timestamp,
-            persist_user_display_kind=persist_user_display_kind,
-            persist_user_display_metadata=persist_user_display_metadata,
-            persist_user_platform_id=persist_user_platform_id,
-            moa_config=moa_config,
-            turn_author=turn_author,
-            title_user_message=title_user_message,
-        )
+        try:
+            result = _run_conversation_turn(
+                agent,
+                user_message,
+                system_message=system_message,
+                conversation_history=conversation_history,
+                task_id=task_id,
+                stream_callback=stream_callback,
+                persist_user_message=persist_user_message,
+                persist_user_timestamp=persist_user_timestamp,
+                persist_user_display_kind=persist_user_display_kind,
+                persist_user_display_metadata=persist_user_display_metadata,
+                persist_user_platform_id=persist_user_platform_id,
+                moa_config=moa_config,
+                turn_author=turn_author,
+                title_user_message=title_user_message,
+            )
+        finally:
+            end_voice_turn_route(agent)
     result = export_current_turn_boundary(agent, result, user_message)
     _close_durable_failed_turn(agent, result)
     return result

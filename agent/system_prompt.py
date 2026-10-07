@@ -635,7 +635,7 @@ def _guidance_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
             out.append((GOOGLE_MODEL_OPERATIONAL_GUIDANCE, "google model operational guidance"))
     if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
-        out.append((execution_guidance_text(), "execution discipline guidance"))
+        out.append((execution_guidance_text(agent.valid_tool_names), "execution discipline guidance"))
     # delegate_task background delivery is intentionally between turns. Put this after the generic persistence
     # blocks so their "keep working" rule cannot turn the required yield into no-op/polling activity.
     if "delegate_task" in agent.valid_tool_names:
