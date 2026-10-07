@@ -13,7 +13,6 @@ import pytest
 
 from agent.agent_runtime_helpers import (
     _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER,
-    _INTERRUPTED_STEER_PLACEHOLDER,
     _INTERRUPTED_WIRE_ASSEMBLY_PLACEHOLDER,
 )
 from agent.prompt_builder import STEER_MARKER_OPEN, format_steer_marker
@@ -261,9 +260,9 @@ class TestActiveTurnRedirect:
 
 class TestActiveTurnRedirectCheckpoint:
     def test_repetition_dominated_partial_is_not_replayed(self):
-        """A looped partial must not seed the correction's next API request (#112764): neither
-        the replayed correction nor the alternation placeholder carries the bytes; the model
-        is told the reply degenerated instead."""
+        """A looped partial must not seed the correction's next API request (#112764):
+        neither the replayed correction nor the alternation placeholder carries the bytes;
+        the model is told the reply degenerated instead."""
         from agent.conversation_loop import _apply_active_turn_redirect
         from agent.repetition_guard import REPETITION_LOOP_INTERRUPTED
 
@@ -279,10 +278,35 @@ class TestActiveTurnRedirectCheckpoint:
         assert repeated not in replayed
         assert "Visible response before the interruption:" not in replayed
         assert REPETITION_LOOP_INTERRUPTED in replayed
+        # Nothing anywhere on this turn carries the looped bytes.
+        for msg in messages:
+            blob = (
+                str(msg.get("content") or "")
+                + str(msg.get("api_content") or "")
+                + str(msg.get("reasoning_content") or "")
+            )
+            assert repeated not in blob
+
+    def test_placeholder_acknowledges_interruption_as_assistant_message(self):
+        """Role alternation is preserved by a real (non-empty) assistant message, so the
+        sanitizer cannot drop it and consecutive user messages cannot merge (#88955)."""
+        from agent.conversation_loop import _apply_active_turn_redirect
+
+        agent = _bare_agent()
+        agent._current_streamed_assistant_text = ""
+        agent._steering_wait_reasoning = "thinking captured at interrupt"
+        messages = [{"role": "user", "content": "start"}]
+
+        _apply_active_turn_redirect(agent, messages, "Change course.")
+
+        placeholder, correction = messages[-2], messages[-1]
         assert placeholder["role"] == "assistant"
-        assert placeholder["display_kind"] == "hidden"
-        assert repeated not in (placeholder.get("content") or "")
-        assert repeated not in (placeholder.get("api_content") or "")
+        assert placeholder["content"] == "I was interrupted by the user!"
+        assert placeholder.get("reasoning_content") == "thinking captured at interrupt"
+        # No context to replay: the correction is the plain user text, no api_content.
+        assert correction["role"] == "user"
+        assert correction["content"] == "Change course."
+        assert "api_content" not in correction
 
     def test_ordinary_partial_remains_replayable(self):
         """Useful interrupted text remains available to the corrected request."""
@@ -313,27 +337,25 @@ class TestActiveTurnRedirectCheckpoint:
         assert messages[-1]["role"] == "user"
         assert messages[-1]["content"] == "Use Postgres instead."
         assert sum(1 for m in messages if m["role"] == "assistant") == 1
-        # Scaffolding is provider-replay text, carried in the sidecar so the
-        # model still sees the interrupted context — never in the transcript.
+        # The interrupted draft is provider-replay context carried in the sidecar so the
+        # model still sees where it left off — never scaffold noise, never the transcript.
         replayed = messages[-1]["api_content"]
         assert "Visible draft." in replayed
-        assert "Context from the interrupted assistant response" in replayed
+        assert "Context from the interrupted assistant response" not in replayed
+        assert "[This response was interrupted by a user correction.]" not in replayed
         assert replayed.endswith("Use Postgres instead.")
 
     def test_scaffolding_never_lands_in_transcript_content(self):
-        """The checkpoint machinery is for the MODEL, not the transcript.
-
-        Persisting ``[This response was interrupted by a user correction.]``
-        into an assistant row's ``content`` or ``api_content`` painted raw
-        scaffolding as the model's own prior reply (#81841). Scaffold bytes
-        ride only in the *user correction's* ``api_content``; assistant
-        placeholders stay clean (or ``display_kind="hidden"`` when empty).
-        """
+        """The legacy interrupt-scaffold prefixes are gone entirely: nothing we emit
+        carries them, so they can neither paint raw scaffolding as the model's prior
+        reply (#81841) nor leak into the transcript. The user's correction always stays
+        verbatim in its content field."""
         from agent.conversation_loop import _apply_active_turn_redirect
 
-        scaffolding = (
+        # These two announcement lines are pure noise — the placeholder assistant
+        # message carries the interruption itself, so we never emit them anywhere.
+        banned = (
             "[This response was interrupted by a user correction.]",
-            "Visible response before the interruption:",
             "[Context from the interrupted assistant response]",
         )
 
@@ -355,37 +377,33 @@ class TestActiveTurnRedirectCheckpoint:
                 _apply_active_turn_redirect(agent, messages, "New direction.")
 
                 for msg in messages:
-                    if msg.get("role") == "assistant":
-                        # Scaffold must never live on an assistant row at all
-                        # — content OR api_content (API replay substitutes the
-                        # sidecar back into content).
-                        blob = (
-                            str(msg.get("content") or "")
-                            + str(msg.get("api_content") or "")
-                        )
-                        for marker in scaffolding:
-                            assert marker not in blob, (
-                                f"scaffolding leaked into assistant row "
-                                f"(tail={tail_role}, streamed={bool(streamed)}): "
-                                f"{blob!r}"
-                            )
-                    if msg.get("display_kind") == "hidden":
-                        continue  # dropped by every transcript surface
-                    content = str(msg.get("content", ""))
-                    for marker in scaffolding:
-                        assert marker not in content, (
-                            f"scaffolding leaked into visible content "
-                            f"(tail={tail_role}, streamed={bool(streamed)}): {content!r}"
+                    blob = (
+                        str(msg.get("content") or "")
+                        + str(msg.get("api_content") or "")
+                        + str(msg.get("reasoning_content") or "")
+                    )
+                    for marker in banned:
+                        assert marker not in blob, (
+                            f"banned scaffold leaked into "
+                            f"(tail={tail_role}, streamed={bool(streamed)}): {blob!r}"
                         )
 
                 # The user's correction is always shown verbatim.
                 assert messages[-1]["content"] == "New direction."
-                # ...and the model still receives the interrupted context,
-                # but only via the user correction's api_content sidecar.
-                replayed = messages[-1].get("api_content") or ""
-                assert "[This response was interrupted by a user correction.]" in replayed
+                # The streamed draft (if any) rides the sidecar only...
                 if streamed:
+                    replayed = messages[-1].get("api_content", "")
                     assert streamed in replayed
+                    assert "Visible response before the interruption:" in replayed
+                    # ...and never leaks into transcript content or assistant rows.
+                    for msg in messages[:-1]:
+                        assert "Visible response before the interruption:" not in (
+                            str(msg.get("content") or "")
+                            + str(msg.get("api_content") or "")
+                        )
+                else:
+                    # Nothing to replay: no api_content sidecar at all.
+                    assert "api_content" not in messages[-1]
 
     def test_checkpoint_never_replays_chain_of_thought(self):
         """Raw CoT serialized into checkpoint content reads to Anthropic's
@@ -408,10 +426,12 @@ class TestActiveTurnRedirectCheckpoint:
 
             _apply_active_turn_redirect(agent, messages, "Change course.")
 
-            # Check BOTH the transcript content and the replayed sidecar —
-            # the sidecar is what actually reaches the provider.
+            # Check EVERYTHING that reaches the provider: transcript content, the
+            # replayed api_content sidecar, and reasoning_content.
             serialized = "".join(
-                str(m.get("content", "")) + str(m.get("api_content") or "")
+                str(m.get("content", ""))
+                + str(m.get("api_content") or "")
+                + str(m.get("reasoning_content") or "")
                 for m in messages
             )
             assert "SECRET chain of thought." not in serialized
@@ -421,15 +441,15 @@ class TestActiveTurnRedirectCheckpoint:
 
 
 
-class TestEmptyHiddenAssistantRehealRegression:
-    """#88955: a no-visible-text redirect persisted an empty
-    ``display_kind="hidden"`` assistant placeholder that the pre-call sanitizer
-    re-healed on every later call (wire copy only, so the loop never converged).
-    The placeholder must carry a neutral provider-replay ``api_content`` so the
-    historical API projection fills ``content`` and the sanitizer stops
-    touching the row — while the durable transcript stays hidden and empty."""
+class TestEmptyAssistantSanitizerConvergence:
+    """#88955 (revised): a no-visible-text redirect once persisted an EMPTY assistant
+    placeholder that the pre-call sanitizer re-healed on every later call (wire copy
+    only, so the loop never converged). The fix: placeholders carry non-empty content
+    ("I was interrupted by the user!"), which is not repairable — so the wire shape is
+    stable from the first replay onward."""
 
-    def test_active_turn_redirect_hidden_placeholder_has_provider_replay_payload(self):
+    def test_redirect_placeholder_is_non_empty_and_sanitizer_stable(self):
+        from agent.agent_runtime_helpers import repair_empty_non_final_messages
         from agent.conversation_loop import _apply_active_turn_redirect
 
         agent = _bare_agent()
@@ -441,23 +461,19 @@ class TestEmptyHiddenAssistantRehealRegression:
         placeholder = messages[-2]
         correction = messages[-1]
         assert placeholder["role"] == "assistant"
-        assert placeholder["content"] == ""
-        assert placeholder["display_kind"] == "hidden"
-        assert placeholder["api_content"] == _INTERRUPTED_STEER_PLACEHOLDER
-        # The user correction keeps clean text in content and the interruption
-        # context only in its own api_content sidecar.
+        assert placeholder["content"] == "I was interrupted by the user!"
+        # The correction is the plain user text — no context to replay.
         assert correction["role"] == "user"
         assert correction["content"] == "Use Postgres instead."
+        assert "api_content" not in correction
+
+        # The sanitizer must leave the placeholder exactly as written (its repair path
+        # only fires on empty assistant rows).
+        healed = repair_empty_non_final_messages([dict(m) for m in messages])
+        healed_placeholder = healed[-2]
+        assert healed_placeholder["content"] == "I was interrupted by the user!"
         assert (
-            "[This response was interrupted by a user correction.]"
-            in correction["api_content"]
-        )
-        # #81841: the interrupt scaffold must never reach assistant content or
-        # api_content (API replay substitutes api_content back into content).
-        assert (
-            "[This response was interrupted by a user correction.]"
-            not in str(placeholder.get("content") or "")
-            + str(placeholder.get("api_content") or "")
+            healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
         )
 
 

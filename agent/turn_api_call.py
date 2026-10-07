@@ -153,6 +153,29 @@ def perform_api_call(
     if _redirect_crossed_response:
         # Response and redirect can cross threads: discard the now-stale
         # response and rebuild from the correction rather than lose it.
+        
+        # If steering wait completed, preserve the reasoning text for the next iteration
+        if getattr(agent, "_steering_wait_completed", False):
+            logger.info("Steering wait completed - preserving reasoning for next API call")
+            # Extract reasoning from the response before discarding it
+            reasoning_text = ""
+            if response is not None:
+                # Try standard location first (choices[0].message.reasoning_content)
+                try:
+                    choices = getattr(response, "choices", None) or []
+                    if choices and len(choices) > 0:
+                        message = getattr(choices[0], "message", None)
+                        if message is not None:
+                            reasoning_text = getattr(message, "reasoning_content", None) or ""
+                except (IndexError, AttributeError):
+                    pass
+            
+            if reasoning_text:
+                agent._steering_wait_reasoning = reasoning_text
+            else:
+                # Fallback: use the accumulated text we tracked during streaming
+                agent._steering_wait_reasoning = agent._get_accumulated_reasoning_text()
+        
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
         if agent.clear_interrupt(preserve_redirect=True):
             _retry.restart_with_redirected_messages = True

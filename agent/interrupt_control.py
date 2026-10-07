@@ -6,6 +6,7 @@ Extracted from ``run_agent.py``; every method resolves through ``AIAgent``'s MRO
 import contextlib
 import logging
 import threading
+import time
 from typing import Optional
 
 from agent.interrupt_compat import request_hard_interrupt
@@ -111,7 +112,70 @@ def _ic_signal_tool_workers(agent, active: bool, **kw) -> None:
 
 class InterruptControlMixin:
     """interrupt()/hard_interrupt()/clear_interrupt()/steer()/redirect() (see module docstring)."""
-
+    
+    # Streaming phase tracking for steering behavior
+    STREAMING_PHASE_REASONING = "reasoning"
+    STREAMING_PHASE_CONTENT = "content"
+    STREAMING_PHASE_TOOL_ARGS = "tool_args"
+    STREAMING_PHASE_INACTIVE = "inactive"
+    
+    def _set_streaming_phase(self, phase: str) -> None:
+        """Set the current streaming phase (called from stream consumption loop)."""
+        self._streaming_phase = phase
+    
+    def _get_streaming_phase(self) -> str:
+        """Get the current streaming phase."""
+        default = InterruptControlMixin.STREAMING_PHASE_INACTIVE
+        return getattr(self, "_streaming_phase", default)
+    
+    def _check_steering_wait_completion(self, reasoning_text: str) -> bool:
+        """Check if steering wait should complete (newline detected in reasoning).
+        
+        Called from stream loop during reasoning phase; returns True when we
+        should stop the stream gracefully.
+        """
+        if not getattr(self, "_steer_completion_wait_active", False):
+            return False
+        
+        # Check if accumulated reasoning has a newline (natural completion point)
+        full_reasoning = getattr(self, "_current_streaming_reasoning_text", "") or ""
+        if "\n" in full_reasoning:
+            logger.debug("Steering wait completed: newline detected in reasoning")
+            self._steer_completion_wait_active = False
+            self._steering_wait_completed = True
+            return True
+        
+        # Timeout safety check (30 seconds)
+        deadline = getattr(self, "_steer_completion_deadline", 0)
+        if deadline and time.time() > deadline:
+            logger.debug("Steering wait completed: timeout reached")
+            self._steer_completion_wait_active = False
+            self._steering_wait_completed = True
+            return True
+        
+        return False
+    
+    def _clear_steering_wait_markers(self) -> None:
+        """Clear steering wait flags (called after reasoning is consumed)."""
+        self._steer_completion_wait_active = False
+        self._steering_wait_completed = False
+    
+    def _append_streaming_reasoning_text(self, text: str) -> None:
+        """Append reasoning text for steering completion check."""
+        if not text:
+            return
+        if not hasattr(self, "_current_streaming_reasoning_text"):
+            self._current_streaming_reasoning_text = ""
+        self._current_streaming_reasoning_text += text
+    
+    def _reset_streaming_reasoning_text(self) -> None:
+        """Reset the accumulated reasoning text."""
+        self._current_streaming_reasoning_text = ""
+    
+    def _get_accumulated_reasoning_text(self) -> str:
+        """Get the accumulated reasoning text for steering completion check."""
+        return getattr(self, "_current_streaming_reasoning_text", "") or ""
+    
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
         tool_reason: Optional[str] = None, require_generation: Optional[int] = None,
@@ -309,7 +373,13 @@ class InterruptControlMixin:
         """Redirect the active turn without converting it into a new task: during a model request only that
         request is cancelled (completed messages kept, partial reasoning becomes assistant context, the
         correction is appended as a real user message, the loop retries); during tool execution it degrades
-        to ``steer()``; Codex app-server uses native ``turn/steer``. False when no live turn / empty text."""
+        to ``steer()``; Codex app-server uses native ``turn/steer``. False when no live turn / empty text.
+
+        Phase-aware steering behavior:
+        - During reasoning: wait for natural completion (newline) instead of aborting
+        - During tool args or content: queue as steer (let generation complete)
+        - Stop command: immediate interrupt at any phase
+        """
         if not text or not text.strip():
             return False
         cleaned = text.strip()
@@ -341,6 +411,36 @@ class InterruptControlMixin:
                         _request_yield(tid)
             return accepted
 
+        # Phase-aware steering during model requests
+        phase = self._get_streaming_phase()
+        
+        if phase == InterruptControlMixin.STREAMING_PHASE_REASONING:
+            # During reasoning: set flag to wait for natural completion instead of aborting
+            with _ic_lock(self, "_pending_redirect_lock"):
+                existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
+                if self._interrupt_requested and not existing:
+                    return False
+                
+                self._pending_redirect = (
+                    f"{existing}\n\n[Additional user correction]\n{cleaned}" if existing else cleaned
+                )
+                
+                # Set steering completion wait flag (don't set _interrupt_requested or abort)
+                self._steer_completion_wait_active = True
+                self._steer_completion_deadline = time.time() + 30.0
+                logger.info("Steering completion wait activated during reasoning phase")
+            
+            return True
+        
+        elif phase in (InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS, InterruptControlMixin.STREAMING_PHASE_CONTENT):
+            # During tool args or content: queue as steer, let generation complete naturally
+            accepted = self.steer(cleaned)
+            if accepted:
+                logger.info("Steering queued during %s phase (will deliver after completion)", 
+                           "tool args" if phase == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS else "content")
+            return accepted
+        
+        # Fallback: traditional redirect behavior for inactive or unknown phases
         _model_active = getattr(self, "_model_request_active", None)
         with _ic_lock(self, "_pending_redirect_lock"):
             if _model_active is None or not _model_active.is_set():

@@ -3147,6 +3147,13 @@ class _StreamingCall(StreamingWaitMonitor):
                 # Show all streaming content including tool-call preambles (for debugging runaway generation)
                 self._emit_text(text)
 
+        # Streaming phase tracking for steering behavior
+        agent = self.agent
+        
+        # Reset streaming state for this attempt
+        agent._reset_streaming_reasoning_text()
+        agent._set_streaming_phase(agent.STREAMING_PHASE_INACTIVE)
+        
         from agent import relay_llm
         stream = self._set_managed_stream(relay_llm.stream(self.api_kwargs, _open_stream,
             **_relay_stream_identity(self.agent, "provider"), finalizer=relay_response.finalize,
@@ -3235,8 +3242,19 @@ class _StreamingCall(StreamingWaitMonitor):
             display_reasoning = detail_text or reasoning_text
             if display_reasoning:
                 self._emit_reasoning(display_reasoning)
+                # Track reasoning for steering completion check
+                agent._append_streaming_reasoning_text(display_reasoning)
                 if reasoning_watch.feed(reasoning_text) or detail_watch.feed(detail_text):
                     runaway = "reasoning"
+                    break
+                
+                # Phase tracking and steering completion check
+                agent._set_streaming_phase(agent.STREAMING_PHASE_REASONING)
+                if agent._check_steering_wait_completion(display_reasoning):
+                    logger.info("Steering wait: stopping stream gracefully after newline in reasoning")
+                    _close_half_read_stream("steering_wait_complete")
+                    # Mark as completed so it's not treated as a dropped stream
+                    finish_reason = "stop"
                     break
             # Not routed to the live display: the transport promotes a sole-payload
             # refusal to content + ``content_filter`` and the loop surfaces it terminally.
@@ -3269,10 +3287,16 @@ class _StreamingCall(StreamingWaitMonitor):
                     continue
                 else:
                     self._emit_text(delta_content)
+                    # Phase tracking for content deltas
+                    agent._set_streaming_phase(agent.STREAMING_PHASE_CONTENT)
 
             delta_tool_calls = getattr(delta, "tool_calls", None)
             if delta_tool_calls:
                 _flush_pending_stream_text()
+                
+                # Phase tracking for tool args deltas
+                agent._set_streaming_phase(agent.STREAMING_PHASE_TOOL_ARGS)
+                
                 for tc_delta in delta_tool_calls:
                     name, args_chunk = tool_calls.feed(tc_delta)
                     if name is not None:
