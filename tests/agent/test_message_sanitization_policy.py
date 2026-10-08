@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.message_sanitization import (
+    REASONING_ECHO_MODE_PRESERVE,
     apply_reasoning_content_policy,
     coalesce_tool_call_id,
     deterministic_call_id,
@@ -266,6 +267,85 @@ class TestReapplyReasoningEcho:
         assert reapply_reasoning_echo(msgs, True) == 0
         reapply_reasoning_echo(msgs, False)
         assert reapply_reasoning_echo(msgs, False) == 0
+
+
+# ---------------------------------------------------------------------------
+# "preserve" mode — non-empty-only reasoning replay (model.reasoning_echo: preserve).
+# For endpoints that neither require the echo-back pad (DeepSeek/Kimi/MiMo) nor
+# reject the field (strict providers): send only genuine reasoning, never invent
+# a " " pad and never ship "" or whitespace-only values.
+# ---------------------------------------------------------------------------
+
+class TestPreserveReasoningEcho:
+    def test_keeps_genuine_reasoning(self):
+        src = {"role": "assistant", "reasoning_content": "real thinking"}
+        api = {}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert api["reasoning_content"] == "real thinking"
+
+    def test_drops_whitespace_pad(self):
+        src = {"role": "assistant", "reasoning_content": "   "}
+        api = {}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert "reasoning_content" not in api
+
+    def test_drops_empty_string(self):
+        src = {"role": "assistant", "reasoning_content": ""}
+        api = {}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert "reasoning_content" not in api
+
+    def test_promotes_internal_reasoning(self):
+        src = {"role": "assistant", "reasoning": "streamed coT"}
+        api = {}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert api["reasoning_content"] == "streamed coT"
+
+    def test_explicit_rc_wins_over_internal(self):
+        src = {"role": "assistant", "reasoning_content": "explicit", "reasoning": "internal"}
+        api = {}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert api["reasoning_content"] == "explicit"
+
+    def test_stale_pad_on_api_msg_dropped(self):
+        # A " " pad baked in by the primary provider must not survive a switch to preserve.
+        src = {"role": "assistant"}
+        api = {"role": "assistant", "reasoning_content": " "}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert "reasoning_content" not in api
+
+    def test_non_assistant_untouched(self):
+        src = {"role": "user", "content": "hi"}
+        api = {"role": "user", "content": "hi"}
+        apply_reasoning_content_policy(src, api, REASONING_ECHO_MODE_PRESERVE)
+        assert "reasoning_content" not in api
+
+    def test_reapply_preserve_mixed(self):
+        import copy
+        msgs = [
+            {"role": "assistant", "reasoning_content": "real A"},
+            {"role": "assistant", "reasoning_content": " "},
+            {"role": "user", "content": "x"},
+            {"role": "assistant", "reasoning": "only internal B"},
+            {"role": "assistant"},
+        ]
+        n = reapply_reasoning_echo(msgs, REASONING_ECHO_MODE_PRESERVE)
+        assert msgs[0]["reasoning_content"] == "real A"
+        assert "reasoning_content" not in msgs[1]
+        assert msgs[3]["reasoning_content"] == "only internal B"
+        assert "reasoning_content" not in msgs[4]
+        assert n >= 1
+
+    def test_reapply_preserve_idempotent(self):
+        import copy
+        msgs = [
+            {"role": "assistant", "reasoning_content": "real A"},
+            {"role": "assistant", "reasoning_content": " "},
+            {"role": "assistant"},
+        ]
+        reapply_reasoning_echo(msgs, REASONING_ECHO_MODE_PRESERVE)
+        assert reapply_reasoning_echo(msgs, REASONING_ECHO_MODE_PRESERVE) == 0
+
 
 # ---------------------------------------------------------------------------
 # Per-provider reasoning_echo config opt-in — preserves reasoning_content

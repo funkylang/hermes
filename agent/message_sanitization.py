@@ -631,6 +631,18 @@ def _set_provider_tool_id(tc: Any, key: str, value: str) -> None:
 # single-space pad, #17341). mimo     — provider "xiaomi", model contains "mimo", or host *.xiaomimimo.com.
 # strict side (field rejected with 400/422 "Extra inputs are not permitted"): everyone else — Mistral,
 # Cerebras, Groq, SambaNova, … (#45655). Strip the key entirely, even a single-space pad.
+#
+# Verified 2026-10-08 against primary sources (see session research):
+# - DeepSeek V4 thinking mode: OFFICIAL DOCS require passing reasoning_content back in all
+#   subsequent requests when the request carries `tools` (else HTTP 400); without `tools` the
+#   field is ignored. The documented contract is "pass back what the model generated" — nothing
+#   about inventing a pad for turns that had no reasoning.
+# - Kimi / MiMo: require-side behavior comes from incident reports (#17400), not vendor docs.
+# - The single-space " " pad for reasoning-less turns (vs omitting the field) is incident-derived,
+#   not documented by any vendor. Treat it as the minimal safe value for those families only.
+# - Whitespace-only / empty reasoning_content is NEVER persisted at creation time
+#   (chat_completion_helpers.build_assistant_message strips it); require-side pads are applied
+#   at REPLAY time in reapply_reasoning_echo() where the active provider is known.
 _REASONING_ECHO_RULES: tuple = (
     # (family, exact providers (raw), exact providers (lowered), model substrings (lowered), hosts)
     ("kimi", frozenset({"kimi-coding", "kimi-coding-cn"}), frozenset(), (), ("api.kimi.com", "moonshot.ai", "moonshot.cn")),
@@ -732,10 +744,59 @@ def native_anthropic_accounting_projection(messages: Any) -> tuple[Any, tuple[st
     return projected, tuple(replayed_thinking)
 
 
-def apply_reasoning_content_policy(source_msg: dict, api_msg: dict, needs_thinking_pad: bool) -> None:
+REASONING_ECHO_MODE_PRESERVE = "preserve"
+
+
+def _resolve_reasoning_echo_mode(needs_thinking_pad) -> str:
+    """Normalize the tri-state echo flag to a mode name.
+
+    True       -> ``pad``      (provider enforces echo-back; missing fields are space-padded)
+    False      -> ``strip``    (provider rejects the field entirely)
+    "preserve" -> ``preserve`` (only non-empty reasoning reaches the wire; never pads,
+                                never drops genuine content)
+    """
+    if needs_thinking_pad == REASONING_ECHO_MODE_PRESERVE:
+        return "preserve"
+    return "pad" if needs_thinking_pad else "strip"
+
+
+def _normalize_preserve_reasoning(source_msg: dict, api_msg: dict) -> bool:
+    """Preserve-mode normalization (mutates ``api_msg``); source of truth is ``source_msg``.
+
+    Sends only genuine reasoning: an explicit non-empty ``reasoning_content`` wins, then
+    the internal ``reasoning`` key is promoted. Empty / whitespace-only values are dropped
+    entirely — never send "" and never invent a " " pad. Idempotent when source IS api_msg.
+    Returns True when ``api_msg`` changed.
+    """
+    existing = source_msg.get("reasoning_content")
+    value = existing if isinstance(existing, str) and existing.strip() else None
+    if value is None:
+        reasoning = source_msg.get("reasoning")
+        if isinstance(reasoning, str) and reasoning.strip():
+            value = reasoning
+    had_field = "reasoning_content" in api_msg
+    if value is not None:
+        changed = api_msg.get("reasoning_content") != value
+        api_msg["reasoning_content"] = value
+        return changed or not had_field
+    # No genuine reasoning anywhere: drop any stale field (e.g. a " " pad baked in by the
+    # primary provider before a fallback to this one).
+    if had_field:
+        api_msg.pop("reasoning_content", None)
+        return True
+    return False
+
+
+def apply_reasoning_content_policy(source_msg: dict, api_msg: dict, needs_thinking_pad) -> None:
     """Copy provider-facing reasoning fields onto an API replay message (mutates ``api_msg``).
-    ``needs_thinking_pad`` is the require-side flag (``needs_reasoning_echo``)."""
+    ``needs_thinking_pad`` is the echo flag: True (require-side), False (strict side), or
+    "preserve" (non-empty-only mode)."""
     if source_msg.get("role") != "assistant":
+        return
+    if needs_thinking_pad == REASONING_ECHO_MODE_PRESERVE:
+        # Opt-in "preserve" mode (e.g. local llama-server endpoints that want their captured
+        # reasoning replayed but reject nothing): never pad, never strip genuine content.
+        _normalize_preserve_reasoning(source_msg, api_msg)
         return
     if not needs_thinking_pad:
         # Strict side: never carry the field — a reasoning primary pads history with " ",
@@ -767,14 +828,22 @@ def apply_reasoning_content_policy(source_msg: dict, api_msg: dict, needs_thinki
         api_msg["reasoning_content"] = " "
 
 
-def reapply_reasoning_echo(api_messages: list, needs_thinking_pad: bool) -> int:
+def reapply_reasoning_echo(api_messages: list, needs_thinking_pad) -> int:
     """Re-pad (or strip) assistant turns' reasoning_content for the ACTIVE provider.
 
     ``api_messages`` is built once under the primary provider; a mid-conversation fallback
     can switch providers, so baked-in fields must be reconciled: TO a require-side provider
-    re-applies the pad (else 400), TO a strict one strips it (else 422). Idempotent.
+    re-applies the pad (else 400), TO a strict one strips it (else 422). TO "preserve" keeps
+    only genuine (non-empty) reasoning and drops pads. Idempotent.
     Returns the number of assistant turns changed.
     """
+    if needs_thinking_pad == REASONING_ECHO_MODE_PRESERVE:
+        changed = 0
+        for api_msg in api_messages:
+            if api_msg.get("role") != "assistant":
+                continue
+            changed += 1 if _normalize_preserve_reasoning(api_msg, api_msg) else 0
+        return changed
     changed = 0
     for api_msg in api_messages:
         if api_msg.get("role") != "assistant":

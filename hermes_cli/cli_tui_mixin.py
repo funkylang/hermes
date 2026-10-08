@@ -1558,10 +1558,19 @@ class CLITuiMixin:
                 except Exception:
                     redirected = False
             if redirected:
-                preview = text[:80] + ("..." if len(text) > 80 else "")
-                from cli import datetime as _datetime
-                _ts_suffix = f" {_DIM}{_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
-                _cprint(f"  {_ACCENT}↪ Redirected current turn: '{preview}'{_RST}{_ts_suffix}")
+                # Show the redirect message only when NOT in the reasoning phase.
+                # During reasoning, the steering-wait mechanism handles natural completion.
+                in_reasoning_phase = False
+                if self.agent is not None:
+                    current_phase = getattr(self.agent, "_get_streaming_phase", lambda: "inactive")()
+                    in_reasoning_phase = current_phase == "reasoning"
+                
+                if not in_reasoning_phase:
+                    preview = text[:80] + ("..." if len(text) > 80 else "")
+                    from cli import datetime as _datetime
+                    _ts_suffix = f" {_DIM}{_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
+                    _cprint(f"  {_ACCENT}↪ Redirected current turn: '{preview}'{_RST}{_ts_suffix}")
+                # Don't queue to interrupt_queue when redirect succeeded - steering-wait handles it
             else:
                 self._interrupt_queue.put(payload)
                 try:

@@ -301,7 +301,7 @@ class TestActiveTurnRedirectCheckpoint:
 
         placeholder, correction = messages[-2], messages[-1]
         assert placeholder["role"] == "assistant"
-        assert placeholder["content"] == "I was interrupted by the user!"
+        assert placeholder["content"] == "The user is giving me some input."
         assert placeholder.get("reasoning_content") == "thinking captured at interrupt"
         # No context to replay: the correction is the plain user text, no api_content.
         assert correction["role"] == "user"
@@ -445,7 +445,7 @@ class TestEmptyAssistantSanitizerConvergence:
     """#88955 (revised): a no-visible-text redirect once persisted an EMPTY assistant
     placeholder that the pre-call sanitizer re-healed on every later call (wire copy
     only, so the loop never converged). The fix: placeholders carry non-empty content
-    ("I was interrupted by the user!"), which is not repairable — so the wire shape is
+    ("The user is giving me some input."), which is not repairable — so the wire shape is
     stable from the first replay onward."""
 
     def test_redirect_placeholder_is_non_empty_and_sanitizer_stable(self):
@@ -461,7 +461,7 @@ class TestEmptyAssistantSanitizerConvergence:
         placeholder = messages[-2]
         correction = messages[-1]
         assert placeholder["role"] == "assistant"
-        assert placeholder["content"] == "I was interrupted by the user!"
+        assert placeholder["content"] == "The user is giving me some input."
         # The correction is the plain user text — no context to replay.
         assert correction["role"] == "user"
         assert correction["content"] == "Use Postgres instead."
@@ -471,7 +471,7 @@ class TestEmptyAssistantSanitizerConvergence:
         # only fires on empty assistant rows).
         healed = repair_empty_non_final_messages([dict(m) for m in messages])
         healed_placeholder = healed[-2]
-        assert healed_placeholder["content"] == "I was interrupted by the user!"
+        assert healed_placeholder["content"] == "The user is giving me some input."
         assert (
             healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
         )

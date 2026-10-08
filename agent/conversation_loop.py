@@ -324,7 +324,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     The non-empty placeholder content survives the sanitizer (it treats " " as empty), so the
     provider sees a real assistant message acknowledging the interruption instead of merging
     consecutive user messages. reasoning_content carries the reasoning streamed before the
-    interruption so the model can see what it was thinking when the user sent their steer.
+    interruption (only when non-empty).
     """
     visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
     steering_reasoning = getattr(agent, "_steering_wait_reasoning", None) or ""
@@ -353,9 +353,12 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     if not (messages and messages[-1].get("role") == "assistant"):
         placeholder: Dict[str, Any] = {
             "role": "assistant",
-            "content": "I was interrupted by the user!",
-            "reasoning_content": steering_reasoning,
+            "content": "The user is giving me some input.",
         }
+        # Hand back only real reasoning: empty/whitespace-only reasoning_content is dropped
+        # at creation time everywhere else (build_assistant_message); keep this path aligned.
+        if isinstance(steering_reasoning, str) and steering_reasoning.strip():
+            placeholder["reasoning_content"] = steering_reasoning
         append_message(messages, placeholder)
 
     # Transcript shows the user's own words; when there is interruption context, the provider

@@ -66,7 +66,9 @@ def bind_route_entry(agent: Any, entry: Dict[str, Any], provider: str, model: st
     agent.model, agent.provider, agent.requested_provider = model, provider, provider
     agent.base_url, agent.api_mode = base_url, api_mode
     # reasoning_content echo opt-in travels with the active provider; restore_primary_runtime reverts it.
-    agent._reasoning_echo_flag = bool(entry.get("reasoning_echo", False))
+    # Tri-state: a "preserve" string must not collapse to True (pad mode) via bool().
+    _entry_echo = entry.get("reasoning_echo", False)
+    agent._reasoning_echo_flag = (_entry_echo.strip() or False if isinstance(_entry_echo, str) else bool(_entry_echo))
     if hasattr(agent, "_transport_cache"):
         agent._transport_cache.clear()
     from agent.turn_recovery import reset_codex_reasoning_replay

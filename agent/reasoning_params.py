@@ -154,37 +154,52 @@ class ReasoningParamsMixin:
 
     _build_assistant_message = _forward("agent.chat_completion_helpers", "build_assistant_message")
 
-    def _needs_thinking_reasoning_pad(self) -> bool:
-        """True when the provider enforces ``reasoning_content`` echo-back on tool-call replays (DeepSeek, Kimi,
-        MiMo thinking all 400 without it). Cached per (provider, model, base_url), invalidated by
-        ``switch_model()`` / ``_try_activate_fallback()`` — called ~16× per turn.
+    def _needs_thinking_reasoning_pad(self):
+        """Echo mode for the active provider: True (require-side pad), "preserve" (non-empty-only
+        replay, opt-in via model.reasoning_echo: preserve), or False (strict strip). Cached per
+        (provider, model, base_url), invalidated by ``switch_model()`` / ``_try_activate_fallback()``
+        — called ~16× per turn.
 
-        DeepSeek v4 thinking and Kimi / Moonshot thinking both reject replays of assistant tool-call
-        messages that omit ``reasoning_content`` (refs 15250, #17400). Xiaomi MiMo thinking mode has the
-        same requirement.
-        """
+        True is set when the provider enforces ``reasoning_content`` echo-back on tool-call replays
+        (DeepSeek, Kimi, MiMo thinking all 400 without it). DeepSeek v4 thinking and Kimi / Moonshot
+        thinking both reject replays of assistant tool-call messages that omit ``reasoning_content``
+        (refs 15250, #17400). Xiaomi MiMo thinking mode has the same requirement.
+
+        WARNING: the return value is tri-state — never test it with bare truthiness; compare
+        explicitly (``is True`` for pad-mode checks)."""
         key = (self.provider, self.model, getattr(self, "_base_url_lower", self.base_url))
         cached = getattr(self, "_thinking_pad_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
-        result = (self._needs_deepseek_tool_reasoning() or self._needs_kimi_tool_reasoning()
-                  or self._needs_mimo_tool_reasoning() or self._reasoning_echo_opt_in())
+        opt_in = self._reasoning_echo_opt_in()
+        if isinstance(opt_in, str):
+            # "preserve" (or other non-bool opt-in values) bypass the require-side host rules.
+            result = opt_in
+        else:
+            result = (self._needs_deepseek_tool_reasoning() or self._needs_kimi_tool_reasoning()
+                      or self._needs_mimo_tool_reasoning() or bool(opt_in))
         self._thinking_pad_cache = (key, result)
         return result
 
-    def _reasoning_echo_opt_in(self) -> bool:
-        """``model.reasoning_echo`` opt-in for the *current* provider (covers gateways the host rules miss);
-        fallback activation swaps the flag and ``restore_primary_runtime()`` restores it."""
-        return bool(getattr(self, "_reasoning_echo_flag", False))
+    def _reasoning_echo_opt_in(self):
+        """``model.reasoning_echo`` opt-in for the *current* provider (covers gateways the host rules
+        miss); fallback activation swaps the flag and ``restore_primary_runtime()`` restores it.
+        Returns bool, or "preserve" for non-empty-only replay mode."""
+        return getattr(self, "_reasoning_echo_flag", False)
 
     @staticmethod
-    def _read_reasoning_echo_from_config() -> bool:
-        """Read ``model.reasoning_echo`` from config; False on any error."""
+    def _read_reasoning_echo_from_config():
+        """Read ``model.reasoning_echo`` from config; False on any error.
+        bool → pad/strip opt-in; the string "preserve" selects non-empty-only replay mode.
+        NOTE: must NOT wrap strings in bool() — that would convert "preserve" to True (pad mode)."""
         try:
             from hermes_cli.config import load_config_readonly
-            return bool((load_config_readonly().get("model") or {}).get("reasoning_echo"))
+            value = (load_config_readonly().get("model") or {}).get("reasoning_echo", False)
         except Exception:
             return False
+        if isinstance(value, str):
+            return value.strip() or False
+        return bool(value)
 
     # Echo families are host/provider-driven, not model-name-driven: aggregators re-exporting Kimi reject the
     # echo. Rule table: ``message_sanitization._REASONING_ECHO_RULES``. Kimi deliberately passes the raw

@@ -1674,6 +1674,9 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     survive ``_rows_to_conversation``."""
     assistant_tool_calls = getattr(assistant_message, "tool_calls", None)
     reasoning_text = _assistant_reasoning_text(agent, assistant_message)
+    # Strip empty / whitespace-only reasoning at creation time: never store it.
+    if isinstance(reasoning_text, str) and not reasoning_text.strip():
+        reasoning_text = None
     msg = stamp_message_timestamp({"role": "assistant",
         "content": _assistant_content_for_storage(agent, assistant_message), "reasoning": reasoning_text,
         "finish_reason": finish_reason})
@@ -1683,9 +1686,16 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         model_extra = getattr(assistant_message, "model_extra", None) or {}
         if isinstance(model_extra, dict) and "reasoning_content" in model_extra:
             raw_reasoning_content = model_extra["reasoning_content"]
+    if isinstance(raw_reasoning_content, str):
+        # Drop empty / whitespace-only reasoning at creation time: it is pure storage
+        # noise and poisons replay (e.g. persisted " " pads resurface on resume).
+        # The echo-back families still get their pad at REPLAY time via
+        # reapply_reasoning_echo(), so omitting the field here is safe for them too.
+        raw_reasoning_content = raw_reasoning_content if raw_reasoning_content.strip() else None
     if raw_reasoning_content is not None:
         msg["reasoning_content"] = _sanitize_surrogates(raw_reasoning_content)
-    elif assistant_tool_calls and agent._needs_thinking_reasoning_pad():
+    elif assistant_tool_calls and agent._needs_thinking_reasoning_pad() is True:
+        # Tri-state guard: only the require-side (True) pads at creation; "preserve" never does.
         # DeepSeek v4 / Kimi thinking modes 400 on a replayed tool-call message without
         # reasoning_content; pad with a single space (empty string is rejected too).
         # Without it, replaying the persisted message causes HTTP 400 ("The reasoning_content in the
@@ -3247,15 +3257,16 @@ class _StreamingCall(StreamingWaitMonitor):
                 if reasoning_watch.feed(reasoning_text) or detail_watch.feed(detail_text):
                     runaway = "reasoning"
                     break
-                
-                # Phase tracking and steering completion check
-                agent._set_streaming_phase(agent.STREAMING_PHASE_REASONING)
-                if agent._check_steering_wait_completion(display_reasoning):
-                    logger.info("Steering wait: stopping stream gracefully after newline in reasoning")
-                    _close_half_read_stream("steering_wait_complete")
-                    # Mark as completed so it's not treated as a dropped stream
-                    finish_reason = "stop"
-                    break
+            
+            # Phase tracking and steering completion check - always run, not just when display_reasoning is truthy
+            # This ensures interrupts during reasoning are detected even with empty chunks between updates
+            agent._set_streaming_phase(agent.STREAMING_PHASE_REASONING)
+            if agent._check_steering_wait_completion(display_reasoning):
+                logger.info("Steering wait: stopping stream gracefully after newline in reasoning")
+                _close_half_read_stream("steering_wait_complete")
+                # Mark as completed so it's not treated as a dropped stream
+                finish_reason = "stop"
+                break
             # Not routed to the live display: the transport promotes a sole-payload
             # refusal to content + ``content_filter`` and the loop surfaces it terminally.
             delta_refusal = getattr(delta, "refusal", None)
