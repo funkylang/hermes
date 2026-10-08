@@ -414,6 +414,23 @@ class CLIStreamMixin:
         if text is None:
             self._flush_stream()
             self._print_steering_placeholder_box(getattr(self, "agent", None))
+            # Steering input echo: draw the user's own steering text as a normal user box,
+            # after the placeholder notice (matches wire order: assistant placeholder, then user).
+            # A normal user message gets a second divider from chat() (cli_chat_turn_mixin.py:97);
+            # we don't run chat() here, so print it to keep the box looking complete.
+            _echo_text = getattr(self, "_steering_echo_text", None)
+            self._steering_echo_text = None
+            if _echo_text:
+                try:
+                    from cli import ChatConsole, _accent_hex, _cprint
+                    # Blank line above + second divider below mirror the normal submit
+                    # path (cli_tui_runtime_mixin.py:112-113, cli_chat_turn_mixin.py:97).
+                    _cprint("")
+                    self._print_user_message_preview(_echo_text)
+                    ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
+                except Exception:
+                    # A broken echo must never break the turn.
+                    logging.debug("steering user-echo render failed", exc_info=True)
             self._reset_stream_state()
             return
         if not text:
@@ -606,35 +623,55 @@ class CLIStreamMixin:
     def _print_steering_placeholder_box(self, agent) -> None:
         """At a steering-redirect stream boundary, draw the redirect notice in a Hermes box.
 
-        Runs between ``_flush_stream()`` (reasoning box closed) and ``_reset_stream_state()``,
-        so the on-screen order matches the wire order exactly: previous reasoning box, this
-        notice, then the continuation's fresh boxes. One-shot per steering event.
+        Reuses the standard completed-response-box look (header + colored body + footer via
+        _cprint), so it matches real response boxes rather than a bespoke Panel. Runs between
+        ``_flush_stream()`` and ``_reset_stream_state()``, matching on-screen wire order.
         """
         if agent is None or not getattr(agent, "_steering_wait_ui_announce", False):
             return
         agent._steering_wait_ui_announce = False
         try:
-            from rich.box import HORIZONTALS as rich_box
-            from rich.panel import Panel
-            from cli import ChatConsole, _maybe_remap_for_light_mode
+            from cli import _ACCENT, _RST, _cprint
+            from datetime import datetime
             # Deferred: keeps the import graph acyclic at module load time.
             from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXT
+            # Label + body color straight from the active skin (fallbacks mirror the defaults).
             try:
                 from hermes_cli.skin_engine import get_active_skin
                 _skin = get_active_skin()
                 label = _skin.get_branding("response_label", "☤ Hermes")
-                _resp_color = _maybe_remap_for_light_mode(_skin.get_color("response_border", "#CD7F32"))
-                _resp_text = _maybe_remap_for_light_mode(_skin.get_color("banner_text", "#FFF8DC"))
+                _text_hex = _skin.get_color("banner_text", "#FFF8DC")
             except Exception:
                 label = "☤ Hermes"
-                _resp_color = _maybe_remap_for_light_mode("#CD7F32")
-                _resp_text = _maybe_remap_for_light_mode("#FFF8DC")
-            ChatConsole().print(Panel(
-                REDIRECT_PLACEHOLDER_TEXT,
-                title=f"[{_resp_color} bold]{label}[/]", title_align="left", border_style=_resp_color,
-                style=_resp_text, box=rich_box, padding=(1, 0),
-                width=self._scrollback_box_width(),
-            ))
+                _text_hex = "#FFF8DC"
+            # True-color ANSI for the body so it matches streamed response text.
+            try:
+                _r, _g, _b = (int(_text_hex[i:i + 2], 16) for i in (1, 3, 5))
+                body_ansi = f"\033[38;2;{_r};{_g};{_b}m"
+            except (ValueError, IndexError):
+                body_ansi = ""
+            if self.show_timestamps:
+                label = f"{label}{datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
+            w = self._scrollback_box_width()
+            inner = max(w - 2, 1)
+            fill = w - 2 - self._status_bar_display_width(label)
+            # Header (leading \n mirrors the streaming header so spacing is identical).
+            _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
+            # Body: wrap placeholder text to the inner width.
+            _text = str(REDIRECT_PLACEHOLDER_TEXT or "")
+            _line_width, _line, cur_w = [], "", 0
+            for ch in _text:
+                from prompt_toolkit.utils import get_cwidth as _cw
+                _wch = _cw(ch)
+                if cur_w + _wch > inner and _line:
+                    _line_width.append(_line); _line, cur_w = "", 0
+                _line += ch; cur_w += _wch
+            if _line:
+                _line_width.append(_line)
+            for _l in _line_width or [""]:
+                _cprint(f"{body_ansi}{_l}{_RST}" if body_ansi else f"{_l}")
+            # Footer.
+            _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
         except Exception:
             # A broken notification must never break the turn.
             logging.debug("steering placeholder box render failed", exc_info=True)

@@ -1559,10 +1559,11 @@ class CLITuiMixin:
                 except Exception:
                     redirected = False
             if redirected:
-                # The input echo is intentionally NOT rendered at submit time: the stream is
-                # still live (reasoning box open), so an immediate user box would land mid-box
-                # and look broken. Defer/omit; see steering-wait boundary rendering.
-                pass
+                # The input echo is NOT rendered at submit time: the stream is still live
+                # (reasoning box open), so an immediate user box would land mid-box and look
+                # broken. Store it; the steering-wait boundary render (_stream_delta None branch)
+                # draws it after the placeholder notice, in true wire order.
+                self._steering_echo_text = text
                 # Don't queue to interrupt_queue when redirect succeeded - steering-wait handles it
             else:
                 self._interrupt_queue.put(payload)
