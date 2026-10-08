@@ -8,6 +8,7 @@ never imports ``cli`` at module load time (import cycle).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import textwrap
@@ -412,6 +413,7 @@ class CLIStreamMixin:
         """
         if text is None:
             self._flush_stream()
+            self._print_steering_placeholder_box(getattr(self, "agent", None))
             self._reset_stream_state()
             return
         if not text:
@@ -600,6 +602,42 @@ class CLIStreamMixin:
                 self._invalidate()
             except Exception:
                 pass
+
+    def _print_steering_placeholder_box(self, agent) -> None:
+        """At a steering-redirect stream boundary, draw the redirect notice in a Hermes box.
+
+        Runs between ``_flush_stream()`` (reasoning box closed) and ``_reset_stream_state()``,
+        so the on-screen order matches the wire order exactly: previous reasoning box, this
+        notice, then the continuation's fresh boxes. One-shot per steering event.
+        """
+        if agent is None or not getattr(agent, "_steering_wait_ui_announce", False):
+            return
+        agent._steering_wait_ui_announce = False
+        try:
+            from rich.box import HORIZONTALS as rich_box
+            from rich.panel import Panel
+            from cli import ChatConsole, _maybe_remap_for_light_mode
+            # Deferred: keeps the import graph acyclic at module load time.
+            from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXT
+            try:
+                from hermes_cli.skin_engine import get_active_skin
+                _skin = get_active_skin()
+                label = _skin.get_branding("response_label", "☤ Hermes")
+                _resp_color = _maybe_remap_for_light_mode(_skin.get_color("response_border", "#CD7F32"))
+                _resp_text = _maybe_remap_for_light_mode(_skin.get_color("banner_text", "#FFF8DC"))
+            except Exception:
+                label = "☤ Hermes"
+                _resp_color = _maybe_remap_for_light_mode("#CD7F32")
+                _resp_text = _maybe_remap_for_light_mode("#FFF8DC")
+            ChatConsole().print(Panel(
+                REDIRECT_PLACEHOLDER_TEXT,
+                title=f"[{_resp_color} bold]{label}[/]", title_align="left", border_style=_resp_color,
+                style=_resp_text, box=rich_box, padding=(1, 0),
+                width=self._scrollback_box_width(),
+            ))
+        except Exception:
+            # A broken notification must never break the turn.
+            logging.debug("steering placeholder box render failed", exc_info=True)
 
     def _flush_stream(self) -> None:
         """Emit any remaining partial line from the stream buffer and close the box."""

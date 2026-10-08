@@ -175,6 +175,12 @@ def perform_api_call(
             else:
                 # Fallback: use the accumulated text we tracked during streaming
                 agent._steering_wait_reasoning = agent._get_accumulated_reasoning_text()
+            
+            # Stream-boundary signal for the CLI: close the open boxes and draw the
+            # redirect notice (consumes _steering_wait_ui_announce) so the continuation
+            # starts in fresh boxes — same channel as tool-round boundaries.
+            if getattr(agent, "stream_delta_callback", None):
+                agent._call_quietly(agent.stream_delta_callback, None)
         
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
         if agent.clear_interrupt(preserve_redirect=True):

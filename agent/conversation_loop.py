@@ -36,6 +36,9 @@ from agent.surface_switch import (
 from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from agent.turn_retry_state import TurnRetryState
+# Placeholder assistant line appended by a mid-turn redirect: keeps role alternation
+# on replay and tells the model (and the CLI) that user input is arriving right after.
+REDIRECT_PLACEHOLDER_TEXT = "The user is giving me some input."
 # Phase helpers of the turn loop, bound at import so a source-tree swap cannot load a
 # skewed phase mid-turn.
 from agent.turn_api_call import handle_api_interrupt, nous_rate_limit_guard, perform_api_call
@@ -353,7 +356,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     if not (messages and messages[-1].get("role") == "assistant"):
         placeholder: Dict[str, Any] = {
             "role": "assistant",
-            "content": "The user is giving me some input.",
+            "content": REDIRECT_PLACEHOLDER_TEXT,
         }
         # Hand back only real reasoning: empty/whitespace-only reasoning_content is dropped
         # at creation time everywhere else (build_assistant_message); keep this path aligned.

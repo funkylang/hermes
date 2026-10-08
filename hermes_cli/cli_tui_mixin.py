@@ -1536,10 +1536,11 @@ class CLITuiMixin:
                     _cprint(f"  {_DIM}{t('cli.tui.steer_failed_queued', error=exc)}{_RST}")
                     accepted = False
                 if accepted:
-                    preview = text[:80] + ("..." if len(text) > 80 else "")
-                    from cli import datetime as _datetime
-                    _ts_suffix = f" {_DIM}{_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
-                    _cprint(f"  {_ACCENT}⏩ Steered: '{preview}'{_RST}{_ts_suffix}")
+                    # Render the steering text as a normal user input box in scrollback,
+                    # consistent with regular submitted messages.
+                    # TEMP-DISABLED for A/B test of regression suspicion:
+                    # self._print_user_message_preview(text)
+                    pass
                 else:
                     _effective_mode = "queue"
         if _effective_mode == "queue":
@@ -1558,18 +1559,10 @@ class CLITuiMixin:
                 except Exception:
                     redirected = False
             if redirected:
-                # Show the redirect message only when NOT in the reasoning phase.
-                # During reasoning, the steering-wait mechanism handles natural completion.
-                in_reasoning_phase = False
-                if self.agent is not None:
-                    current_phase = getattr(self.agent, "_get_streaming_phase", lambda: "inactive")()
-                    in_reasoning_phase = current_phase == "reasoning"
-                
-                if not in_reasoning_phase:
-                    preview = text[:80] + ("..." if len(text) > 80 else "")
-                    from cli import datetime as _datetime
-                    _ts_suffix = f" {_DIM}{_datetime.now().strftime('%H:%M')}{_RST}" if getattr(self, "show_timestamps", False) else ""
-                    _cprint(f"  {_ACCENT}↪ Redirected current turn: '{preview}'{_RST}{_ts_suffix}")
+                # The input echo is intentionally NOT rendered at submit time: the stream is
+                # still live (reasoning box open), so an immediate user box would land mid-box
+                # and look broken. Defer/omit; see steering-wait boundary rendering.
+                pass
                 # Don't queue to interrupt_queue when redirect succeeded - steering-wait handles it
             else:
                 self._interrupt_queue.put(payload)

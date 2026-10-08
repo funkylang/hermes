@@ -3266,6 +3266,9 @@ class _StreamingCall(StreamingWaitMonitor):
                 _close_half_read_stream("steering_wait_complete")
                 # Mark as completed so it's not treated as a dropped stream
                 finish_reason = "stop"
+                # One-shot marker for the CLI: draw the redirect Hermes box at the
+                # stream boundary (after the reasoning box closes, before the next one).
+                agent._steering_wait_ui_announce = True
                 break
             # Not routed to the live display: the transport promotes a sole-payload
             # refusal to content + ``content_filter`` and the loop surfaces it terminally.
