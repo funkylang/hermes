@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import glob
 import os
-import time
 
 
 # Reply capture for debugging interruptions: stores the complete generated output + finish_reason
@@ -59,11 +58,6 @@ def write_reply_capture(content: str | None, finish_reason: str,
                         tool_calls: list | None = None) -> None:
     """Write the complete wire response to /tmp/reply_N.txt for debugging."""
     try:
-        # Debug trace: log every call with key params (isolated dir honors HERMES_REPLY_CAPTURE)
-        with open(os.path.join(reply_capture_dir(), "reply_capture_debug.log"), "a") as _dbg:
-            tc_names = [tc.get('function', {}).get('name', '?') if isinstance(tc, dict) else getattr(getattr(tc, 'function', None), 'name', '?') for tc in (tool_calls or [])]
-            _dbg.write(f"{time.strftime('%H:%M:%S')} content={'Y' if content else 'N'} reasoning={'Y' if reasoning else 'N'} tool_calls={len(tool_calls) if tool_calls else 0} finish={finish_reason}\n")
-
         parts: list[str] = []
         if reasoning:
             parts.append(f"== REASONING ==\n{reasoning}")
