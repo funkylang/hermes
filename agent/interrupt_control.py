@@ -438,39 +438,14 @@ class InterruptControlMixin:
 
                 logger.info("Steering completion wait activated during reasoning phase")
 
-            return True
-
-        elif phase in (InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS, InterruptControlMixin.STREAMING_PHASE_CONTENT):
+            return self.steer(text)
+        else:
             # During tool args or content: queue as steer, let generation complete naturally
             accepted = self.steer(cleaned)
             if accepted:
                 logger.info("Steering queued during %s phase (will deliver after completion)",
                            "tool args" if phase == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS else "content")
             return accepted
-
-        # Fallback: traditional redirect behavior for inactive or unknown phases
-        _model_active = getattr(self, "_model_request_active", None)
-        with _ic_lock(self, "_pending_redirect_lock"):
-            if _model_active is None or not _model_active.is_set():
-                return False  # response completed before we got the lock: surface queues a new turn
-            existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
-            if self._interrupt_requested and not existing:
-                return False
-            self._pending_redirect = (
-                f"{existing}\n\n[Additional user correction]\n{cleaned}" if existing else cleaned
-            )
-            self._interrupt_requested = True
-            self._interrupt_message = None
-
-        # Interrupt only the model request — no fan-out to tool workers / child agents as interrupt() does.
-        _execution_thread_id = getattr(self, "_execution_thread_id", None)
-        if _execution_thread_id is not None:
-            _set_interrupt(True, _execution_thread_id)
-            self._interrupt_thread_signal_pending = False
-        else:
-            self._interrupt_thread_signal_pending = True
-        _ic_abort_active_request(self, "redirect_abort", "Failed to abort request for redirect")
-        return True
 
     def _has_pending_redirect(self) -> bool:
         """Return whether an active-turn redirect is waiting to be applied."""

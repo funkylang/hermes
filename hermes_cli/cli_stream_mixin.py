@@ -418,8 +418,8 @@ class CLIStreamMixin:
             # after the placeholder notice (matches wire order: assistant placeholder, then user).
             # A normal user message gets a second divider from chat() (cli_chat_turn_mixin.py:97);
             # we don't run chat() here, so print it to keep the box looking complete.
-            _echo_text = getattr(self, "_steering_echo_text", None)
-            self._steering_echo_text = None
+            _echo_text = getattr(self.agent, "_pending_steer", None)
+            self.agent._pending_steer = None
             if _echo_text:
                 try:
                     from cli import ChatConsole, _accent_hex, _cprint
