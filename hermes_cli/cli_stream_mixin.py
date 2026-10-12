@@ -658,7 +658,9 @@ class CLIStreamMixin:
             # Header (leading \n mirrors the streaming header so spacing is identical).
             _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
             # Body: wrap placeholder text to the inner width.
-            _text = str(REDIRECT_PLACEHOLDER_TEXT or "")
+            # Replay-parity: read the variant stored on the agent when this steering was
+            # detected (set in chat_completion_helpers) so display matches what is replayed.
+            _text = str(getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT or "")
             _line_width, _line, cur_w = [], "", 0
             for ch in _text:
                 from prompt_toolkit.utils import get_cwidth as _cw

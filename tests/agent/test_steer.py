@@ -476,6 +476,25 @@ class TestEmptyAssistantSanitizerConvergence:
             healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
         )
 
+    def test_stored_redirect_placeholder_variant_matches_replay(self):
+        """Replay-parity: when agent._redirect_placeholder_text is set (chosen at steering-
+        detection time), the persisted/replayed message uses that variant, matching what
+        the live display box shows."""
+        from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXTS, _apply_active_turn_redirect
+
+        for variant in REDIRECT_PLACEHOLDER_TEXTS:
+            agent = _bare_agent()
+            agent._current_streamed_assistant_text = ""
+            agent._redirect_placeholder_text = variant
+            messages = [{"role": "user", "content": "start"}]
+
+            _apply_active_turn_redirect(agent, messages, "Change course.")
+
+            placeholder = messages[-2]
+            assert placeholder["role"] == "assistant"
+            assert placeholder["content"] == variant, (
+                f"Expected {variant!r}, got {placeholder['content']!r}"
+            )
 
     def test_empty_non_final_sanitizer_still_repairs_unmarked_empty_assistant(self):
         """Control: a genuinely empty non-final assistant with no provider-replay
@@ -516,6 +535,41 @@ class TestSteerInjection:
         # the documented legal "user jumped in mid-run" shape.
         # And pending_steer is consumed.
         assert agent._pending_steer is None
+
+    def test_stored_delivered_steer_text_and_none_signal_for_cli_display(self):
+        """When a steer is injected, _delivered_steer_text is set for CLI display and
+        stream_delta_callback(None) is called to trigger the steering box + echo at read time."""
+        agent = _bare_agent()
+
+        # Track whether stream_delta_callback(None) was called
+        none_called = []
+        agent.stream_delta_callback = lambda text: none_called.append(text)
+
+        agent.steer("please also check auth.log")
+        messages = [
+            {"role": "assistant", "tool_calls": [{"id": "a"}]},
+            {"role": "tool", "content": "output", "tool_call_id": "a"},
+        ]
+        agent._apply_pending_steer_to_tool_results(messages, num_tool_msgs=1)
+
+        # Verify _delivered_steer_text is set (CLI will consume this for display)
+        assert getattr(agent, "_delivered_steer_text", None) == "please also check auth.log"
+
+        # Verify stream_delta_callback(None) was called to trigger immediate display
+        assert None in none_called
+
+    def test_no_none_signal_when_no_stream_callback(self):
+        """No exception when stream_delta_callback is not set (None)."""
+        agent = _bare_agent()
+        agent.stream_delta_callback = None  # No streaming callback
+
+        agent.steer("test steer")
+        messages = [
+            {"role": "assistant", "tool_calls": [{"id": "a"}]},
+            {"role": "tool", "content": "output", "tool_call_id": "a"},
+        ]
+        # Should not raise
+        agent._apply_pending_steer_to_tool_results(messages, num_tool_msgs=1)
 
     def test_appended_user_message_is_persistable(self):
         """The appended user dict carries no _DB_PERSISTED_MARKER yet, so the
