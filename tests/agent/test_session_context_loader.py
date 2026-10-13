@@ -45,9 +45,10 @@ class TestGetPreviousSessionContext:
         assert result == []
 
     def test_skips_sessions_with_too_few_messages(self):
+        """DB-level filter excludes small sessions; only eligible ones are returned."""
         mock_db = Mock()
+        # With min_message_count filtering, the DB only returns eligible sessions
         mock_db.list_sessions_rich.return_value = [
-            _session("small-session", 5),  # below min_messages_required=10
             _session("good-session", 30),
         ]
         mock_db.get_messages.return_value = [
@@ -58,9 +59,9 @@ class TestGetPreviousSessionContext:
         result = get_previous_session_context(mock_db, "current-session")
 
         assert len(result) == 2
-        # Must have read the good session, not the small one.
-        mock_db.get_messages.assert_called_once_with(
-            "good-session", limit=50, offset=0, latest=True
+        # Must verify we passed min_message_count to the DB query
+        mock_db.list_sessions_rich.assert_called_once_with(
+            order_by_last_active=True, limit=1, min_message_count=10
         )
 
     def test_includes_both_user_and_assistant_messages(self):
@@ -125,7 +126,7 @@ class TestGetPreviousSessionContext:
 
         assert len(result) == 1
         mock_db.list_sessions_rich.assert_called_once_with(
-            order_by_last_active=True, limit=20
+            order_by_last_active=True, limit=1, min_message_count=10
         )
         # Only the newer session should be probed.
         mock_db.get_messages.assert_called_once()

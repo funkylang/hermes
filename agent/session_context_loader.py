@@ -34,18 +34,22 @@ def get_previous_session_context(
         return []
 
     try:
+        # Filter at database level to avoid scanning through many stub sessions.
+        # limit=1 is sufficient: results are ordered by last_active descending, and we
+        # return on the first eligible session. The current session (0 messages at start)
+        # won't match min_message_count, so no exclusion needed.
         sessions = session_db.list_sessions_rich(
-            order_by_last_active=True, limit=20
+            order_by_last_active=True,
+            limit=1,
+            min_message_count=min_messages_required,
         )
 
         for session in sessions:
             prev_session_id = session.get("id")
-            if not prev_session_id or prev_session_id == current_session_id:
+            if not prev_session_id:
                 continue
 
-            # Check that this session has enough messages to be useful context
-            if (session.get("message_count") or 0) < min_messages_required:
-                continue
+            # All returned sessions have >= min_messages_required messages due to the filter above
 
             # Walk backwards from the newest rows, collecting user/assistant
             # messages that carry real content (raw tails are often tool calls
