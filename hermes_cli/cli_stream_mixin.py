@@ -293,6 +293,9 @@ class CLIStreamMixin:
         _echo_text = agent._drain_pending_steer()
         if not _echo_text:
             return
+        if getattr(agent, "_do_inject_assistant_message", False):
+            self.agent._do_inject_assistant_message = False
+            self._print_steering_placeholder_box(getattr(self, "agent", None))
         try:
             from cli import ChatConsole, _accent_hex, _cprint
             # Blank line above + second divider below mirror the normal submit
@@ -453,24 +456,6 @@ class CLIStreamMixin:
         """
         if text is None:
             self._flush_stream()
-            self._print_steering_placeholder_box(getattr(self, "agent", None))
-            # Steering input echo: draw the user's own steering text as a normal user box,
-            # after the placeholder notice (matches wire order: assistant placeholder, then user).
-            # A normal user message gets a second divider from chat() (cli_chat_turn_mixin.py:97);
-            # we don't run chat() here, so print it to keep the box looking complete.
-            _echo_text = getattr(self.agent, "_pending_steer", None)
-            self.agent._pending_steer = None
-            if _echo_text:
-                try:
-                    from cli import ChatConsole, _accent_hex, _cprint
-                    # Blank line above + second divider below mirror the normal submit
-                    # path (cli_tui_runtime_mixin.py:112-113, cli_chat_turn_mixin.py:97).
-                    _cprint("")
-                    self._print_user_message_preview(_echo_text)
-                    ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
-                except Exception:
-                    # A broken echo must never break the turn.
-                    logging.debug("steering user-echo render failed", exc_info=True)
             self._reset_stream_state()
             return
         if not text:
@@ -592,9 +577,6 @@ class CLIStreamMixin:
             return
         # Close a still-open reasoning box on the first content token so the answer streams
         # token-by-token; _close_reasoning_box renders the reasoning tail first, so ordering holds.
-        # Capture BEFORE closing: if a reasoning box was open, this reply directly follows its
-        # own reasoning (same response) — steering input must not be inserted between them.
-        _reasoning_box_was_open = getattr(self, "_reasoning_box_opened", False)
         self._close_reasoning_box()
         self._close_tool_args_box()  # arguments fully generated: close any live args box
 
@@ -603,9 +585,7 @@ class CLIStreamMixin:
             text = text.lstrip("\n")
             if not text:
                 return
-            # No reasoning right before this reply -> pending steer input shows above it.
-            if not _reasoning_box_was_open:
-                self._print_pending_steer_echo()
+            self._print_pending_steer_echo()
             self._stream_box_opened = True
             self._stream_box_live = True  # header drawn; cleared at the footer
             try:

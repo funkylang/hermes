@@ -438,6 +438,7 @@ class InterruptControlMixin:
 
                 logger.info("Steering completion wait activated during reasoning phase")
 
+            self._do_inject_assistant_message = True
             return self.steer(text)
         else:
             # During tool args or content: queue as steer, let generation complete naturally

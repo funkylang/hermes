@@ -3804,11 +3804,15 @@ def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: in
       persistence never rewrites (replayed histories then diverge from the
       live request bytes and break the provider prompt cache).
     """
+    return
     if num_tool_msgs <= 0 or not messages:
         return
     steer_text = agent._drain_pending_steer()
+    from cli import _cprint
     if not steer_text:
+        _cprint("apply_pending_steer_to_tool_results")
         return
+    _cprint("apply_pending_steer_to_tool_results: " + steer_text)
     # Skip non-tool messages in the tail in case something else is appended at the boundary.
     tail = range(len(messages) - 1, max(len(messages) - num_tool_msgs - 1, -1), -1)
     target = next((messages[j] for j in tail if isinstance(messages[j], dict) and messages[j].get("role") == "tool"), None)
