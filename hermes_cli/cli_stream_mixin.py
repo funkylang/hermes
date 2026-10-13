@@ -592,6 +592,9 @@ class CLIStreamMixin:
             return
         # Close a still-open reasoning box on the first content token so the answer streams
         # token-by-token; _close_reasoning_box renders the reasoning tail first, so ordering holds.
+        # Capture BEFORE closing: if a reasoning box was open, this reply directly follows its
+        # own reasoning (same response) — steering input must not be inserted between them.
+        _reasoning_box_was_open = getattr(self, "_reasoning_box_opened", False)
         self._close_reasoning_box()
         self._close_tool_args_box()  # arguments fully generated: close any live args box
 
@@ -600,6 +603,9 @@ class CLIStreamMixin:
             text = text.lstrip("\n")
             if not text:
                 return
+            # No reasoning right before this reply -> pending steer input shows above it.
+            if not _reasoning_box_was_open:
+                self._print_pending_steer_echo()
             self._stream_box_opened = True
             self._stream_box_live = True  # header drawn; cleared at the footer
             try:
