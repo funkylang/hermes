@@ -1,6 +1,3 @@
-.DS_Store
-/venv/
-/venv.old/
 /venv.stale.runtime-*/
 /bin/
 /.hermes-runtime/
@@ -323,8 +320,3 @@ native/fts5_cjk/*.so
 
 apps/desktop/.dist-build*
 
-# OTHER
-
-.bzr
-.bzrignore
-improve
