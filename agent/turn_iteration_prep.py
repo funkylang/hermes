@@ -230,6 +230,9 @@ def prepare_iteration(
             current_turn_user_idx, _reanchored_idx, agent.session_id or "-",
         )
         current_turn_user_idx = _reanchored_idx
+    # Fresh reference for mid-turn consumers (CLI steering echo): this is the exact list the
+    # upcoming request builds on, updated every iteration so compaction rebuilds can't stale it.
+    agent._messages = messages
     return IterationPrep(
         action="fallthrough", messages=messages, request_logger=request_logger,
         current_turn_user_idx=current_turn_user_idx,
