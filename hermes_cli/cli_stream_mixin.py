@@ -435,7 +435,9 @@ class CLIStreamMixin:
         if not getattr(self, "_reasoning_box_opened", False):
             return
         # Print any remaining text in the line buffer (partial line that didn't get printed)
-        line_buf = getattr(self, "_line_buf", "")
+        # Strip trailing newlines: a steering-forced close right after a token ending in \n\n
+        # otherwise flushes a bare newline here, rendering a blank line inside the box.
+        line_buf = getattr(self, "_line_buf", "").rstrip("\n")
         if line_buf:
             _cprint(f"{_DIM}{line_buf}{_RST}")
             self._line_buf = ""
