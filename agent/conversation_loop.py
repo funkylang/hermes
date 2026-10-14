@@ -340,6 +340,48 @@ def _moa_reference_metrics_for_hook(agent: Any) -> Any:
 
 
 def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
+    if True:
+        # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw
+        # chain-of-thought never enters replayable content; the interruption scaffold is replay
+        # text carried only in the user correction's ``api_content``; an on-screen-empty
+        # placeholder is ``display_kind=hidden``.
+        visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
+
+        checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
+        if is_runaway_repetition(visible):
+            # Runaway shape only (a correct batch-style partial stays replayable): the looped bytes must
+            # reach neither the replayed correction nor the placeholder below (empty ``visible`` takes
+            # the hidden shape).
+            checkpoint_parts.append(REPETITION_LOOP_INTERRUPTED)
+            visible = ""
+        elif visible:
+            checkpoint_parts += ["Visible response before the interruption:", visible]
+        checkpoint = "\n\n".join(checkpoint_parts)
+        correction = f"[Context from the interrupted assistant response]\n{checkpoint}\n\n{text}"
+
+        # The live tail is normally user or tool, so an assistant placeholder + correction
+        # keeps strict alternation; if the tail is already assistant, the checkpoint is folded
+        # into the user correction instead of creating assistant→assistant. The placeholder
+        # preserves alternation only — scaffold bytes must never land in it, since api_content
+        # is substituted back into content on replay (#81841).
+        if not (messages and messages[-1].get("role") == "assistant"):
+            placeholder: Dict[str, Any] = {"role": "assistant", "content": visible or ""}
+            if not visible:
+                placeholder["display_kind"] = "hidden"
+                # Hidden row, but a non-empty neutral api_content so the pre-call sanitizer
+                # does not re-heal it every call (#88955). Never _INTERRUPT_SCAFFOLD_MARKER:
+                # as assistant text the model echoes it (#81841).
+                from agent.agent_runtime_helpers import _INTERRUPTED_PLACEHOLDER
+                placeholder["api_content"] = _INTERRUPTED_PLACEHOLDER
+            append_message(messages, placeholder)
+        # Transcript shows the user's own words; the provider replays the scaffolded form.
+        append_message(messages, {"role": "user", "content": text, "api_content": correction})
+
+        agent._current_streamed_assistant_text = ""
+        agent._stream_needs_break = True
+        return
+
+    # OUR steering-wait variant (parked behind the flag above)
     """Append an assistant placeholder plus the user's correction to the live turn so role
     alternation holds and cached messages stay byte-identical.
 

@@ -413,40 +413,68 @@ class InterruptControlMixin:
                         _request_yield(tid)
             return accepted
 
-        # Phase-aware steering during model requests
-        phase = self._get_streaming_phase()
-
-        if phase == InterruptControlMixin.STREAMING_PHASE_REASONING:
-            # During reasoning: set flag to wait for natural completion instead of aborting
+        if True:
+            # Upstream immediate-abort redirect handling (restored): cancel only the in-flight
+            # model request; the loop appends partial context + correction and retries.
+            _model_active = getattr(self, "_model_request_active", None)
             with _ic_lock(self, "_pending_redirect_lock"):
+                if _model_active is None or not _model_active.is_set():
+                    return False  # response completed before we got the lock: surface queues a new turn
                 existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
                 if self._interrupt_requested and not existing:
                     return False
-
                 self._pending_redirect = (
                     f"{existing}\n\n[Additional user correction]\n{cleaned}" if existing else cleaned
                 )
+                self._interrupt_requested = True
+                self._interrupt_message = None
 
-                # Set steering completion wait flag (don't set _interrupt_requested or abort)
-                self._steer_completion_wait_active = True
-                self._steer_completion_deadline = time.time() + 30.0
-
-                # Reset streaming reasoning text so only NEWLY ARRIVED text after the steer
-                # counts toward the newline check. This prevents immediate completion due to
-                # pre-existing newlines from before the interrupt.
-                self._reset_streaming_reasoning_text()
-
-                logger.info("Steering completion wait activated during reasoning phase")
-
-            self._do_inject_assistant_message = True
-            return self.steer(text)
+            # Interrupt only the model request — no fan-out to tool workers / child agents as interrupt() does.
+            _execution_thread_id = getattr(self, "_execution_thread_id", None)
+            if _execution_thread_id is not None:
+                _set_interrupt(True, _execution_thread_id)
+                self._interrupt_thread_signal_pending = False
+            else:
+                self._interrupt_thread_signal_pending = True
+            _ic_abort_active_request(self, "redirect_abort", "Failed to abort request for redirect")
+            return True
         else:
-            # During tool args or content: queue as steer, let generation complete naturally
-            accepted = self.steer(cleaned)
-            if accepted:
-                logger.info("Steering queued during %s phase (will deliver after completion)",
-                           "tool args" if phase == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS else "content")
-            return accepted
+            # OUR phase-aware steering-wait (parked behind the flag above)
+            # Phase-aware steering during model requests
+            phase = self._get_streaming_phase()
+
+            if phase == InterruptControlMixin.STREAMING_PHASE_REASONING:
+                # During reasoning: set flag to wait for natural completion instead of aborting
+                with _ic_lock(self, "_pending_redirect_lock"):
+                    existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
+                    if self._interrupt_requested and not existing:
+                        return False
+
+                    self._pending_redirect = (
+                        f"{existing}\n\n[Additional user correction]\n{cleaned}" if existing else cleaned
+                    )
+
+                    # Set steering completion wait flag (don't set _interrupt_requested or abort)
+                    self._steer_completion_wait_active = True
+                    self._steer_completion_deadline = time.time() + 30.0
+
+                    # Reset streaming reasoning text so only NEWLY ARRIVED text after the steer
+                    # counts toward the newline check. This prevents immediate completion due to
+                    # pre-existing newlines from before the interrupt.
+                    self._reset_streaming_reasoning_text()
+
+                    logger.info("Steering completion wait activated during reasoning phase")
+
+                #self._do_inject_assistant_message = True
+                #return self.steer(text)
+                return True
+            else:
+                # During tool args or content: queue as steer, let generation complete naturally
+                accepted = self.steer(cleaned)
+                if accepted:
+                    logger.info("Steering queued during %s phase (will deliver after completion)",
+                               "tool args" if phase == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS else "content")
+                return accepted
 
     def _has_pending_redirect(self) -> bool:
         """Return whether an active-turn redirect is waiting to be applied."""
