@@ -53,9 +53,10 @@ class CLIInitMixin:
             enabled=display.get("persistent_output", True),
             max_lines=display.get("persistent_output_max_lines", 200),
         )
-        # busy_input_mode: "interrupt" (redirect the run) | "queue" (next turn) | "steer" (inject mid-run).
-        _bim = str(display.get("busy_input_mode", "interrupt")).strip().lower()
-        self.busy_input_mode = _bim if _bim in ("queue", "steer") else "interrupt"
+        # busy_input_mode: "smart" (default; our mode) | "interrupt" (redirect the run) |
+        # "queue" (next turn) | "steer" (inject mid-run). Unknown values fall back to the default.
+        _bim = str(display.get("busy_input_mode", "smart")).strip().lower()
+        self.busy_input_mode = _bim if _bim in ("smart", "interrupt", "queue", "steer") else "smart"
 
         # verbose ONLY controls global DEBUG logging; tool_progress="verbose" is independent
         # (coupling them spewed every module's DEBUG logs to the console).

@@ -94,7 +94,7 @@ _OFF_WORDS = {"off", "disable", "false", "0"}
 
 # /busy modes; what Enter does while Hermes is working lives in the catalog as
 # ``cli.commands.busy.short_<mode>`` (status line) / ``long_<mode>`` (post-set explanation).
-_BUSY_MODES = ("queue", "steer", "interrupt")
+_BUSY_MODES = ("smart", "queue", "steer", "interrupt")
 
 # /fast argument -> (service_tier value, persisted config value)
 _FAST_TIERS = {
@@ -2317,11 +2317,11 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                             scope=_scope_outcome(explicit_global, saved))))
 
     def _handle_busy_command(self, cmd: str):
-        """Handle /busy [status|queue|steer|interrupt] — what Enter does while Hermes is working."""
+        """Handle /busy [status|smart|queue|steer|interrupt] — what Enter does while Hermes is working."""
         arg = _command_arg(cmd, lower=True)
         usage = _dim_line(_t("busy.usage"))
         if not arg or arg == "status":
-            mode = self.busy_input_mode if self.busy_input_mode in _BUSY_MODES else "interrupt"
+            mode = self.busy_input_mode if self.busy_input_mode in _BUSY_MODES else "smart"
             return _cp(_accent_line(_t("busy.status", mode=self.busy_input_mode)),
                        _dim_line(_t("busy.enter_while_busy", behavior=_t(f"busy.short_{mode}"))), usage)
         if arg not in _BUSY_MODES:
