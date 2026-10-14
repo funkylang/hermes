@@ -1,9 +1,9 @@
 name: Build Skills Index
 
 on:
-  schedule:
-    # Run twice daily: 6 AM and 6 PM UTC
-    - cron: "0 6,18 * * *"
+  # schedule:
+  #   # Run twice daily: 6 AM and 6 PM UTC
+  #   - cron: "0 6,18 * * *"
   workflow_dispatch: # Manual trigger
   push:
     branches: [main]
