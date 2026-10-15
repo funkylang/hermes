@@ -1548,14 +1548,14 @@ class CLITuiMixin:
             preview = text if text else _tn("cli.tui.images_attached_preview", len(images))
             preview = preview[:80] + ('...' if len(preview) > 80 else '')
             _cprint("  " + t("cli.tui.queued_next_turn", preview=preview))
-        elif _effective_mode == "interrupt":
+        elif _effective_mode in ("interrupt", "smart"):
             if not images and text:
                 try:
                     if (
                         self.agent is not None
                         and getattr(self.agent, "_supports_active_turn_redirect", False) is True
                         and hasattr(self.agent, "redirect")):
-                        redirected = bool(self.agent.redirect(text))
+                        redirected = bool(self.agent.redirect(text, busy_input_mode=self.busy_input_mode))
                 except Exception:
                     redirected = False
             if True:

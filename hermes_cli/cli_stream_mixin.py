@@ -280,24 +280,41 @@ class CLIStreamMixin:
         text = str(user_input or "")
         ChatConsole().print(self._format_submitted_user_message_preview(text))
 
-    def _print_pending_steer_echo(self) -> None:
-        """If steering text is pending, draw it as a user input box (consumes the slot).
+    def _print_pending_redirection(self) -> None:
+        """If steering/redirect text is pending, draw it as a user input box.
 
         Called at stream-box open sites (reasoning header / response header) so the user's
         mid-turn message appears on screen in wire order, before the new stream draws.
-        One-shot: _drain_pending_steer clears the slot, so only one site renders it.
+        Only invoked in "smart" busy-input mode (guards at the call sites).
+
+        Data sources, in priority order:
+          1. _pending_redirect — a mid-turn correction; additionally draws the
+             injected-assistant box before the user row.
+          2. _pending_steer — a steer.
+        Both are delivered with the same plain user-row logic below.
         """
+        # TEMP-INSTRUMENTATION: trace when this echo site fires (fork-only, remove before commit).
+        try:
+            from cli import _cprint
+            _cprint("  [DEBUG steer-echo] _print_pending_redirection called")
+        except Exception:
+            pass
         agent = getattr(self, "agent", None)
         if agent is None or not hasattr(agent, "_drain_pending_steer"):
             return
-        _echo_text = agent._drain_pending_steer()
+
+        # Redirect correction takes priority; steer text otherwise. The redirect
+        # source additionally draws the injected-assistant box before the user row.
+        _echo_text = agent._drain_pending_redirect()
+        _is_redirect = bool(_echo_text)
+        if not _echo_text:
+            _echo_text = agent._drain_pending_steer()
         if not _echo_text:
             return
-        if getattr(agent, "_do_inject_assistant_message", False):
-            self.agent._do_inject_assistant_message = False
-            self._print_steering_placeholder_box(getattr(self, "agent", None))
         try:
             from cli import ChatConsole, _accent_hex, _cprint
+            if _is_redirect:
+                self._print_injected_assistant_box(agent)
             # Blank line above + second divider below mirror the normal submit
             # path (cli_tui_runtime_mixin.py:112-113, cli_chat_turn_mixin.py:97).
             _cprint("")
@@ -338,7 +355,8 @@ class CLIStreamMixin:
             return
         box_width = self._scrollback_box_width()
         if not getattr(self, "_reasoning_box_opened", False):
-            self._print_pending_steer_echo()  # show pending steer input above the reasoning box
+            if self.busy_input_mode == "smart":
+                self._print_pending_redirection()  # show pending steer input above the reasoning box
             self._reasoning_box_opened = True
             r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
             r_fill = box_width - 2 - len(r_label)
@@ -587,7 +605,8 @@ class CLIStreamMixin:
             text = text.lstrip("\n")
             if not text:
                 return
-            self._print_pending_steer_echo()
+            if self.busy_input_mode == "smart":
+                self._print_pending_redirection()
             self._stream_box_opened = True
             self._stream_box_live = True  # header drawn; cleared at the footer
             try:
@@ -648,7 +667,7 @@ class CLIStreamMixin:
             except Exception:
                 pass
 
-    def _print_steering_placeholder_box(self, agent) -> None:
+    def _print_injected_assistant_box(self, agent) -> None:
         """At a steering-redirect stream boundary, draw the redirect notice in a Hermes box.
 
         Reuses the standard completed-response-box look (header + colored body + footer via

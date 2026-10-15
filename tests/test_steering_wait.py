@@ -166,50 +166,41 @@ class TestRedirectSteeringBehavior:
     """Test redirect behavior based on streaming phase."""
     
     def test_redirect_during_reasoning_waits(self):
-        """Redirect during reasoning should set steering wait, not abort."""
+        """Redirect in smart mode during reasoning should set steering wait, not abort."""
         agent = make_test_agent()
         
         # Set up as if we're during reasoning
         agent._set_streaming_phase(STREAMING_PHASE_REASONING)
         agent._executing_tools = False
+        agent._execution_thread_id = None
         agent._model_request_active = Mock()
         agent._model_request_active.is_set.return_value = True
         
-        # Redirect should succeed and set steering wait
-        result = agent.redirect("please change direction")
+        # Redirect in smart mode should succeed and set steering wait
+        result = agent.redirect("please change direction", busy_input_mode="smart")
         
         assert result is True
         assert agent._steer_completion_wait_active
         assert "please change direction" in (agent._pending_redirect or "")
-    
-    def test_redirect_during_content_uses_steer(self):
-        """Redirect during content should queue as steer."""
+
+    def test_redirect_outside_smart_reasoning_aborts(self):
+        """Redirect in any other situation uses the upstream immediate-abort path."""
         agent = make_test_agent()
         
-        # Set up as if we're during content
+        # Set up as if we're during content (not smart+reasoning)
         agent._set_streaming_phase(STREAMING_PHASE_CONTENT)
         agent._executing_tools = False
+        agent._execution_thread_id = None
         agent._model_request_active = Mock()
         agent._model_request_active.is_set.return_value = True
         
-        # Configure steer to return True (it's a bound method on the Mock)
-        # But first, we need to make sure it properly sets _pending_steer
-        original_steer_result = []
-        
-        def mock_steer(text):
-            agent._pending_steer = text
-            original_steer_result.append(True)
-            return True
-        
-        # Bind the mock steer method
-        agent.steer = mock_steer
-        
-        # Redirect should queue as steer
-        result = agent.redirect("please change direction")
+        result = agent.redirect("please change direction", busy_input_mode="smart")
         
         assert result is True
-        # Should have gone through steer path
-        assert "please change direction" in (agent._pending_steer or "")
+        # Upstream abort path: interrupt requested, steering wait NOT armed
+        assert agent._interrupt_requested
+        assert not getattr(agent, "_steer_completion_wait_active", False)
+        assert "please change direction" in (agent._pending_redirect or "")
 
 
 class TestClearSteeringWaitMarkers:

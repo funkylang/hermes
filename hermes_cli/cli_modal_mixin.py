@@ -170,7 +170,7 @@ class CLIModalMixin:
         if self._agent_running:
             # Agent busy → honour the configured busy-input behaviour (interrupt/steer remain
             # reachable via the normal Enter path).
-            if self.busy_input_mode == "interrupt":
+            if self.busy_input_mode in ("interrupt", "smart"):
                 self._interrupt_queue.put(text)
             else:
                 self._pending_input.put(text)
