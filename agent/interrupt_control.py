@@ -417,7 +417,6 @@ class InterruptControlMixin:
                 # no decoration (checked first in _apply_active_turn_redirect).
                 self._smart_steer_pending = True
 
-            logger.info(f"Steering deferred (smart mode): _executing_tools={getattr(self, '_executing_tools', False)}, streaming_phase={self._get_streaming_phase()}")
             return True
 
         # Never kill a tool to deliver guidance; the steer drain puts it on the final tool result.
