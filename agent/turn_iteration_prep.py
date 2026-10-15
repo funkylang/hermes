@@ -359,7 +359,12 @@ def begin_iteration(
     if _redirect_text:
         _apply_active_turn_redirect(agent, messages, _redirect_text)
         # Stash for the smart-mode display path's one-shot echo (box + user row).
-        agent._steer_echo_text = _redirect_text
+        # Append, never replace: a steer sent while this request is already in flight
+        # reaches this line on the next begin_iteration BEFORE the first echo is read,
+        # and its text only lands here via _pending_redirect — replacing would silently
+        # drop everything stashed before it (only the last redirect was shown).
+        _prev_echo = getattr(agent, "_steer_echo_text", None) or ""
+        agent._steer_echo_text = f"{_prev_echo}\n\n{_redirect_text}" if _prev_echo else _redirect_text
         if isinstance(original_user_message, str):
             original_user_message = (
                 f"{original_user_message}\n\n" f"User correction during the turn: {_redirect_text}"
