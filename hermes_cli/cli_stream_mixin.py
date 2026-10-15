@@ -303,10 +303,12 @@ class CLIStreamMixin:
         if agent is None or not hasattr(agent, "_drain_pending_steer"):
             return
 
-        # Redirect correction takes priority; steer text otherwise. The redirect
-        # source additionally draws the injected-assistant box before the user row.
-        _echo_text = agent._drain_pending_redirect()
+        # Redirect corrections are consumed early by begin_iteration (wire delivery); it stashes
+        # the text there for this one-shot echo. Steer text we still drain + deliver ourselves.
+        _echo_text = getattr(agent, "_steer_echo_text", None)
         _is_redirect = bool(_echo_text)
+        if _is_redirect:
+            agent._steer_echo_text = None
         if not _echo_text:
             _echo_text = agent._drain_pending_steer()
         if not _echo_text:
@@ -329,15 +331,18 @@ class CLIStreamMixin:
         # steer marker): our display path owns this steering, and after a tool result the tail
         # is role-alternation-safe. If the tail isn't a tool message we can't guarantee that,
         # so hand it back for the agent's pre-API drain to place.
-        try:
-            from agent.agent_runtime_helpers import _requeue_pending_steer
-            messages = getattr(agent, "_messages", None)
-            if isinstance(messages, list) and len(messages) >= 1 and messages[-1].get("role") != "user":
-                messages.append({"role": "user", "content": _echo_text})
-            else:
-                _requeue_pending_steer(agent, _echo_text)
-        except Exception:
-            logging.debug("steering user-row delivery failed", exc_info=True)
+        # Steer text is delivered to messages HERE; redirected text was already delivered by
+        # begin_iteration (stashed above only for this echo) — never append it twice.
+        if not _is_redirect:
+            try:
+                from agent.agent_runtime_helpers import _requeue_pending_steer
+                messages = getattr(agent, "_messages", None)
+                if isinstance(messages, list) and len(messages) >= 1 and messages[-1].get("role") != "user":
+                    messages.append({"role": "user", "content": _echo_text})
+                else:
+                    _requeue_pending_steer(agent, _echo_text)
+            except Exception:
+                logging.debug("steering user-row delivery failed", exc_info=True)
 
     def _stream_reasoning_delta(self, text: str) -> None:
         """Stream reasoning tokens into a dim box above the response.
@@ -707,7 +712,9 @@ class CLIStreamMixin:
             # Body: wrap placeholder text to the inner width.
             # Replay-parity: read the variant stored on the agent when this steering was
             # detected (set in chat_completion_helpers) so display matches what is replayed.
-            _text = str(getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT or "")
+            # Display-only tag: mark the injected notice as such on screen; the wire row
+            # (interrupt_control.redirect) stores the untagged text.
+            _text = "INJECTED: " + str(getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT or "")
             _line_width, _line, cur_w = [], "", 0
             for ch in _text:
                 from prompt_toolkit.utils import get_cwidth as _cw

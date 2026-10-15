@@ -358,6 +358,8 @@ def begin_iteration(
     _redirect_text = agent._drain_pending_redirect()
     if _redirect_text:
         _apply_active_turn_redirect(agent, messages, _redirect_text)
+        # Stash for the smart-mode display path's one-shot echo (box + user row).
+        agent._steer_echo_text = _redirect_text
         if isinstance(original_user_message, str):
             original_user_message = (
                 f"{original_user_message}\n\n" f"User correction during the turn: {_redirect_text}"
