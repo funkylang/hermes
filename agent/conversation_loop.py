@@ -340,11 +340,6 @@ def _moa_reference_metrics_for_hook(agent: Any) -> Any:
 
 
 def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
-    # DEBUG: Track smart steer pending status
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"_apply_active_turn_redirect: _smart_steer_pending={getattr(agent, '_smart_steer_pending', False)}")
-
     # Smart-mode tool-phase steering (queued in redirect() while tools ran or args streamed):
     # plain user row after the batch — no assistant placeholder, no api_content decoration.
     # assistant(tool_calls) → tool* → user is the documented alternation-safe "user jumped in
@@ -367,7 +362,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     if not getattr(agent, "_steering_wait_completed", False):
         visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
 
-        if True:  # EXPERIMENTAL (2026-10-15): no assistant placeholder, no api_content decoration — plain user row only.
+        if getattr(agent, "_smart_steer_active", False):  # CLI + /busy smart: no assistant placeholder, no api_content decoration — plain user row only.
             # Tail is normally tool/assistant here, so user-after-batch is alternation-safe (#88955 pre-call sanitizer heals the rest).
             append_message(messages, {"role": "user", "content": text})
         else:  # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw chain-of-thought never enters replayable content; the interruption scaffold is replay text carried only in the user correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``.

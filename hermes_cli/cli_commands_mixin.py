@@ -2327,6 +2327,9 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         if arg not in _BUSY_MODES:
             return _cp(_dim_line(_t("shared.unknown_argument", arg=arg)), usage)
         self.busy_input_mode = arg
+        # Keep the agent's smart-steer capability flag in sync with the live mode change.
+        if getattr(self, "agent", None) is not None:
+            self.agent._smart_steer_active = arg == "smart"
         _persist_display_choice("display.busy_input_mode", arg, _t("busy.label"), _t(f"busy.long_{arg}"))
 
     def _handle_indicator_command(self, cmd: str):
