@@ -266,8 +266,6 @@ def _previous_tool_round(messages: Any) -> list:
 def _inject_steer_after_newest_tool_result(agent: Any, messages: Any, steer_text: str) -> None:
     """Append the steer marker as a standalone user row after the newest tool message; with no
     tool message, put the text back so the post-tool-execution drain delivers it later."""
-    from cli import _cprint
-    _cprint("_inject_steer_after_newest_tool_result: " + steer_text)
     for _si in range(len(messages) - 1, -1, -1):
         _sm = messages[_si]
         if isinstance(_sm, dict) and _sm.get("role") == "tool":

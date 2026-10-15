@@ -293,12 +293,6 @@ class CLIStreamMixin:
           2. _pending_steer — a steer.
         Both are delivered with the same plain user-row logic below.
         """
-        # TEMP-INSTRUMENTATION: trace when this echo site fires (fork-only, remove before commit).
-        try:
-            from cli import _cprint
-            _cprint("  [DEBUG steer-echo] _print_pending_redirection called")
-        except Exception:
-            pass
         agent = getattr(self, "agent", None)
         if agent is None or not hasattr(agent, "_drain_pending_steer"):
             return
@@ -712,9 +706,7 @@ class CLIStreamMixin:
             # Body: wrap placeholder text to the inner width.
             # Replay-parity: read the variant stored on the agent when this steering was
             # detected (set in chat_completion_helpers) so display matches what is replayed.
-            # Display-only tag: mark the injected notice as such on screen; the wire row
-            # (interrupt_control.redirect) stores the untagged text.
-            _text = "INJECTED: " + str(getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT or "")
+            _text = str(getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT or "")
             _line_width, _line, cur_w = [], "", 0
             for ch in _text:
                 from prompt_toolkit.utils import get_cwidth as _cw
