@@ -146,10 +146,14 @@ def perform_api_call(
         with _bracket:
             if _model_request_active is not None:
                 _model_request_active.clear()
+            # Smart-mode tool-phase deferral (set by redirect()) queued the correction for the
+            # NEXT iteration instead of aborting this call: the in-flight response is still valid,
+            # let it fall through so tools run; begin_iteration consumes the correction after.
+            _smart_deferred = getattr(agent, "_smart_steer_pending", False)
             _redirect_crossed_response = (
                 bool(agent._pending_redirect) if _redirect_lock is not None
                 else agent._has_pending_redirect()
-            )
+            ) and not _smart_deferred
     if _redirect_crossed_response:
         # Response and redirect can cross threads: discard the now-stale
         # response and rebuild from the correction rather than lose it.

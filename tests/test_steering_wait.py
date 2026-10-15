@@ -203,6 +203,95 @@ class TestRedirectSteeringBehavior:
         assert "please change direction" in (agent._pending_redirect or "")
 
 
+class TestSmartSteerToolPhase:
+    """Smart mode deferral during tool execution / args streaming (no interrupt)."""
+
+    def test_redirect_during_tool_execution_defers(self):
+        """Smart + tools executing: defer via _pending_redirect, no abort, no steer()."""
+        agent = make_test_agent()
+        agent._executing_tools = True
+        agent._set_streaming_phase(STREAMING_PHASE_INACTIVE)
+
+        result = agent.redirect("steer one", busy_input_mode="smart")
+
+        assert result is True
+        assert agent._pending_redirect == "steer one"
+        assert agent._smart_steer_pending is True
+        assert not agent._interrupt_requested
+        # steer() must not be touched (dead mechanism) — its Mock attr stays un-called text-wise
+        assert agent._pending_steer is None
+
+    def test_redirect_during_tool_args_defers(self):
+        """Smart + args streaming: same deferral, stream left to finish."""
+        agent = make_test_agent()
+        agent._executing_tools = False
+        agent._set_streaming_phase(STREAMING_PHASE_TOOL_ARGS)
+
+        result = agent.redirect("steer one", busy_input_mode="smart")
+
+        assert result is True
+        assert agent._pending_redirect == "steer one"
+        assert agent._smart_steer_pending is True
+        assert not agent._interrupt_requested
+
+    def test_smart_steers_append_plainly(self):
+        """Multiple smart-mode steers concatenate with a plain newline (no decoration)."""
+        agent = make_test_agent()
+        agent._executing_tools = True
+
+        agent.redirect("first", busy_input_mode="smart")
+        agent.redirect("second", busy_input_mode="smart")
+
+        assert agent._pending_redirect == "first\nsecond"
+        assert agent._smart_steer_pending is True
+
+
+class TestSmartSteerConsumption:
+    """_apply_active_turn_redirect must emit a plain user row for smart tool-phase steers."""
+
+    def _consume(self, agent, messages, text):
+        from agent.conversation_loop import _apply_active_turn_redirect
+        _apply_active_turn_redirect(agent, messages, text)
+
+    def test_plain_user_row_after_tools(self):
+        """No assistant placeholder, no api_content decoration; text stays verbatim."""
+        agent = make_test_agent()
+        agent._smart_steer_pending = True
+        agent._current_streamed_assistant_text = ""
+        messages = [
+            {"role": "user", "content": "do X"},
+            {"role": "assistant", "content": "", "tool_calls": []},
+            {"role": "tool", "content": "result 1"},
+            {"role": "tool", "content": "result 2"},
+        ]
+
+        self._consume(agent, messages, "steer text")
+
+        # Flag cleared once consumed
+        assert not agent._smart_steer_pending
+        last = messages[-1]
+        assert last["role"] == "user"
+        assert last["content"] == "steer text"
+        assert len(messages) == 5  # exactly one row added (the user steer)
+        # No decoration sneaked in anywhere
+        for m in messages:
+            assert "[Context from the interrupted assistant response]" not in str(m.get("content", ""))
+            assert "api_content" not in m
+
+    def test_multiple_concatenated_steers_single_row(self):
+        """Pre-concatenated steers land as ONE user row."""
+        agent = make_test_agent()
+        agent._smart_steer_pending = True
+        messages = [{"role": "tool", "content": "r"}]
+
+        self._consume(agent, messages, "first\nsecond")
+
+        assert len(messages) == 2
+        last = messages[-1]
+        assert last["role"] == "user"
+        assert last["content"] == "first\nsecond"
+
+
 class TestClearSteeringWaitMarkers:
     """Test clearing steering wait state after consumption."""
     

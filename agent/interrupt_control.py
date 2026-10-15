@@ -376,10 +376,13 @@ class InterruptControlMixin:
         correction is appended as a real user message, the loop retries); during tool execution it degrades
         to ``steer()``; Codex app-server uses native ``turn/steer``. False when no live turn / empty text.
 
-        Phase-aware behavior:
+        # Phase-aware behavior:
         - busy_input_mode "smart" + reasoning phase: wait for a newline boundary in the reasoning
           (graceful stop via chat_completion_helpers), correction delivered through _pending_redirect
+        - busy_input_mode "smart" + tool execution / args streaming: no interrupt; correction rides
+          _pending_redirect until the batch completes, injected after the last tool result
         - all other phases/modes: upstream immediate-abort of the model request
+        Smart-mode steers concatenate plainly (no decoration) in _pending_redirect.
         """
 
         if not text or not text.strip():
@@ -396,6 +399,26 @@ class InterruptControlMixin:
             except Exception:
                 logger.debug("Codex app-server turn/steer failed", exc_info=True)
                 return False
+
+        # smart mode + tool execution / args streaming: defer steering until batch completes. The
+        # correction rides _pending_redirect with a consumption marker; begin_iteration injects it
+        # after the last tool result so it is wire-delivered as input for the next reasoning phase.
+        # Multiple steers concatenate plainly (no decoration) in smart mode.
+        if busy_input_mode == "smart" and (
+            getattr(self, "_executing_tools", False)
+            or self._get_streaming_phase() == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS
+        ):
+            with _ic_lock(self, "_pending_redirect_lock"):
+                existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
+                if self._interrupt_requested and not existing:
+                    return False
+                self._pending_redirect = (existing + "\n" + cleaned) if existing else cleaned
+                # Consumption marker: plain user row after the batch, no placeholder,
+                # no decoration (checked first in _apply_active_turn_redirect).
+                self._smart_steer_pending = True
+
+            logger.info(f"Steering deferred (smart mode): _executing_tools={getattr(self, '_executing_tools', False)}, streaming_phase={self._get_streaming_phase()}")
+            return True
 
         # Never kill a tool to deliver guidance; the steer drain puts it on the final tool result.
         # A foreground terminal command would park that delivery until it exits (a 5-minute
@@ -421,9 +444,7 @@ class InterruptControlMixin:
                 existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
                 if self._interrupt_requested and not existing:
                     return False
-                self._pending_redirect = (
-                    f"{existing}\n\n[Additional user correction]\n{cleaned}" if existing else cleaned
-                )
+                self._pending_redirect = (existing + "\n" + cleaned) if existing else cleaned
                 # Set steering completion wait flag (don't set _interrupt_requested or abort)
                 self._steer_completion_wait_active = True
                 self._steer_completion_deadline = time.time() + 30.0
