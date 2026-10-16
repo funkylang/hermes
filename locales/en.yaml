@@ -2680,6 +2680,7 @@ cli:
     thinking_more_lines: "... ({count} more lines)"
     preview_more_lines_one: "... (+{count} more line)"
     preview_more_lines_other: "... (+{count} more lines)"
+    user_label: "User"
     vision_analyzing: "👁️  analyzing {name} ({size_kb}KB)..."
     vision_analyzed: "✓ image analyzed"
     vision_failed: "⚠ vision analysis failed — path included for retry"

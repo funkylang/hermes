@@ -220,14 +220,10 @@ class CLIStreamMixin:
             self._emit_reasoning_preview(flush_text)
 
     def _format_submitted_user_message_preview(self, user_input: str) -> str:
-        """Format the submitted user-message scrollback preview."""
-        from cli import _accent_hex, datetime
-        ts_suffix = (
-            f" [dim]{datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))}[/]"
-            if getattr(self, "show_timestamps", False) else "")
+        """Format the submitted user-message scrollback preview (content only)."""
         lines = user_input.split("\n")
         if len(lines) <= 1:
-            return f"[bold {_accent_hex()}]●[/] [bold]{_escape(user_input)}[/]{ts_suffix}"
+            return f"[bold]{_escape(user_input)}[/]"
 
         first_lines = max(1, int(getattr(self, "user_message_preview_first_lines", 2)))
         last_lines = max(0, int(getattr(self, "user_message_preview_last_lines", 2)))
@@ -239,8 +235,7 @@ class CLIStreamMixin:
             hidden_middle_count = 0
             tail = []
 
-        preview_lines = [f"[bold {_accent_hex()}]●[/] [bold]{_escape(head[0])}[/]{ts_suffix}"]
-        preview_lines.extend(f"[bold]{_escape(line)}[/]" for line in head[1:])
+        preview_lines = [f"[bold]{_escape(line)}[/]" for line in head]
         if hidden_middle_count > 0:
             key = "cli.stream.preview_more_lines_one" if hidden_middle_count == 1 else "cli.stream.preview_more_lines_other"
             preview_lines.append(f"[dim]{_escape(t(key, count=hidden_middle_count))}[/]")
@@ -267,6 +262,18 @@ class CLIStreamMixin:
 
         return paste_ref_re.sub(_expand_ref, text)
 
+    def _user_header_line(self) -> str:
+        """Divider-with-label used as the top border of a user message box."""
+        from cli import datetime, _accent_hex
+        label = t("cli.stream.user_label")
+        ts = datetime.now().strftime(getattr(self, "timestamp_format", "%H:%M")) \
+            if getattr(self, "show_timestamps", False) else None
+        inner = f" {label} {ts} " if ts else f" {label} "
+        total_width = 40  # matches the plain divider width used elsewhere
+        left = 5
+        right = max(0, total_width - left - len(inner))
+        return f"[{_accent_hex()}]{'─' * left}{inner}{'─' * right}[/]"
+
     def _print_user_message_preview(self, user_input: str) -> None:
         """Render a user message using the normal chat scrollback style."""
         from cli import ChatConsole, _accent_hex
@@ -276,7 +283,7 @@ class CLIStreamMixin:
             render_notification(lambda: ChatConsole().print(f"[dim]◈ {_escape(user_input.display_text)}[/dim]"),
                                 platform="cli", diagnostic=user_input.notification_category == "diagnostic")
             return
-        ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
+        ChatConsole().print(self._user_header_line())
         text = str(user_input or "")
         ChatConsole().print(self._format_submitted_user_message_preview(text))
 
