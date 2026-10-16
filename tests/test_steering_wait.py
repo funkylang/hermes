@@ -33,6 +33,9 @@ def make_test_agent():
     agent._steering_wait_reasoning = ""
     agent._current_streaming_reasoning_text = ""
     agent._steer_completion_deadline = 0
+
+    # Persistent smart-mode flag (set by the CLI at session start / on /busy changes).
+    agent._smart_steer_active = False
     
     # Mock methods from InterruptControlMixin
     from agent.interrupt_control import InterruptControlMixin
@@ -216,7 +219,6 @@ class TestSmartSteerToolPhase:
 
         assert result is True
         assert agent._pending_redirect == "steer one"
-        assert agent._smart_steer_pending is True
         assert not agent._interrupt_requested
         # steer() must not be touched (dead mechanism) — its Mock attr stays un-called text-wise
         assert agent._pending_steer is None
@@ -231,7 +233,6 @@ class TestSmartSteerToolPhase:
 
         assert result is True
         assert agent._pending_redirect == "steer one"
-        assert agent._smart_steer_pending is True
         assert not agent._interrupt_requested
 
     def test_smart_steers_append_plainly(self):
@@ -243,7 +244,6 @@ class TestSmartSteerToolPhase:
         agent.redirect("second", busy_input_mode="smart")
 
         assert agent._pending_redirect == "first\nsecond"
-        assert agent._smart_steer_pending is True
 
 
 class TestSmartSteerConsumption:
@@ -256,7 +256,7 @@ class TestSmartSteerConsumption:
     def test_plain_user_row_after_tools(self):
         """No assistant placeholder, no api_content decoration; text stays verbatim."""
         agent = make_test_agent()
-        agent._smart_steer_pending = True
+        agent._smart_steer_active = True
         agent._current_streamed_assistant_text = ""
         messages = [
             {"role": "user", "content": "do X"},
@@ -267,8 +267,6 @@ class TestSmartSteerConsumption:
 
         self._consume(agent, messages, "steer text")
 
-        # Flag cleared once consumed
-        assert not agent._smart_steer_pending
         last = messages[-1]
         assert last["role"] == "user"
         assert last["content"] == "steer text"
@@ -281,7 +279,7 @@ class TestSmartSteerConsumption:
     def test_multiple_concatenated_steers_single_row(self):
         """Pre-concatenated steers land as ONE user row."""
         agent = make_test_agent()
-        agent._smart_steer_pending = True
+        agent._smart_steer_active = True
         messages = [{"role": "tool", "content": "r"}]
 
         self._consume(agent, messages, "first\nsecond")

@@ -340,31 +340,22 @@ def _moa_reference_metrics_for_hook(agent: Any) -> Any:
 
 
 def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
-    # Smart-mode tool-phase steering (queued in redirect() while tools ran or args streamed):
-    # plain user row after the batch — no assistant placeholder, no api_content decoration.
-    # assistant(tool_calls) → tool* → user is the documented alternation-safe "user jumped in
-    # mid-run" shape. Multiple steers arrive pre-concatenated (plain newlines) by redirect().
-    if getattr(agent, "_smart_steer_pending", False):
-        agent._smart_steer_pending = False
-        tail = messages[-1] if messages else None
-        if isinstance(tail, dict) and tail.get("role") == "user":
-            # Unlikely (tail is normally tool or assistant here); merge rather than emit a
-            # consecutive user row.
-            existing_content = tail.get("content") or ""
-            tail["content"] = (
-                f"{existing_content}\n{text}" if isinstance(existing_content, str) else text
-            )
-        else:
-            append_message(messages, {"role": "user", "content": text})
-        agent._current_streamed_assistant_text = ""
-        agent._stream_needs_break = True
-        return
     if not getattr(agent, "_steering_wait_completed", False):
         visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
 
-        if getattr(agent, "_smart_steer_active", False):  # CLI + /busy smart: no assistant placeholder, no api_content decoration — plain user row only.
-            # Tail is normally tool/assistant here, so user-after-batch is alternation-safe (#88955 pre-call sanitizer heals the rest).
-            append_message(messages, {"role": "user", "content": text})
+        if getattr(agent, "_smart_steer_active", False):  # CLI + /busy smart (persistent mode flag): no assistant placeholder, no api_content decoration — plain user row only.
+            # Smart-mode steers arrive pre-concatenated (plain newlines) by redirect(); the tail is
+            # normally tool/assistant here, so user-after-batch is alternation-safe (#88955
+            # pre-call sanitizer heals the rest). If the tail is already a user row, merge rather
+            # than emit consecutive user rows.
+            tail = messages[-1] if messages else None
+            if isinstance(tail, dict) and tail.get("role") == "user":
+                existing_content = tail.get("content") or ""
+                tail["content"] = (
+                    f"{existing_content}\n{text}" if isinstance(existing_content, str) else text
+                )
+            else:
+                append_message(messages, {"role": "user", "content": text})
         else:  # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw chain-of-thought never enters replayable content; the interruption scaffold is replay text carried only in the user correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``.
             checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
             if is_runaway_repetition(visible):

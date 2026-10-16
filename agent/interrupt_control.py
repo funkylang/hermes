@@ -413,9 +413,6 @@ class InterruptControlMixin:
                 if self._interrupt_requested and not existing:
                     return False
                 self._pending_redirect = (existing + "\n" + cleaned) if existing else cleaned
-                # Consumption marker: plain user row after the batch, no placeholder,
-                # no decoration (checked first in _apply_active_turn_redirect).
-                self._smart_steer_pending = True
 
             return True
 
