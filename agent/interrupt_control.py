@@ -412,7 +412,7 @@ class InterruptControlMixin:
                 existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
                 if self._interrupt_requested and not existing:
                     return False
-                self._pending_redirect = (existing + "\n" + cleaned) if existing else cleaned
+                self._pending_redirect = (existing + "\n\n" + cleaned) if existing else cleaned
 
             return True
 
@@ -440,7 +440,7 @@ class InterruptControlMixin:
                 existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
                 if self._interrupt_requested and not existing:
                     return False
-                self._pending_redirect = (existing + "\n" + cleaned) if existing else cleaned
+                self._pending_redirect = (existing + "\n\n" + cleaned) if existing else cleaned
                 # Set steering completion wait flag (don't set _interrupt_requested or abort)
                 self._steer_completion_wait_active = True
                 self._steer_completion_deadline = time.time() + 30.0

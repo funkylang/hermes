@@ -236,14 +236,14 @@ class TestSmartSteerToolPhase:
         assert not agent._interrupt_requested
 
     def test_smart_steers_append_plainly(self):
-        """Multiple smart-mode steers concatenate with a plain newline (no decoration)."""
+        """Multiple smart-mode steers concatenate with a blank line (no decoration)."""
         agent = make_test_agent()
         agent._executing_tools = True
 
         agent.redirect("first", busy_input_mode="smart")
         agent.redirect("second", busy_input_mode="smart")
 
-        assert agent._pending_redirect == "first\nsecond"
+        assert agent._pending_redirect == "first\n\nsecond"
 
 
 class TestSmartSteerConsumption:

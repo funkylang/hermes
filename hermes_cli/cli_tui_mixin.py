@@ -1558,11 +1558,10 @@ class CLITuiMixin:
                         redirected = bool(self.agent.redirect(text, busy_input_mode=self.busy_input_mode))
                 except Exception:
                     redirected = False
-            if True:
-                # Upstream redirect confirmation display (restored): show the user's text on accept.
-                if redirected:
-                    preview = text[:80] + ("..." if len(text) > 80 else "")
-                    _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
+            # Upstream redirect confirmation display (restored): show the user's text on accept.
+            if redirected:
+                preview = text[:80] + ("..." if len(text) > 80 else "")
+                _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
             if not redirected:
                 self._interrupt_queue.put(payload)
                 try:
