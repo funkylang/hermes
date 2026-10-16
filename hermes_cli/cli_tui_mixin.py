@@ -1558,8 +1558,9 @@ class CLITuiMixin:
                         redirected = bool(self.agent.redirect(text, busy_input_mode=self.busy_input_mode))
                 except Exception:
                     redirected = False
-            # Upstream redirect confirmation display (restored): show the user's text on accept.
-            if redirected:
+            # Upstream redirect confirmation display (restored): show the user's text on accept,
+            # except in smart mode — the steer echo already renders it as a user row.
+            if redirected and _effective_mode != "smart":
                 preview = text[:80] + ("..." if len(text) > 80 else "")
                 _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
             if not redirected:
