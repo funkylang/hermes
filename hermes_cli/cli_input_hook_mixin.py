@@ -94,19 +94,34 @@ class CLIInputHookMixin:
             )
             metadata_block = format_metadata_block(metadata)
 
-            # Run the script
+            # Run the script. Capture diagnostics so we can render them on the
+            # ordered output channel (before the auto-reply notice) instead of
+            # raw stderr, which races the prompt_toolkit renderer.
+            _diag = {}
+
+            def _on_diagnostics(text):
+                _diag["text"] = text
+
             auto_reply = run_input_hook(
                 reasoning=reasoning,
                 content=content,
                 metadata_block=metadata_block,
+                on_diagnostics=_on_diagnostics,
             )
 
-            # If we got an auto-reply, notify and queue it as the next user
-            # message. No preview text on the notice line: the queued text is
-            # already shown when submitted as a normal user message.
+            from cli import _DIM, _RST, _cprint
+
+            # 1. Diagnostics (label, blank line, then content — all left-aligned)
+            if _diag.get("text"):
+                _cprint(f"{_DIM}🔬 Input hook diagnostics:{_RST}")
+                _cprint("")
+                for line in _diag["text"].splitlines():
+                    _cprint(line)
+
+            # 2. Auto-reply notice, then queue it as the next user message.
             if auto_reply:
-                from cli import _DIM, _RST, _cprint
-                _cprint(f"  {_DIM}⚡ Input hook auto-reply{_RST}")
+                _cprint("")
+                _cprint(f"{_DIM}⚡ Input hook auto-reply{_RST}")
                 self._pending_input.put(auto_reply)
 
         except Exception as exc:

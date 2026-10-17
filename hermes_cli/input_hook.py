@@ -104,6 +104,7 @@ def run_input_hook(
     reasoning: str,
     content: str,
     metadata_block: str,
+    on_diagnostics=None,
 ) -> Optional[str]:
     """Run the input_hook script and return the auto-reply text if it should be used.
 
@@ -115,9 +116,12 @@ def run_input_hook(
         reasoning: The assistant's reasoning if available (may be empty)
         content: The assistant's final response text
         metadata_block: Multi-line key=value metadata string (includes session_id)
+        on_diagnostics: Optional callable invoked with the script's stripped stderr
+            text so the caller can render it on its own (ordered) output channel.
+            When omitted, diagnostics are printed to stderr here directly.
 
     Returns:
-        The auto-reply text to queue as the next user message, or None to prompt human
+        The auto-reply text to queue as the next user message, or None to prompt human.
     """
     script_path = get_input_hook_script_path()
     if not script_path:
@@ -144,12 +148,19 @@ def run_input_hook(
             check=False,  # We handle the exit code ourselves
         )
 
-        # Display stderr (diagnostics) if present — label, blank line, then content
-        if proc.stderr.strip():
-            print("Input hook diagnostics:", file=sys.stderr)
-            print(file=sys.stderr)  # blank separator line
-            for line in proc.stderr.rstrip("\n").splitlines():
-                print(f"  {line}", file=sys.stderr)
+        # Display stderr (diagnostics) if present — label, blank line, then content.
+        # Delegate to the caller's output channel when provided so diagnostics,
+        # the auto-reply notice and the queued user message render in order;
+        # otherwise fall back to direct stderr printing.
+        stderr_text = proc.stderr.strip()
+        if stderr_text:
+            if on_diagnostics is not None:
+                on_diagnostics(stderr_text)
+            else:
+                print("Input hook diagnostics:", file=sys.stderr)
+                print(file=sys.stderr)  # blank separator line
+                for line in stderr_text.splitlines():
+                    print(f"  {line}", file=sys.stderr)
 
         # Apply decision logic
         if proc.returncode == 0 and proc.stdout.strip():
