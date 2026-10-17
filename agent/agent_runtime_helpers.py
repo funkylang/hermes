@@ -3804,7 +3804,6 @@ def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: in
       persistence never rewrites (replayed histories then diverge from the
       live request bytes and break the provider prompt cache).
     """
-    return
     if num_tool_msgs <= 0 or not messages:
         return
     steer_text = agent._drain_pending_steer()
