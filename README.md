@@ -1,8 +1,19 @@
 <p align="center">
+  <img src="assets/superhermes-logo.png" alt="Superhermes" width="100%">
+</p>
+
+<p align="center"><strong><font size="5">based on</font></strong></p>
+
+<p align="center">
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>
 
+<p align="center">A fork of <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> with several enhancements.</p>
+
+<p align="center"><strong><a href="superhermes.md">Local extensions, control words & more →</a></strong></p>
+
 # Hermes Agent ☤
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
 </p>
