@@ -17,6 +17,7 @@ import pytest
 from agent.turn_context import (
     PreflightCompressionTimedOut,
     TurnContext,
+    build_api_messages,
     build_turn_context,
 )
 
@@ -541,3 +542,115 @@ def test_prologue_forwards_the_submit_title_preview_to_the_titler():
               "display_metadata": {"title_preview": "Pasted 5000 chars"}}],
         )
     assert titler.call_args.kwargs["title_preview"] == "Pasted 5000 chars"
+
+
+# ── Previous-session injection: --fresh is consume-once ─────────────────────
+#
+# A process launched with --fresh must skip previous-session context injection
+# for its FIRST session only. The flag is a module global set once at startup;
+# build_api_messages consumes it on first read so that a later session created
+# in the same process (e.g. via /reset) gets normal injection again.
+
+
+class _InjectionAgent:
+    """Minimal stand-in covering what build_api_messages touches."""
+
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.model = "test/model"
+        self.provider = "openrouter"
+        self.base_url = "https://x.local/v1"
+        self.api_key = "sk-x"
+        self.api_mode = "chat_completions"
+        self.platform = "cli"
+        self._session_db = MagicMock()
+        self._current_turn_timestamp = 100.0
+        self.ephemeral_system_prompt = None
+
+    def _copy_reasoning_content_for_api(self, msg, api_msg):
+        pass
+
+    def _should_sanitize_tool_calls(self):
+        return False
+
+
+def _hermes_main():
+    import hermes_cli.main as m
+    return m
+
+
+@pytest.fixture
+def reset_fresh_flag():
+    """Snapshot/restore the --fresh global so this test can't leak into others."""
+    main = _hermes_main()
+    saved = main.FRESH_MODE_ENABLED
+    main.FRESH_MODE_ENABLED = False
+    yield
+    main.FRESH_MODE_ENABLED = saved
+
+
+def test_fresh_mode_consumed_after_first_session(reset_fresh_flag):
+    """--fresh skips injection for the first session, then a later in-process
+    session (e.g. after /reset) injects again because the flag was consumed."""
+    main = _hermes_main()
+
+    prev_ctx = [
+        {"role": "user", "content": "previous question"},
+        {"role": "assistant", "content": "previous answer"},
+    ]
+    with patch(
+        "agent.session_context_loader.get_previous_session_context",
+        return_value=prev_ctx,
+    ) as loader:
+        # --- Session 1: process launched with --fresh ---
+        main.FRESH_MODE_ENABLED = True
+        agent1 = _InjectionAgent("sess-1")
+        msgs1 = [{"role": "user", "content": "first question"}]
+        build_api_messages(
+            agent1, msgs1, current_turn_user_idx=0, ext_prefetch_cache="",
+            plugin_user_context=None, moa_config=None, active_system_prompt="SYSTEM",
+        )
+
+        # Fresh mode took effect: no injection on session 1 ...
+        loader.assert_not_called()
+        assert not hasattr(agent1, "_previous_session_context")
+        # ... and the flag was consumed.
+        assert main.FRESH_MODE_ENABLED is False
+
+        # --- Session 2: created in-process (e.g. via /reset), no --fresh ---
+        agent2 = _InjectionAgent("sess-2")
+        msgs2 = [{"role": "user", "content": "second question"}]
+        api_msgs2, _ = build_api_messages(
+            agent2, msgs2, current_turn_user_idx=0, ext_prefetch_cache="",
+            plugin_user_context=None, moa_config=None, active_system_prompt="SYSTEM",
+        )
+
+        # Flag is gone, so this session injects previous context again.
+        loader.assert_called_once()
+        assert agent2._previous_session_context == prev_ctx
+        # Injected rows sit right after the system message, before session 2's own rows.
+        roles = [m["role"] for m in api_msgs2]
+        assert roles[0] == "system"
+        assert roles[1:3] == ["user", "assistant"]  # the two injected prev-context rows
+        assert roles[-1] == "user"  # session 2's own user message
+
+
+def test_fresh_flag_off_injects_immediately(reset_fresh_flag):
+    """With no --fresh, the first session injects on its very first API call."""
+    main = _hermes_main()
+    main.FRESH_MODE_ENABLED = False
+
+    prev_ctx = [{"role": "user", "content": "previous question"}]
+    with patch(
+        "agent.session_context_loader.get_previous_session_context",
+        return_value=prev_ctx,
+    ) as loader:
+        agent1 = _InjectionAgent("sess-1")
+        msgs1 = [{"role": "user", "content": "first question"}]
+        build_api_messages(
+            agent1, msgs1, current_turn_user_idx=0, ext_prefetch_cache="",
+            plugin_user_context=None, moa_config=None, active_system_prompt="SYSTEM",
+        )
+
+    loader.assert_called_once()
+    assert agent1._previous_session_context == prev_ctx

@@ -1335,10 +1335,16 @@ def build_api_messages(
         m.get("role") == "assistant" for m in canonical_messages if isinstance(m, dict)
     )
     
-    # Check the --fresh CLI flag (set once at startup, never changes)
-    from hermes_cli.main import FRESH_MODE_ENABLED
-    
-    if not has_assistant_response and not hasattr(agent, '_previous_session_context') and not FRESH_MODE_ENABLED:
+    # The --fresh CLI flag is set once at process startup and applies ONLY to
+    # the first session of that launch. Consume it here on first read so later
+    # sessions created in the same process (e.g. via /reset) get normal
+    # previous-session context injection again.
+    import hermes_cli.main as _hermes_main
+    fresh_mode_enabled = _hermes_main.FRESH_MODE_ENABLED
+    if fresh_mode_enabled:
+        _hermes_main.FRESH_MODE_ENABLED = False
+
+    if not has_assistant_response and not hasattr(agent, '_previous_session_context') and not fresh_mode_enabled:
         try:
             from agent.session_context_loader import get_previous_session_context
             session_db = getattr(agent, '_session_db', None)
