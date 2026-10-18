@@ -1,6 +1,6 @@
 """Load context from previous session to inject at the start of new conversations."""
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +16,26 @@ def get_previous_session_context(
     min_messages_required: int = 10,
     max_messages_to_return: int = 16,
 ) -> List[Dict[str, Any]]:
-    """Get the last N substantive messages from the most recent previous session.
+    """Get context messages from the most recent previous session.
 
-    Uses the SessionDB public API (list_sessions_rich / get_messages), never
-    internal connections.
+    Session selection uses ``substantive_message_count`` (computed from the
+    message rows via SQL), never the denormalized ``sessions.message_count``
+    counter — that stored field counts tool noise and can drift, which once
+    made a session with only 4 real messages pass the eligibility filter.
+
+    Content: when a selected session has at most ``max_messages_to_return``
+    substantive messages, all of them are returned; otherwise the first half
+    plus the last half (e.g. 8 + 8 for 16), so both where the session started
+    and how it ended carry over.
+
+    Uses the SessionDB public API only (list_sessions_rich /
+    substantive_message_count / get_messages).
 
     Args:
         session_db: The SessionDB instance (can be None)
         current_session_id: Current session ID to exclude
-        min_messages_required: Minimum message count for a session to be considered
-        max_messages_to_return: Maximum number of messages to return
+        min_messages_required: Minimum substantive message count for eligibility
+        max_messages_to_return: Cap on returned messages (splits half/half when exceeded)
 
     Returns:
         List of message dicts with role and content, in chronological order (oldest first).
@@ -34,63 +44,35 @@ def get_previous_session_context(
         return []
 
     try:
-        # Filter at database level to avoid scanning through many stub sessions.
-        # limit=1 is sufficient: results are ordered by last_active descending, and we
-        # return on the first eligible session. The current session (0 messages at start)
-        # won't match min_message_count, so no exclusion needed.
+        # Candidate shortlist ordered by most recently active. Deliberately no
+        # message-count filter in SQL (see docstring); eligibility is checked
+        # per candidate from the actual rows.
         sessions = session_db.list_sessions_rich(
             order_by_last_active=True,
-            limit=1,
-            min_message_count=min_messages_required,
+            limit=8,
         )
 
         for session in sessions:
             prev_session_id = session.get("id")
-            if not prev_session_id:
+            if not prev_session_id or prev_session_id == current_session_id:
                 continue
 
-            # All returned sessions have >= min_messages_required messages due to the filter above
-
-            # Walk backwards from the newest rows, collecting user/assistant
-            # messages that carry real content (raw tails are often tool calls
-            # or empty assistant turns). get_messages(latest=True, offset=N)
-            # pages back from the newest and returns each page chronologically.
-            context_messages = []
-            offset = 0
-            while (
-                len(context_messages) < max_messages_to_return
-                and offset < _MAX_SCAN_ROWS
-            ):
-                rows = session_db.get_messages(
-                    prev_session_id,
-                    limit=_PAGE_SIZE,
-                    offset=offset,
-                    latest=True,
+            # Eligibility from the actual rows, not the stored counter.
+            try:
+                substantive = session_db.substantive_message_count(prev_session_id)
+            except Exception as exc:
+                logger.warning(
+                    "substantive_message_count failed for %s: %s", prev_session_id[:8], exc
                 )
-                if not rows:
-                    break
+                continue
+            if substantive < min_messages_required:
+                continue
 
-                for msg in reversed(rows):  # newest page row first => newest context msg first
-                    role = msg.get("role")
-                    content = msg.get("content") or ""
-                    if role in ("user", "assistant") and content.strip():
-                        context_messages.append(
-                            {"role": role, "content": content}
-                        )
-                        if len(context_messages) >= max_messages_to_return:
-                            break
-
-                # A short page is the start of history: nothing older to fetch.
-                if len(rows) < _PAGE_SIZE:
-                    break
-
-                offset += _PAGE_SIZE
-
+            context_messages = _collect_context_messages(
+                session_db, prev_session_id, substantive, max_messages_to_return
+            )
             if not context_messages:
                 continue
-
-            # Reverse so the oldest selected message comes first.
-            context_messages.reverse()
 
             logger.debug(
                 "Previous session context loaded: session=%s messages=%d",
@@ -104,3 +86,81 @@ def get_previous_session_context(
         # is silently dead, which is hard to notice otherwise.
         logger.warning("Failed to load previous session context: %s", exc)
         return []
+
+
+def _is_substantive(msg: Dict[str, Any]) -> bool:
+    """User/assistant row with real (non-blank) content."""
+    role = msg.get("role")
+    content = msg.get("content") or ""
+    return role in ("user", "assistant") and bool(content.strip())
+
+
+def _collect_context_messages(
+    session_db: Any,
+    prev_session_id: str,
+    substantive: int,
+    max_messages_to_return: int,
+) -> List[Dict[str, Any]]:
+    """Collect context messages from one selected session, oldest first.
+
+    All substantive messages when they fit in the cap; otherwise the first
+    ``cap // 2`` from the start plus the last ``cap // 2`` from the end (no
+    overlap possible: half + half <= cap < substantive).
+    """
+    if substantive <= max_messages_to_return:
+        head = _scan_substantive(session_db, prev_session_id, max_messages_to_return,
+                                 latest=False)
+        return head
+
+    half = max_messages_to_return // 2
+    head = _scan_substantive(session_db, prev_session_id, half, latest=False)
+    # Newest-first scan: reverse so oldest-of-the-tail comes first.
+    tail = _scan_substantive(session_db, prev_session_id, half, latest=True)[::-1]
+    return head + tail
+
+
+def _scan_substantive(
+    session_db: Any,
+    session_id: str,
+    needed: int,
+    latest: bool,
+) -> List[Dict[str, Any]]:
+    """Collect up to *needed* substantive messages from one end of a session.
+
+    latest=False scans from the start (oldest first, returned oldest first).
+    latest=True scans back from the end (returned newest first). Stops at the
+    other end of the history or the scan cap, whichever comes first.
+    """
+    collected: List[Dict[str, Any]] = []
+    offset = 0
+    while len(collected) < needed and offset < _MAX_SCAN_ROWS:
+        rows = session_db.get_messages(
+            session_id,
+            limit=_PAGE_SIZE,
+            offset=offset,
+            latest=latest,
+        )
+        if not rows:
+            break
+
+        if latest:
+            # Page is chronological; walk newest-first.
+            for msg in reversed(rows):
+                if _is_substantive(msg):
+                    collected.append({"role": msg["role"], "content": msg["content"]})
+                    if len(collected) >= needed:
+                        break
+        else:
+            # Page is already oldest-first.
+            for msg in rows:
+                if _is_substantive(msg):
+                    collected.append({"role": msg["role"], "content": msg["content"]})
+                    if len(collected) >= needed:
+                        break
+
+        # A short page is the end of history at this direction: nothing further.
+        if len(rows) < _PAGE_SIZE:
+            break
+
+        offset += _PAGE_SIZE
+    return collected

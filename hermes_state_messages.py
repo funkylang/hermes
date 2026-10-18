@@ -1886,6 +1886,18 @@ class SessionMessagesMixin:
         sql = "SELECT COUNT(*) FROM messages" + (" WHERE session_id = ?" if session_id else "")
         return self._read_one(sql, (session_id,) if session_id else ())[0]
 
+    def substantive_message_count(self, session_id: str) -> int:
+        """Computed count of user/assistant messages with non-empty content.
+
+        Derived from the rows at read time, never from the denormalized
+        sessions.message_count counter (which also counts tool noise and can
+        drift). Used where a wrong answer changes behaviour (previous-session
+        context injection), not for display."""
+        sql = ("SELECT COUNT(*) FROM messages WHERE session_id = ? "
+               "AND role IN ('user', 'assistant') "
+               "AND TRIM(COALESCE(content, '')) != ''")
+        return self._read_one(sql, (session_id,))[0]
+
     def has_gateway_input_owner(self, session_id: str, owner: str) -> bool:
         """Probe the accepted-input marker without allocating message bodies or archives."""
         return self._read_one(

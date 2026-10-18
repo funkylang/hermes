@@ -154,13 +154,14 @@ This makes the recall workflow explicit in the tool's own documentation, reducin
 
 ---
 
-## Previous-Session Context Injection (2026-10-03)
+## Previous-Session Context Injection (2026-10-03, corrected 2026-10-18)
 
-When a session starts with `--continue`, the last exchange from the previous session is injected as context on the first API call, so the model retains recency even after compression or restart.
+On a new session, context from the previous session is injected on the first API call so the model keeps recency after restart or compression — automatically, no flag needed.
 
+- **Session selection:** the most recently active previous session that has at least 10 substantive messages. Eligibility uses `substantive_message_count` — a SQL count of user/assistant messages with non-empty content computed from the message rows. It deliberately never reads the stored `sessions.message_count` counter, which also counts tool noise and can drift (a stale value once selected a session that really held only a handful of messages).
+- **Content:** if the chosen session has at most 16 substantive messages, all of them are injected; otherwise its first 8 plus its last 8 — so both where the session started and how it ended carry over.
 - Injected exactly once per session: only when no assistant response exists yet.
-- Retrieves both user and assistant messages from the handoff (previous version retrieved assistant-only).
-- Implemented in `agent/session_context_loader.py` / `agent/turn_context.py`.
+- Implemented in `agent/session_context_loader.py` / `agent/turn_context.py`; counts via `hermes_state_messages.substantive_message_count`.
 
 ### `--fresh` flag
 
