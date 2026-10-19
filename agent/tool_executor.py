@@ -1148,7 +1148,7 @@ def _commit_tool_result(
     try:
         from agent.display import get_transparent_tool_message
         print_text_box(
-            LineKind.TOOL_CALL,
+            LineKind.TOOL_RESULT,
             get_transparent_tool_message(function_name, function_args, tool_duration, result=function_result),
         )
     except Exception as exc:  # display must never abort a turn

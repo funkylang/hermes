@@ -703,6 +703,9 @@ class CLIAgentSetupMixin:
             # frontend access instead of callback indirection (Phase 1; both sides are
             # initialized in their respective constructors, agent_init + cli_init_mixin).
             self.agent.cli = self
+            # Register as the process display context (agent side of the single active pair).
+            from agent import conversation_loop as _cl  # lazy: import graph
+            _cl.ACTIVE_AGENT = self.agent
             # Reference for atexit memory-provider shutdown: ``_run_cleanup`` in cli.py
             # reads ``cli._active_agent_ref``, so this MUST write the ``cli`` module's
             # global — a ``global`` statement here would bind this module's namespace.

@@ -54,8 +54,8 @@ def run_tool_round(
     durability invariant: resume must see the executed block if a destructive tool restarts
     Hermes; a failed canonical append ends the turn rather than running tools from
     process-only state."""
-    # Lazy: conversation_loop imports this module (cycle). TEMP debug import extends the line below.
-    from agent.conversation_loop import _invalid_tool_name_error_content, LineKind, print_text_line
+    # Lazy: conversation_loop imports this module (cycle).
+    from agent.conversation_loop import _invalid_tool_name_error_content
 
     def _verdict(action: str, result: Optional[Dict[str, Any]] = None) -> ToolRoundVerdict:
         return ToolRoundVerdict(
@@ -108,7 +108,6 @@ def run_tool_round(
     assistant_msg, duplicate_previous_interim = stage_tool_call_message(
         agent, assistant_message=assistant_message, finish_reason=finish_reason, messages=messages
     )
-    print_text_line(LineKind.DEBUG, "turn_tool_round.run_tool_round")  # TEMP debug
     append_message(messages, assistant_msg)
 
     # Mixed batch: error-result invalid calls and drop them from execution.

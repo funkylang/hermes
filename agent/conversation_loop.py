@@ -1651,6 +1651,7 @@ class LineKind(Enum):
     REASONING = auto()
     TOOL_CALL = auto()
     TOOL_RESULT = auto()
+    RESPONSE = auto()
     DIAGNOSTICS = auto()
     INJECTED_INPUT = auto()
     DEBUG = auto()
@@ -1667,10 +1668,11 @@ class KindInfo:
 
 kind_infos = [
     None,                                        # index 0 unused (auto() starts at 1)
-    KindInfo("User", "─", "FFBF00", "2A2418", BOLD),                # INPUT — skin accent resolved at render time
+    KindInfo("User", "─", "FFBF00", "2A2418", 0),                  # INPUT — skin accent resolved at render time
     KindInfo("Reasoning", "─", "8A867B", "232019", ITALIC),         # REASONING
-    KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL
+    KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL — also the streaming tool-args phase
     KindInfo("Tool Result", "┄", "5C9EAD", "1B2A1B", 0),            # TOOL_RESULT
+    KindInfo("Hermes", "─", "FFF8DC", "1C1A14", 0),                 # RESPONSE — response box header
     KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
     KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
     KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
@@ -1703,6 +1705,13 @@ def kind_to_sgr(kind_info: KindInfo) -> str:
 RAW_OPEN = "\x01"
 RAW_CLOSE = "\x02"
 
+# Process-wide display context: the interactive CLI instance and its active agent — the
+# ONLY supported surface. The CLI is the sole frontend, so every render position below
+# runs from an initialized CLI; a missing ACTIVE_CLI there is a real bug, not a state
+# to guard against. Set at CLI init (init) and agent pairing.
+ACTIVE_CLI = None
+ACTIVE_AGENT = None
+
 
 def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
     """Render a section header rule: {symbol×5} {label} {title} {HH:MM} {symbol fill}.
@@ -1720,12 +1729,17 @@ def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
     line = info.symbol * 5 + inner + info.symbol * rule_tail_count
     attributes = kind_to_sgr(info)
     _cprint(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{line}\x1b[0m")
+    # Safe without a guard: print_header_line only runs in the interactive CLI, whose
+    # instance sets ACTIVE_CLI at init — before any turn can draw a header.
+    ACTIVE_CLI.header_kind = kind
 
 
 def print_text_line(kind: LineKind, text: str = '') -> None:
     """Render a content line in the kind's colours; background extends to end of line."""
     info = kind_infos[kind.value]
     attributes = kind_to_sgr(info)
+    if text == '':
+        text = ' '
     _cprint(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{text}{erase_until_eol(attributes)}")
 
 

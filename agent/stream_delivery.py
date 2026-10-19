@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from agent.memory_manager import sanitize_context
 from agent.message_content import flatten_message_text
 from agent.history_commentary import visible_commentary
+from agent.conversation_loop import LineKind  # streaming phase → box kind mapping (agent-owns-display)
 
 # Same logger name as the origin module so log records / caplog filters are unchanged.
 logger = logging.getLogger("run_agent")
@@ -295,6 +296,25 @@ class StreamDeliveryMixin:
     def _emit_stream_end(self, *, final_text: str, finished: bool, error: str | None) -> None:
         self._enqueue_stream_hook("on_stream_end", final_text=final_text, finished=finished, error=error)
 
+    # ── OUR MAIN STREAMING HOOK POINT ─────────────────────────────────────────────
+    # handle_stream_event is the one display funnel all streaming phases pass through:
+    # each provider splits its stream into the three lanes below, but every lane then
+    # calls handle_stream_event with its LineKind (verified live 2026-10-19):
+    #   _fire_stream_delta     -> LineKind.RESPONSE   (content tokens)
+    #   _fire_reasoning_delta  -> LineKind.REASONING  (native + inline think recovery)
+    #   _fire_tool_args_stream -> LineKind.TOOL_CALL  (raw argument fragments)
+    # Unified stream display work belongs HERE, not in the per-frontend renderers. ──
+
+    def handle_stream_event(self, kind) -> None:
+        """Draw this streaming phase's box header when the phase changes (agent-owns-display).
+
+        The three streaming lanes each call this with their LineKind; the header is drawn
+        through print_header_line, which also stamps ACTIVE_CLI.header_kind — so a repeated
+        call in the same phase is a cheap enum comparison, never a double header."""
+        from agent.conversation_loop import ACTIVE_CLI, print_header_line  # lazy: import graph
+        if kind != ACTIVE_CLI.header_kind:
+            print_header_line(kind)
+
     def _fire_stream_delta(self, text: str) -> None:
         """Fire all registered stream delta callbacks (display + TTS)."""
         # A superseded stream must not interleave its tokens alongside the retry that replaced it.
@@ -328,6 +348,7 @@ class StreamDeliveryMixin:
                 text = text.lstrip("\n")
         if not text:
             return
+        self.handle_stream_event(LineKind.RESPONSE)
         delivered = self._deliver_to_stream_callbacks(text)
         self._enqueue_stream_hook("on_stream_delta", delta=text, kind="text")
         if delivered:
@@ -345,6 +366,7 @@ class StreamDeliveryMixin:
             # content deltas.
             self._note_dropped_stream_writer("_fire_reasoning_delta")
             return
+        self.handle_stream_event(LineKind.REASONING)
         self._call_quietly(self.reasoning_callback, text)
         # Resolve the opt-in once per stream, not per token: each lookup took _CONFIG_LOCK and
         # serialized every streaming thread in the process behind a config cache hit.
@@ -371,6 +393,7 @@ class StreamDeliveryMixin:
         Lets UI layers render the arguments being generated (live JSON stream), not just
         a frozen 'generating…' spinner. Called from the streaming loop per argument chunk;
         ``tool_name`` is best-effort (empty string until the provider sends the name)."""
+        self.handle_stream_event(LineKind.TOOL_CALL)
         self._call_quietly(self.tool_args_stream_callback, tool_name, text_chunk)
 
     def _has_stream_consumers(self) -> bool:

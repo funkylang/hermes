@@ -309,6 +309,12 @@ class CLIInitMixin:
         self.conversation_history: List[Dict[str, Any]] = []
         # NEW (steer deferral): accumulated user input; updates/reads are guarded by self.lock.
         self.user_input = ""
+        # NEW (streaming boxes): kind of the last box header drawn on this CLI
+        # ("reasoning" / "tool_args" / "response", ...); None before the first header.
+        self.header_kind: Optional[str] = None
+        # Register as the process display context so agent-side render helpers can reach it.
+        from agent import conversation_loop as _cl  # lazy: import graph
+        _cl.ACTIVE_CLI = self
         self.session_start = datetime.now()
         # Per-prompt elapsed timer shown in the status bar.
         self._prompt_start_time: Optional[float] = None

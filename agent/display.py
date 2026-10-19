@@ -1353,14 +1353,14 @@ def _get_transparent_tool_message(tool_name: str, args: dict | None, duration: f
 
     arg_pieces = _transparent_args_line(tool_name, args)
     if not arg_pieces:
-        lines = [f"┊ {emoji} {tool_name}{_duration_part()}"]
+        lines = [f"{emoji} {tool_name}{_duration_part()}"]
     elif len(arg_pieces) == 1:
         # Short single-arg calls stay one line; long ones wrap with the status.
-        line = f"┊ {emoji} {tool_name} {arg_pieces[0]}{_duration_part()}"
-        lines = [line] if len(line) <= _transparent_arg_limit() else [f"┊ {emoji} {tool_name}", f"    {arg_pieces[0]}{_duration_part()}"]
+        line = f"{emoji} {tool_name} {arg_pieces[0]}{_duration_part()}"
+        lines = [line] if len(line) <= _transparent_arg_limit() else [f"{emoji} {tool_name}", f"    {arg_pieces[0]}{_duration_part()}"]
     else:
         # Many args: header line plus one indented line per arg (all of them).
-        lines = [f"┊ {emoji} {tool_name} ({len(arg_pieces)} args){_duration_part()}"]
+        lines = [f"{emoji} {tool_name} ({len(arg_pieces)} args){_duration_part()}"]
         for piece in arg_pieces:
             lines.append(f"    {piece}")
 
@@ -1372,8 +1372,7 @@ def _get_transparent_tool_message(tool_name: str, args: dict | None, duration: f
         status = f"✓ SUCCESS{f' — {summary}' if summary else ''}"
     lines.append(f"    {status}")
 
-    prefix = get_skin_tool_prefix()
-    return "\n  ".join(row.replace("┊", prefix, 1) for row in lines)
+    return "\n  ".join(lines)
 
 
 def _transparent_arg_limit() -> int:
@@ -1387,5 +1386,5 @@ def get_transparent_tool_message(tool_name: str, args: dict | None, duration: fl
         return _get_transparent_tool_message(tool_name, args, duration, result=result)
     except Exception as exc:  # noqa: BLE001 — display must never abort a turn
         logger.debug("Transparent tool label failed for %s: %s", tool_name, exc)
-        return f"┊ {tool_row_emoji(tool_name)} {tool_name or '?'}  {'✗ ERROR' if result and _detect_tool_failure(str(tool_name), result)[0] else '✓ SUCCESS'}"
+        return f"{tool_row_emoji(tool_name)} {tool_name or '?'}  {'✗ ERROR' if result and _detect_tool_failure(str(tool_name), result)[0] else '✓ SUCCESS'}"
 
