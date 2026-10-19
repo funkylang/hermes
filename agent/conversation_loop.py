@@ -45,11 +45,17 @@ from agent.turn_retry_state import TurnRetryState
 # fixed phrase (replay-parity: the variant is stored on agent._redirect_placeholder_text
 # and used verbatim for both the live display box and the persisted message).
 REDIRECT_PLACEHOLDER_TEXTS = (
-    "The user is giving me some input.",
-    "I must stop now and listen to the user.",
-    "I hear the user speaking.",
-    "Maybe I should listen to the user.",
-    "Let me wait for additional user input.",
+    # Old variants (replaced by *...* style, random pick):
+    # "The user is giving me some input.",
+    # "I must stop now and listen to the user.",
+    # "I hear the user speaking.",
+    # "Maybe I should listen to the user.",
+    # "Let me wait for additional user input.",
+    "*listening*",
+    "*here*",
+    "*reading...*",
+    "*noting this*",
+    "*pauses to read*",
 )
 
 
