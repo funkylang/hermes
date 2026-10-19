@@ -1778,6 +1778,9 @@ def print_text_box(kind: LineKind, text: str) -> None:
     print_header_line(kind)
     box_width = max(_line_terminal_columns(), 20)
     for raw_line in (text or "").split("\n"):
+        if not raw_line:
+            print_text_line(kind)  # blank row (wrap_box_lines drops empty strings)
+            continue
         for line in wrap_box_lines(raw_line, box_width):
             print_text_line(kind, line)
 
