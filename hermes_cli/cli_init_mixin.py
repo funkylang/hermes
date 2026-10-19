@@ -299,6 +299,10 @@ class CLIInitMixin:
         # A signature change across turns (/model, credential rotation) rebuilds the agent.
         self._active_agent_route_signature = None
         self.agent: Optional[Any] = None  # initialized on first use
+        # Per-object lock: protects THIS instance's mutable fields. Any other object reading or
+        # writing CLI state must acquire this lock (ownership-aware locking, see
+        # improve/concept-cli-agent-architecture.txt).
+        self.lock = threading.Lock()
         self._tool_callbacks_installed = False
         self._app = None  # prompt_toolkit Application (set in run())
 

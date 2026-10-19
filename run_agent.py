@@ -218,6 +218,12 @@ class AIAgent(
 ):
     """AI Agent with tool calling capabilities."""
 
+    # Frontend back-reference + per-object lock; initialized dynamically by init_agent and
+    # paired by the CLI (see improve/concept-cli-agent-architecture.txt). Annotations only —
+    # no class-level values, so instance state stays fully dynamic.
+    cli: Any  # owning HermesCLI (None for headless/gateway/subagent use)
+    lock: "threading.Lock"  # protects this agent's mutable fields
+
     _TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER = (
         "[hermes-agent: tool call arguments were corrupted in this session and "
         "have been dropped to keep the conversation alive. See issue #15236.]"

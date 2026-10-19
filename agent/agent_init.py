@@ -2408,6 +2408,13 @@ def init_agent(
     agent.session_cwd = cwd or None
     # Shared iteration budget: parent creates, children inherit.
     agent.iteration_budget = iteration_budget or IterationBudget(max_iterations)
+    # Frontend back-reference: set by the owning CLI after construction (None for
+    # headless/gateway/subagent use). Direct reference instead of closure over a callback.
+    agent.cli = None
+    # Per-object lock: protects THIS instance's mutable fields. Any other object reading or
+    # writing agent state must acquire this lock (ownership-aware locking, see
+    # improve/concept-cli-agent-architecture.txt).
+    agent.lock = threading.Lock()
     # CLI replaces this with _cprint so raw ANSI status lines go through prompt_toolkit's
     # renderer (StdoutProxy would mangle them). None = builtins.print.
     agent._print_fn = None

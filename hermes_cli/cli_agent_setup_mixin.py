@@ -699,6 +699,10 @@ class CLIAgentSetupMixin:
  tool_args_stream_callback=self._on_tool_args_stream if self.streaming_enabled else None,
                 notice_callback=self._on_notice, notice_clear_callback=self._on_notice_clear,
                 reaction_callback=self._on_reaction)
+            # Pair this agent with its CLI: the back-reference the agent uses for direct
+            # frontend access instead of callback indirection (Phase 1; both sides are
+            # initialized in their respective constructors, agent_init + cli_init_mixin).
+            self.agent.cli = self
             # Reference for atexit memory-provider shutdown: ``_run_cleanup`` in cli.py
             # reads ``cli._active_agent_ref``, so this MUST write the ``cli`` module's
             # global — a ``global`` statement here would bind this module's namespace.
