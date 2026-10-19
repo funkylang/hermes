@@ -1007,10 +1007,10 @@ class CLIStreamMixin:
             # "verbose" must commit the same line as "all": non-streaming calls (MoA aggregator,
             # copilot-acp) never emit the "preparing" line, so nothing else builds history.
             if function_name and self.tool_progress_mode in {"new", "all", "verbose"}:
-                duration = kwargs.get("duration", 0.0)
-                # Pop stored args from tool.started for this function
+                # Pop stored args from tool.started (kept alive: bookkeeping still feeds turn summaries).
                 stored = self._pending_tool_info.get(function_name)
-                stored_args = stored.pop(0) if stored else {}
+                if stored:
+                    stored.pop(0)
                 if stored is not None and not stored:
                     del self._pending_tool_info[function_name]
                 # "new" mode: skip consecutive repeats of the same tool
@@ -1018,19 +1018,13 @@ class CLIStreamMixin:
                     self._invalidate()
                     return
                 self._last_scrollback_tool = function_name
-                try:
-                    from agent.display import get_transparent_tool_message
-                    line = get_transparent_tool_message(function_name, stored_args, duration, result=kwargs.get("result"))
-                    _cprint(f"  {line}")
-                except Exception:
-                    pass
                 # One-time /verbose hint on the first long tool in the noisiest mode; latched
                 # on self and persisted to config.yaml.
                 try:
                     if (
                         not getattr(self, "_long_tool_hint_fired", False)
                         and self.tool_progress_mode == "all"
-                        and duration >= 30.0):
+                        and kwargs.get("duration", 0.0) >= 30.0):
                         from agent.onboarding import (
                             TOOL_PROGRESS_FLAG, is_seen, mark_seen, tool_progress_hint_cli)
                         if not is_seen(CLI_CONFIG, TOOL_PROGRESS_FLAG):

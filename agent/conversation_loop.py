@@ -1719,14 +1719,14 @@ def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
     rule_tail_count = max(width - 5 - len(inner), 0)
     line = info.symbol * 5 + inner + info.symbol * rule_tail_count
     attributes = kind_to_sgr(info)
-    _cprint(f"{attributes}{line}\x1b[0m")
+    _cprint(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{line}\x1b[0m")
 
 
 def print_text_line(kind: LineKind, text: str = '') -> None:
     """Render a content line in the kind's colours; background extends to end of line."""
     info = kind_infos[kind.value]
     attributes = kind_to_sgr(info)
-    _cprint(f"{attributes}{text}{erase_until_eol(attributes)}")
+    _cprint(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{text}{erase_until_eol(attributes)}")
 
 
 def erase_until_eol(attributes):
