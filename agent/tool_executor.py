@@ -1143,6 +1143,9 @@ def _commit_tool_result(
                 tool_message["display_metadata"] = metadata
         except Exception as callback_error:
             logging.debug("Tool result metadata callback error: %s", callback_error)
+    # TEMP debug: trace message-append positions (remove when done). Lazy import avoids the cycle.
+    from agent.conversation_loop import LineKind, print_text_line
+    print_text_line(LineKind.DEBUG, "tool_executor._commit_tool_result")  # TEMP debug
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None

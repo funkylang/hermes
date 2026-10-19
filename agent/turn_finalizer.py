@@ -262,6 +262,9 @@ def _close_transcript_tail(agent, messages, final_response, interrupted, _recove
         # (#65919 §7)
         _tail = messages[-1] if messages else None
         if not isinstance(_tail, dict) or _tail.get("role") != "assistant":
+            # TEMP debug: trace message-append positions (remove when done).
+            from agent.conversation_loop import LineKind, print_text_line  # lazy: conversation_loop imports this module
+            print_text_line(LineKind.DEBUG, "turn_finalizer._close_transcript_tail")
             append_message(messages, {"role": "assistant", "content": final_response})
         elif (
             _tail.get("content") != final_response

@@ -36,7 +36,7 @@ from agent.surface_switch import (
 )
 from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
 # Fork addition (agent-owns-display): raw ANSI line rendering through the CLI's printer.
-from hermes_cli.cli_render import _cprint as _line_cprint, _terminal_columns as _line_terminal_columns
+from hermes_cli.cli_render import _cprint, _terminal_columns as _line_terminal_columns
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from agent.turn_retry_state import TurnRetryState
 # Placeholder assistant line appended by a mid-turn redirect: keeps role alternation
@@ -358,6 +358,8 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
                     f"{existing_content}\n{text}" if isinstance(existing_content, str) else text
                 )
             else:
+                # TEMP debug: trace message-append positions (remove when done).
+                print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")
                 append_message(messages, {"role": "user", "content": text})
         else:  # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw chain-of-thought never enters replayable content; the interruption scaffold is replay text carried only in the user correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``.
             checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
@@ -380,6 +382,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
                     placeholder["api_content"] = _INTERRUPTED_PLACEHOLDER
                 append_message(messages, placeholder)
             # Transcript shows the user's own words; the provider replays the scaffolded form.
+            print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug
             append_message(messages, {"role": "user", "content": text, "api_content": correction})
 
         agent._current_streamed_assistant_text = ""
@@ -436,6 +439,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
         msg: Dict[str, Any] = {"role": "user", "content": text}
         if context_parts:
             msg["api_content"] = correction
+        print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug
         append_message(messages, msg)
 
         # Stateful scrubber for <memory-context> spans split across stream deltas (#5719).  sanitize_context()
@@ -446,7 +450,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
         # learned a block was open and leaked delta2 as content).
         agent._current_streamed_assistant_text = ""
         agent._stream_needs_break = True
-    
+
         # Clear steering wait markers (reasoning has been consumed)
         if hasattr(agent, "_clear_steering_wait_markers"):
             agent._clear_steering_wait_markers()
@@ -1667,7 +1671,7 @@ kind_infos = [
 ]
 
 
-def _kind_sgr(kind_info: KindInfo) -> str:
+def kind_to_sgr(kind_info: KindInfo) -> str:
     """SGR prefix for a kind: foreground, background, then attribute flags."""
     def hex_triplets(hex_colour):
         return [int(hex_colour[i:i + 2], 16) for i in range(0, 6, 2)]
@@ -1685,14 +1689,8 @@ def _kind_sgr(kind_info: KindInfo) -> str:
 
 
 # prompt_toolkit raw-byte wrappers (see module note above).
-_PT_RAW_OPEN = "\x01"
-_PT_RAW_CLOSE = "\x02"
-
-
-def _abbrev_debug(value: Any, limit: int = 120) -> str:
-    """One-line preview of a value for DEBUG instrumentation lines."""
-    text = "None" if value is None else str(value).replace("\n", " ")
-    return text[:limit].rstrip() + "…" if len(text) > limit else text
+RAW_OPEN = "\x01"
+RAW_CLOSE = "\x02"
 
 
 def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
@@ -1709,25 +1707,19 @@ def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
     width = max(_line_terminal_columns(), len(inner) + 5)
     rule_tail_count = max(width - 5 - len(inner), 0)
     line = info.symbol * 5 + inner + info.symbol * rule_tail_count
-    _line_cprint(f"{_kind_sgr(info)}{line}{_erase_to_eol(info)}\x1b[0m")
+    attributes = kind_to_sgr(info)
+    _cprint(f"{attributes}{line}\x1b[0m")
 
 
-def print_text_line(kind: LineKind, text: str) -> None:
+def print_text_line(kind: LineKind, text: str = '') -> None:
     """Render a content line in the kind's colours; background extends to end of line."""
     info = kind_infos[kind.value]
-    _line_cprint(f"{_kind_sgr(info)}{text or ''}{_erase_to_eol(info)}\x1b[0m")
+    attributes = kind_to_sgr(info)
+    _cprint(f"{attributes}{text}{erase_until_eol(attributes)}")
 
 
-def _erase_to_eol(kind_info: KindInfo) -> str:
-    """ESC[0K that erases cursor-to-EOL with the kind's background colour.
-
-    prompt_toolkit resets SGR attributes when it reaches a [ZeroWidthEscape] fragment,
-    so the background is re-asserted INSIDE the raw block (written before ESC[0K by the
-    terminal). The \x01/\x02 wrapper is PT plumbing; see the module note above.
-    """
-    bc = kind_info.background_colour
-    rgb = ";".join(str(int(bc[i:i + 2], 16)) for i in range(0, 6, 2))
-    return f"{_PT_RAW_OPEN}\x1b[48;2;{rgb}m\x1b[0K{_PT_RAW_CLOSE}"
+def erase_until_eol(attributes):
+    return f"{RAW_OPEN}{attributes}\x1b[0K{RAW_CLOSE}\x1b[0m"
 
 
 def _run_conversation_turn(
@@ -1755,6 +1747,7 @@ def _run_conversation_turn(
     model-facing message; an empty string suppresses titling for this turn).
     ``persist_user_display_*``:
     display-only event rendering; the model still receives the message unchanged."""
+
     if moa_config is None:
         user_message, moa_config, persist_user_message = _decode_inline_moa_turn(
             user_message, persist_user_message

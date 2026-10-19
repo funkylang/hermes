@@ -241,6 +241,8 @@ class CLIChatTurnMixin:
                 staged_user_message.update(content=str(message), display_kind=message.display_kind,
                                            display_metadata={"display_text": message.display_text,
                                                              "notification_category": message.notification_category})
+            from agent.conversation_loop import LineKind, print_text_line  # TEMP debug (lazy: cycle)
+            print_text_line(LineKind.DEBUG, "cli_chat_turn_mixin._chat_stage_user_message")  # TEMP debug
             agent._pending_cli_user_message = staged_user_message
             self.conversation_history.append(staged_user_message)
 
