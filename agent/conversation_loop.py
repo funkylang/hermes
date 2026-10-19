@@ -13,6 +13,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field, fields
+from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 
 from agent.codex_responses_adapter import _summarize_user_message_for_log
@@ -34,6 +35,8 @@ from agent.surface_switch import (
     identity_line_value, note_inert_pinned_tools, runtime_host_value, stage_surface_switch_note,
 )
 from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
+# Fork addition (agent-owns-display): raw ANSI line rendering through the CLI's printer.
+from hermes_cli.cli_render import _cprint as _line_cprint, _terminal_columns as _line_terminal_columns
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from agent.turn_retry_state import TurnRetryState
 # Placeholder assistant line appended by a mid-turn redirect: keeps role alternation
@@ -1613,6 +1616,118 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[Dict[str, Any]]:
             if _ae.action == "break":
                 return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Agent-owns-display: section headers and content lines rendered directly by
+# the agent through the CLI's ANSI printer (improve/concept-agent-owns-display.txt).
+# Each LineKind is data-driven via KindInfo; the print functions translate logical
+# attribute flags and hex colours into SGR codes. Backgrounds span the full terminal
+# width via an erase-in-line escape (ESC[0K): the terminal paints cursor-to-EOL with
+# the current background colour, so no padding characters land in the line buffer
+# (keeps middle-click copying clean). ESC[0K travels through prompt_toolkit's ANSI
+# parser wrapped in \x01...\x02 markers — PT emits those bytes raw and ignores their
+# width. Prompt_toolkit is temporary; when we write direct, drop the wrappers and
+# keep the escapes.
+# ---------------------------------------------------------------------------
+
+ITALIC = 1
+BOLD = 2
+UNDERLINE = 4
+
+
+class LineKind(Enum):
+    INPUT = auto()
+    REASONING = auto()
+    TOOL_CALL = auto()
+    TOOL_RESULT = auto()
+    DIAGNOSTICS = auto()
+    INJECTED_INPUT = auto()
+    DEBUG = auto()
+
+
+@dataclass(frozen=True)
+class KindInfo:
+    label: str
+    symbol: str                # box-drawing character used for the header rule
+    text_colour: str           # hex without '#', e.g. "FFD700"
+    background_colour: str     # hex without '#', always defined
+    text_attributes: int       # bitmask: ITALIC | BOLD | UNDERLINE
+
+
+kind_infos = [
+    None,                                        # index 0 unused (auto() starts at 1)
+    KindInfo("User", "─", "FFD700", "2A2418", BOLD),                # INPUT — current style
+    KindInfo("Reasoning", "─", "8A867B", "232019", ITALIC),         # REASONING
+    KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL
+    KindInfo("Tool Result", "┄", "5C9EAD", "1B2A1B", 0),            # TOOL_RESULT
+    KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
+    KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
+    KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
+]
+
+
+def _kind_sgr(kind_info: KindInfo) -> str:
+    """SGR prefix for a kind: foreground, background, then attribute flags."""
+    def hex_triplets(hex_colour):
+        return [int(hex_colour[i:i + 2], 16) for i in range(0, 6, 2)]
+
+    codes = [38, 2, *hex_triplets(kind_info.text_colour),
+             48, 2, *hex_triplets(kind_info.background_colour)]
+    attrs = kind_info.text_attributes
+    if attrs & BOLD:
+        codes.append(1)
+    if attrs & ITALIC:
+        codes.append(3)
+    if attrs & UNDERLINE:
+        codes.append(4)
+    return "\x1b[" + ";".join(str(c) for c in codes) + "m"
+
+
+# prompt_toolkit raw-byte wrappers (see module note above).
+_PT_RAW_OPEN = "\x01"
+_PT_RAW_CLOSE = "\x02"
+
+
+def _abbrev_debug(value: Any, limit: int = 120) -> str:
+    """One-line preview of a value for DEBUG instrumentation lines."""
+    text = "None" if value is None else str(value).replace("\n", " ")
+    return text[:limit].rstrip() + "…" if len(text) > limit else text
+
+
+def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
+    """Render a section header rule: {symbol×5} {label} {title} {HH:MM} {symbol fill}.
+
+    The rule uses the kind's symbol; background continues to end of line via ESC[0K.
+    Timestamp always shown.
+    """
+    from datetime import datetime as _datetime
+
+    info = kind_infos[kind.value]
+    ts = _datetime.now().strftime("%H:%M")
+    inner = f" {info.label} " + (f"{title} " if title else "") + f"{ts} "
+    width = max(_line_terminal_columns(), len(inner) + 5)
+    rule_tail_count = max(width - 5 - len(inner), 0)
+    line = info.symbol * 5 + inner + info.symbol * rule_tail_count
+    _line_cprint(f"{_kind_sgr(info)}{line}{_erase_to_eol(info)}\x1b[0m")
+
+
+def print_text_line(kind: LineKind, text: str) -> None:
+    """Render a content line in the kind's colours; background extends to end of line."""
+    info = kind_infos[kind.value]
+    _line_cprint(f"{_kind_sgr(info)}{text or ''}{_erase_to_eol(info)}\x1b[0m")
+
+
+def _erase_to_eol(kind_info: KindInfo) -> str:
+    """ESC[0K that erases cursor-to-EOL with the kind's background colour.
+
+    prompt_toolkit resets SGR attributes when it reaches a [ZeroWidthEscape] fragment,
+    so the background is re-asserted INSIDE the raw block (written before ESC[0K by the
+    terminal). The \x01/\x02 wrapper is PT plumbing; see the module note above.
+    """
+    bc = kind_info.background_colour
+    rgb = ";".join(str(int(bc[i:i + 2], 16)) for i in range(0, 6, 2))
+    return f"{_PT_RAW_OPEN}\x1b[48;2;{rgb}m\x1b[0K{_PT_RAW_CLOSE}"
 
 
 def _run_conversation_turn(
