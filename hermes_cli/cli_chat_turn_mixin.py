@@ -80,14 +80,8 @@ class CLIChatTurnMixin:
         if agent is None:
             return None
 
-        # TEMP debug: print user_input length now that agent exists
-        from agent.conversation_loop import LineKind, print_text_line  # TEMP debug (lazy: cycle)
-        with self.lock:  # TEMP debug
-            _ui_len = len(self.user_input)
-        print_text_line(LineKind.DEBUG, f"cli_chat_turn_mixin.chat user_input_len={_ui_len}")  # TEMP debug
-
         # Drain accumulated user input, show it as an input box.
-        from agent.conversation_loop import print_text_box
+        from agent.conversation_loop import LineKind, print_text_box
         with self.lock:
             drained = self.user_input
             if drained:
@@ -257,8 +251,6 @@ class CLIChatTurnMixin:
                 staged_user_message.update(content=str(message), display_kind=message.display_kind,
                                            display_metadata={"display_text": message.display_text,
                                                              "notification_category": message.notification_category})
-            from agent.conversation_loop import LineKind, print_text_line  # TEMP debug (lazy: cycle)
-            print_text_line(LineKind.DEBUG, "cli_chat_turn_mixin._chat_stage_user_message")  # TEMP debug
             agent._pending_cli_user_message = staged_user_message
             self.conversation_history.append(staged_user_message)
 
