@@ -1461,6 +1461,13 @@ class CLITuiMixin:
         has_images = bool(self._attached_images)
         if not (text or has_images):
             return
+        # Accumulate every submitted user message.
+        if text:
+            with self.lock:
+                if self.user_input:
+                    self.user_input += "\n\n" + text  # new paragraph
+                else:
+                    self.user_input = text
         if self._tui_enter_inline_command(event, text, has_images):
             return
         # Snapshot and clear attached images; bundle text + images as a tuple when present.

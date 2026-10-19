@@ -36,7 +36,7 @@ from agent.surface_switch import (
 )
 from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
 # Fork addition (agent-owns-display): raw ANSI line rendering through the CLI's printer.
-from hermes_cli.cli_render import _cprint, _terminal_columns as _line_terminal_columns
+from hermes_cli.cli_render import _accent_hex as _ui_accent_hex, _cprint, _terminal_columns as _line_terminal_columns
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from agent.turn_retry_state import TurnRetryState
 # Placeholder assistant line appended by a mid-turn redirect: keeps role alternation
@@ -1661,7 +1661,7 @@ class KindInfo:
 
 kind_infos = [
     None,                                        # index 0 unused (auto() starts at 1)
-    KindInfo("User", "─", "FFD700", "2A2418", BOLD),                # INPUT — current style
+    KindInfo("User", "─", "FFBF00", "2A2418", BOLD),                # INPUT — skin accent resolved at render time
     KindInfo("Reasoning", "─", "8A867B", "232019", ITALIC),         # REASONING
     KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL
     KindInfo("Tool Result", "┄", "5C9EAD", "1B2A1B", 0),            # TOOL_RESULT
@@ -1676,7 +1676,12 @@ def kind_to_sgr(kind_info: KindInfo) -> str:
     def hex_triplets(hex_colour):
         return [int(hex_colour[i:i + 2], 16) for i in range(0, 6, 2)]
 
-    codes = [38, 2, *hex_triplets(kind_info.text_colour),
+    # The User box follows the active skin accent ("golden letter"), not a fixed hex;
+    # the table value is the fallback when the skin engine is unavailable.
+    text_colour = kind_info.text_colour
+    if kind_info is kind_infos[LineKind.INPUT.value]:
+        text_colour = _ui_accent_hex().lstrip("#").upper() or kind_info.text_colour
+    codes = [38, 2, *hex_triplets(text_colour),
              48, 2, *hex_triplets(kind_info.background_colour)]
     attrs = kind_info.text_attributes
     if attrs & BOLD:
@@ -1720,6 +1725,61 @@ def print_text_line(kind: LineKind, text: str = '') -> None:
 
 def erase_until_eol(attributes):
     return f"{RAW_OPEN}{attributes}\x1b[0K{RAW_CLOSE}\x1b[0m"
+
+
+def wrap_box_lines(text: str, box_width: int) -> List[str]:
+    """Wrap one text chunk to ``box_width`` (wcwidth-aware).
+
+    The line-wrapping algorithm of the streaming boxes: soft break at the last
+    space that fits, hard break when a single token overflows. Returns the list
+    of physical lines (never more than fits each row).
+    """
+    from wcwidth import wcswidth
+
+    lines: List[str] = []
+    segment = text
+    while segment:
+        within_text = False
+        width = 0
+        last_space_position = 0
+
+        for i, ch in enumerate(segment):
+            if ch == " ":
+                width += 1
+                if within_text:
+                    last_space_position = i
+            elif ch == "\t":
+                width += 8
+            else:
+                within_text = True
+                width += wcswidth(ch)
+
+            # Check after adding char - does it exceed box_width?
+            if width > box_width:
+                if last_space_position:
+                    # Soft break
+                    lines.append(segment[:last_space_position])
+                    segment = segment[last_space_position + 1:]
+                    break
+                # Hard break
+                lines.append(segment[:i])
+                segment = segment[i:]
+                break
+        else:
+            # Text fits - no wrap needed
+            lines.append(segment)
+            segment = ""
+
+    return lines
+
+
+def print_text_box(kind: LineKind, text: str) -> None:
+    """Render a complete box: header rule + all wrapped content lines."""
+    print_header_line(kind)
+    box_width = max(_line_terminal_columns(), 20)
+    for raw_line in (text or "").split("\n"):
+        for line in wrap_box_lines(raw_line, box_width):
+            print_text_line(kind, line)
 
 
 def _run_conversation_turn(

@@ -79,6 +79,22 @@ class CLIChatTurnMixin:
         agent = self.agent
         if agent is None:
             return None
+
+        # TEMP debug: print user_input length now that agent exists
+        from agent.conversation_loop import LineKind, print_text_line  # TEMP debug (lazy: cycle)
+        with self.lock:  # TEMP debug
+            _ui_len = len(self.user_input)
+        print_text_line(LineKind.DEBUG, f"cli_chat_turn_mixin.chat user_input_len={_ui_len}")  # TEMP debug
+
+        # Drain accumulated user input, show it as an input box.
+        from agent.conversation_loop import print_text_box
+        with self.lock:
+            drained = self.user_input
+            if drained:
+                self.user_input = ""
+        if drained:
+            print_text_box(LineKind.INPUT, drained)
+
         self._sync_fallback_chain_with_config(agent)  # chain added after this chat opened reaches this turn
         message = self._chat_route_images(message, images)
 

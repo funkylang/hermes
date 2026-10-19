@@ -307,6 +307,8 @@ class CLIInitMixin:
         self._app = None  # prompt_toolkit Application (set in run())
 
         self.conversation_history: List[Dict[str, Any]] = []
+        # NEW (steer deferral): accumulated user input; updates/reads are guarded by self.lock.
+        self.user_input = ""
         self.session_start = datetime.now()
         # Per-prompt elapsed timer shown in the status bar.
         self._prompt_start_time: Optional[float] = None
