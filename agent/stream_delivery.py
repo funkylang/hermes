@@ -51,6 +51,11 @@ class StreamDeliveryMixin:
         Flushes the think scrubber's benign tail first, routed through the context scrubber (a span
         straddling the boundary must still be caught), then the context scrubber's own tail.
         """
+        # Flush any incomplete lines from uniform streaming buffers
+        self.flush_stream_event(LineKind.RESPONSE)
+        self.flush_stream_event(LineKind.REASONING)
+        self.flush_stream_event(LineKind.TOOL_CALL)
+        
         think_scrubber = getattr(self, "_stream_think_scrubber", None)
         ctx_scrubber = getattr(self, "_stream_context_scrubber", None)
         # Inline <think> text is forwarded to the reasoning pane only while no native reasoning delta
@@ -305,15 +310,61 @@ class StreamDeliveryMixin:
     #   _fire_tool_args_stream -> LineKind.TOOL_CALL  (raw argument fragments)
     # Unified stream display work belongs HERE, not in the per-frontend renderers. ──
 
-    def handle_stream_event(self, kind) -> None:
-        """Draw this streaming phase's box header when the phase changes (agent-owns-display).
+    def handle_stream_event(self, kind, text=None) -> None:
+        """Unified streaming display handler - manages box headers and content rendering.
 
-        The three streaming lanes each call this with their LineKind; the header is drawn
-        through print_header_line, which also stamps ACTIVE_CLI.header_kind — so a repeated
-        call in the same phase is a cheap enum comparison, never a double header."""
-        from agent.conversation_loop import ACTIVE_CLI, print_header_line  # lazy: import graph
+        When called with just kind: draws header if phase changed.
+        When called with kind + text: buffers and renders complete lines using the wcwidth-aware
+        wrapping algorithm (wrap_box_lines)."""
+        # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
+        from agent.conversation_loop import ACTIVE_CLI
+        if ACTIVE_CLI is None:
+            return
+        
+        from agent.conversation_loop import print_header_line, print_text_line, wrap_box_lines  # lazy: import graph
+        from hermes_cli.cli_render import _terminal_columns
+        
+        # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
             print_header_line(kind)
+        
+        # No text to render - just header handling
+        if text is None or not text:
+            return
+        
+        # Use new fields for uniform streaming (not reusing old renderer's fields)
+        buf_attr = f"_uniform_stream_buf_{kind.name}"
+        current_buf = getattr(self, buf_attr, "") + text
+        
+        # Extract and render complete lines (print line by line, not word by word)
+        while '\n' in current_buf:
+            line, current_buf = current_buf.split('\n', 1)
+            box_width = max(_terminal_columns(), 20)
+            for wrapped_line in wrap_box_lines(line, box_width):
+                print_text_line(kind, wrapped_line)
+        
+        # Store remainder for next call (incomplete line buffered until newline arrives)
+        setattr(self, buf_attr, current_buf)
+
+    def flush_stream_event(self, kind) -> None:
+        """Flush any remaining incomplete line from the uniform stream buffer."""
+        # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
+        from agent.conversation_loop import ACTIVE_CLI
+        if ACTIVE_CLI is None:
+            return
+        
+        from agent.conversation_loop import print_text_line, wrap_box_lines
+        from hermes_cli.cli_render import _terminal_columns
+        
+        buf_attr = f"_uniform_stream_buf_{kind.name}"
+        remaining = getattr(self, buf_attr, "")
+        
+        if remaining:
+            box_width = max(_terminal_columns(), 20)
+            for wrapped_line in wrap_box_lines(remaining, box_width):
+                print_text_line(kind, wrapped_line)
+            # Clear the buffer after flushing
+            setattr(self, buf_attr, "")
 
     def _fire_stream_delta(self, text: str) -> None:
         """Fire all registered stream delta callbacks (display + TTS)."""
@@ -348,7 +399,7 @@ class StreamDeliveryMixin:
                 text = text.lstrip("\n")
         if not text:
             return
-        self.handle_stream_event(LineKind.RESPONSE)
+        self.handle_stream_event(LineKind.RESPONSE, text)
         delivered = self._deliver_to_stream_callbacks(text)
         self._enqueue_stream_hook("on_stream_delta", delta=text, kind="text")
         if delivered:
@@ -366,7 +417,7 @@ class StreamDeliveryMixin:
             # content deltas.
             self._note_dropped_stream_writer("_fire_reasoning_delta")
             return
-        self.handle_stream_event(LineKind.REASONING)
+        self.handle_stream_event(LineKind.REASONING, text)
         self._call_quietly(self.reasoning_callback, text)
         # Resolve the opt-in once per stream, not per token: each lookup took _CONFIG_LOCK and
         # serialized every streaming thread in the process behind a config cache hit.
@@ -393,7 +444,7 @@ class StreamDeliveryMixin:
         Lets UI layers render the arguments being generated (live JSON stream), not just
         a frozen 'generating…' spinner. Called from the streaming loop per argument chunk;
         ``tool_name`` is best-effort (empty string until the provider sends the name)."""
-        self.handle_stream_event(LineKind.TOOL_CALL)
+        self.handle_stream_event(LineKind.TOOL_CALL, text_chunk)
         self._call_quietly(self.tool_args_stream_callback, tool_name, text_chunk)
 
     def _has_stream_consumers(self) -> bool:
