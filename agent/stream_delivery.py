@@ -343,12 +343,9 @@ class StreamDeliveryMixin:
         if text is None or not text:
             return
         
-        # Get box width and buffer attribute for this stream kind
+        # Get box width and add new text to the shared stream buffer (one stream active at a time)
         box_width = max(_terminal_columns(), 20)
-        buf_attr = f"_uniform_stream_buf_{kind.name}"
-        
-        # Add new text to buffer
-        current_buf = getattr(self, buf_attr, "") + text
+        current_buf = self.stream_buffer + text
         
         # If we have a newline, extract and print complete lines (word wrap if needed)
         while '\n' in current_buf:
@@ -379,10 +376,10 @@ class StreamDeliveryMixin:
                 current_buf = wrapped_lines[-1]
         
         # Store remaining text in buffer for next call
-        setattr(self, buf_attr, current_buf)
+        self.stream_buffer = current_buf
 
     def flush_stream_event(self, kind) -> None:
-        """Flush any remaining incomplete line from the uniform stream buffer."""
+        """Flush any remaining incomplete line from the shared stream buffer."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
         from agent.conversation_loop import ACTIVE_CLI
         if ACTIVE_CLI is None:
@@ -391,15 +388,15 @@ class StreamDeliveryMixin:
         from agent.conversation_loop import print_text_line, wrap_box_lines
         from hermes_cli.cli_render import _terminal_columns
         
-        buf_attr = f"_uniform_stream_buf_{kind.name}"
-        remaining = getattr(self, buf_attr, "")
+        remaining = self.stream_buffer
+        if not remaining:
+            return
         
-        if remaining:
-            box_width = max(_terminal_columns(), 20)
-            for wrapped_line in wrap_box_lines(remaining, box_width):
-                print_text_line(kind, wrapped_line)
-            # Clear the buffer after flushing
-            setattr(self, buf_attr, "")
+        box_width = max(_terminal_columns(), 20)
+        for wrapped_line in wrap_box_lines(remaining, box_width):
+            print_text_line(kind, wrapped_line)
+        # Clear the buffer after flushing
+        self.stream_buffer = ""
 
     def _fire_stream_delta(self, text: str) -> None:
         """Fire all registered stream delta callbacks (display + TTS)."""

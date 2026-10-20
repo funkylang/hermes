@@ -637,6 +637,7 @@ _SESSION_STATE: Dict[str, Any] = {
 
 # Streaming delivery state.
 _STREAM_STATE: Dict[str, Any] = {
+    "stream_buffer": "",  # shared partial-line buffer for the active stream (one stream at a time)
     "_stream_callback": None,  # streaming TTS; set early so _vprint can reference it
     # Stateful scrubbers: <memory-context> / thinking spans split across deltas defeat
     # per-delta regexes (both tags must be in one string).
