@@ -474,16 +474,19 @@ class CLIStreamMixin:
     def _stream_delta(self, text) -> None:
         """Line-buffered streaming callback for real-time token rendering.
 
-        Emits complete lines via _cprint (reliable under prompt_toolkit's patch_stdout);
-        reasoning tags are suppressed, or routed to the reasoning box when show_reasoning is on.
+        DISABLED 2026-10-19: unified streaming via handle_stream_event now renders
+        response content directly; this old path was causing double display.
+        Kept as no-op for callback registration compatibility.
+        
         ``None`` = intermediate turn boundary (tools about to run): flush boxes and reset state.
         """
         if text is None:
+            # Flush boxes on turn boundaries (still needed for state management)
             self._flush_stream()
             self._reset_stream_state()
             return
-        if not text:
-            return
+        # Old rendering commented out - new system in stream_delivery.handle_stream_event
+        return  # Early return to prevent double rendering
         self._stream_started = True
         self._stream_prefilt = getattr(self, "_stream_prefilt", "") + text
 
