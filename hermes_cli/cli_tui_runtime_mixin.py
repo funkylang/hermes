@@ -109,8 +109,10 @@ class CLITuiRuntimeMixin:
 
         if isinstance(user_input, str) and _PASTE_REF_RE.search(user_input):
             user_input = self._expand_paste_references(user_input)
-        _cprint("")
-        self._print_user_message_preview(notification_preview or user_input)
+        # Legacy submit-time echo DISABLED (double display): chat() drains
+        # self.user_input and renders the LineKind.INPUT box instead.
+        # _cprint("")
+        # self._print_user_message_preview(notification_preview or user_input)
 
         if submit_images:
             n = len(submit_images)
