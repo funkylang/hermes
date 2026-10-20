@@ -300,6 +300,10 @@ class StreamDeliveryMixin:
 
     def _emit_stream_end(self, *, final_text: str, finished: bool, error: str | None) -> None:
         self._enqueue_stream_hook("on_stream_end", final_text=final_text, finished=finished, error=error)
+        # Flush remaining buffer content so lines without trailing newlines render immediately
+        self.flush_stream_event(LineKind.RESPONSE)
+        self.flush_stream_event(LineKind.REASONING)
+        self.flush_stream_event(LineKind.TOOL_CALL)
 
     # ── OUR MAIN STREAMING HOOK POINT ─────────────────────────────────────────────
     # handle_stream_event is the one display funnel all streaming phases pass through:
