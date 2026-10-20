@@ -1432,13 +1432,6 @@ class CLITuiMixin:
             return
         buf = event.app.current_buffer
         raw_text = buf.text
-        # TEMP INSTRUMENTATION — remove on revert
-        try:
-            from cli import _cprint
-
-            _cprint(f"[INSTR] _tui_handle_enter() agent={'present' if self.agent else 'none'} buf={raw_text!r:.80}")
-        except Exception:
-            pass
         # Explicit `\` + Enter continuation runs first so its backslash is consumed identically
         # whether the Enter was typed or arrived inside a paste.
         if (
