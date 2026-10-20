@@ -1675,7 +1675,7 @@ kind_infos = [
     KindInfo("Hermes", "─", "DCA000", "1C1A14", 0),                 # RESPONSE — Hermes amber, darkened (contrast tuning)
     KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
     KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
-    KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
+    KindInfo("Debug", "─", "FFFFFF", "FF0000", 0),                  # DEBUG — white on red (high visibility for live debugging)
     KindInfo("Diff", "─", "9CA3AF", "262626", 0),                   # DIFF — file edit review diff (grey)
     KindInfo("Failure", "┄", "FF5252", "2A1515", 0),                # TOOL_FAILURE — failed tool result, reddish box
 ]
