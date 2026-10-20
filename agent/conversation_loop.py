@@ -392,7 +392,6 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
             append_message(messages, {"role": "user", "content": text, "api_content": correction})
 
         agent._current_streamed_assistant_text = ""
-        agent._stream_needs_break = True
         return
     else:
         """Append an assistant placeholder plus the user's correction to the live turn so role
@@ -455,7 +454,6 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
         # delta1 and 'Let me check' as delta2 — the regex erased delta1, so downstream state machines never
         # learned a block was open and leaked delta2 as content).
         agent._current_streamed_assistant_text = ""
-        agent._stream_needs_break = True
 
         # Clear steering wait markers (reasoning has been consumed)
         if hasattr(agent, "_clear_steering_wait_markers"):
@@ -1656,6 +1654,7 @@ class LineKind(Enum):
     INJECTED_INPUT = auto()
     DEBUG = auto()
     DIFF = auto()
+    TOOL_FAILURE = auto()
 
 
 @dataclass(frozen=True)
@@ -1672,12 +1671,13 @@ kind_infos = [
     KindInfo("User", "─", "FFBF00", "2A2418", 0),                  # INPUT — skin accent resolved at render time
     KindInfo("Reasoning", "─", "A5A196", "2A261D", ITALIC),         # REASONING
     KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL — also the streaming tool-args phase
-    KindInfo("Tool Result", "┄", "5C9EAD", "1B2A1B", 0),            # TOOL_RESULT
+    KindInfo("Tool Result", "┄", "7BC47F", "1B2A1B", 0),            # TOOL_RESULT — greener text on dark-green bg
     KindInfo("Hermes", "─", "FFF8DC", "1C1A14", 0),                 # RESPONSE — response box header
     KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
     KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
     KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
-    KindInfo("Diff", "─", "7A9BB5", "1E2530", 0),                   # DIFF — file edit review diff
+    KindInfo("Diff", "─", "9CA3AF", "262626", 0),                   # DIFF — file edit review diff (grey)
+    KindInfo("Tool Failure", "┄", "FF5252", "2A1515", 0),           # TOOL_FAILURE — failed tool result, reddish box
 ]
 
 

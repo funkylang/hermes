@@ -407,12 +407,6 @@ class StreamDeliveryMixin:
             # See #65991.
             self._note_dropped_stream_writer("_fire_stream_delta")
             return
-        # One paragraph break before the first text delta after a tool iteration, without
-        # stacking blank lines across back-to-back tool iterations.
-        prepended_break = bool(getattr(self, "_stream_needs_break", False) and text and text.strip())
-        if prepended_break:
-            self._stream_needs_break = False
-            text = "\n\n" + text
         if isinstance(text, str):
             # Stateful scrubbers: per-delta regex stripping destroyed downstream state machines when a
             # tag was split across deltas; memory-context spans split across chunks must not leak to
@@ -429,7 +423,7 @@ class StreamDeliveryMixin:
             text = scrubber.feed(text) if scrubber is not None else sanitize_context(text)
             # Only strip leading newlines on the first delta — mid-stream "\n" is legitimate markdown.
             # Check the parts list, not the joined property (joining per token copies the whole reply).
-            if not prepended_break and not getattr(self, "_streamed_assistant_text_parts", None):
+            if not getattr(self, "_streamed_assistant_text_parts", None):
                 text = text.lstrip("\n")
         if not text:
             return

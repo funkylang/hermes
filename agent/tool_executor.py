@@ -1143,12 +1143,14 @@ def _commit_tool_result(
                 tool_message["display_metadata"] = metadata
         except Exception as callback_error:
             logging.debug("Tool result metadata callback error: %s", callback_error)
-    # TEMP debug: trace message-append positions (remove when done). Lazy import avoids the cycle.
+    # Tool-result box (agent-owns-display). Failed calls render in the reddish
+    # TOOL_FAILURE kind; successes stay green TOOL_RESULT. Lazy imports avoid a cycle.
     from agent.conversation_loop import LineKind, print_text_box
     try:
         from agent.display import get_transparent_tool_message
+        _is_tool_failure = _detect_tool_failure(function_name, function_result)[0]
         print_text_box(
-            LineKind.TOOL_RESULT,
+            LineKind.TOOL_FAILURE if _is_tool_failure else LineKind.TOOL_RESULT,
             get_transparent_tool_message(function_name, function_args, tool_duration, result=function_result),
         )
     except Exception as exc:  # display must never abort a turn
