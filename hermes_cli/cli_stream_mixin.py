@@ -907,34 +907,40 @@ class CLIStreamMixin:
     def _on_tool_args_stream(self, tool_name: str, text_chunk: str) -> None:
         """Stream raw tool-call argument fragments into a dim box (reasoning-box style).
 
+        DISABLED 2026-10-19: unified streaming via handle_stream_event now renders
+        tool args directly; this old path was causing double display. Kept as no-op
+        for callback registration compatibility.
+        
         The JSON being generated is shown as it arrives — meaningful for big payloads
         (write_file content, long queries), honest noise otherwise. Box opens on the first
         chunk, re-labels if a different call streams next, closes when the tool actually
         starts or content/stream boundaries hit. Text rendering is shared with the
-        reasoning box via _process_dim_box_text."""
-        from cli import _DIM, _RST, _cprint, datetime
+        reasoning box via _process_dim_box_text.
+        """
         if not text_chunk:
             return
+        # Old rendering commented out - new system in stream_delivery.handle_stream_event
+        pass
         # A new call (or generation cycle) takes over: close the previous box first.
-        current = getattr(self, "_tool_args_box_tool", None)
-        if getattr(self, "_tool_args_box_opened", False) and tool_name and tool_name != current:
-            self._close_tool_args_box()
-        if not getattr(self, "_tool_args_box_opened", False):
-            self._tool_args_box_opened = True
-            self._tool_args_box_tool = tool_name or None
-            label = f" Tool args{': ' + tool_name if tool_name else ''}"
-            if self.show_timestamps:
-                label += f" {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
-            else:
-                label += " "
-            w = self._scrollback_box_width()
-            _cprint(f"\n{_DIM}┌─{label}{'─' * max(w - 3 - len(label), 0)}┐{_RST}")
+        # current = getattr(self, "_tool_args_box_tool", None)
+        # if getattr(self, "_tool_args_box_opened", False) and tool_name and tool_name != current:
+        #     self._close_tool_args_box()
+        # if not getattr(self, "_tool_args_box_opened", False):
+        #     self._tool_args_box_opened = True
+        #     self._tool_args_box_tool = tool_name or None
+        #     label = f" Tool args{': ' + tool_name if tool_name else ''}"
+        #     if self.show_timestamps:
+        #         label += f" {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
+        #     else:
+        #         label += " "
+        #     w = self._scrollback_box_width()
+        #     _cprint(f"\n{_DIM}┌─{label}{'─' * max(w - 3 - len(label), 0)}┐{_RST}")
         # Update the label once the provider delivers the name after an empty first chunk.
-        if tool_name and self._tool_args_box_tool != tool_name:
-            self._tool_args_box_tool = tool_name
-
+        # if tool_name and self._tool_args_box_tool != tool_name:
+        #     self._tool_args_box_tool = tool_name
+        
         # Render via the shared dim-box line buffer (same behavior as reasoning box).
-        self._process_dim_box_text(text_chunk)
+        # self._process_dim_box_text(text_chunk)
 
     def _close_tool_args_box(self) -> None:
         """Close the live tool-args box if open (renders the buffered argument tail)."""
