@@ -159,6 +159,11 @@ class InterruptControlMixin:
         """Clear steering wait flags (called after reasoning is consumed)."""
         self._steer_completion_wait_active = False
         self._steering_wait_completed = False
+        # The steer has been consumed for message generation; clear the redirect so the
+        # response-cross check (_redirect_crossed_response) cannot re-trigger a duplicate
+        # restart through the same path and resend the identical prompt.
+        with _ic_lock(self, "_pending_redirect_lock"):
+            self._pending_redirect = None
 
     def _append_streaming_reasoning_text(self, text: str) -> None:
         """Append reasoning text for steering completion check."""
