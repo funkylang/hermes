@@ -318,15 +318,14 @@ class StreamDeliveryMixin:
         """Unified streaming display handler - manages box headers and content rendering.
 
         When called with just kind: draws header if phase changed.
-        When called with kind + text: buffers and renders complete lines using the wcwidth-aware
-        wrapping algorithm (wrap_box_lines)."""
+        When called with kind + text: prints text immediately for real-time streaming."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
         from agent.conversation_loop import ACTIVE_CLI
         if ACTIVE_CLI is None:
             return
         
-        from agent.conversation_loop import print_header_line, print_text_line, wrap_box_lines  # lazy: import graph
-        from hermes_cli.cli_render import _terminal_columns
+        from agent.conversation_loop import print_header_line, kind_to_sgr, RAW_OPEN, RAW_CLOSE, kind_infos  # lazy: import graph
+        from hermes_cli.cli_render import _terminal_columns as _line_terminal_columns, _cprint_impl
         
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
@@ -336,25 +335,13 @@ class StreamDeliveryMixin:
         if text is None or not text:
             return
         
-        # Use new fields for uniform streaming (not reusing old renderer's fields)
-        buf_attr = f"_uniform_stream_buf_{kind.name}"
-        current_buf = getattr(self, buf_attr, "") + text
+        # Print text immediately without waiting for newlines
+        info = kind_infos[kind.value]
+        attributes = kind_to_sgr(info)
         
-        # Extract and render complete lines (print line by line, not word by word)
-        while '\n' in current_buf:
-            line, current_buf = current_buf.split('\n', 1)
-            box_width = max(_terminal_columns(), 20)
-            # Ensure blank lines are preserved for markdown paragraph breaks
-            wrapped_lines = wrap_box_lines(line, box_width)
-            if not wrapped_lines and not line:
-                # Blank line - print a single space to maintain line height
-                print_text_line(kind, ' ')
-            else:
-                for wrapped_line in wrapped_lines:
-                    print_text_line(kind, wrapped_line)
-        
-        # Store remainder for next call (incomplete line buffered until newline arrives)
-        setattr(self, buf_attr, current_buf)
+        # Use _cprint_impl directly with add_newline=False to stream without adding line breaks
+        from hermes_cli.cli_render import _cprint_impl
+        _cprint_impl(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{text}", add_newline=False)
 
     def flush_stream_event(self, kind) -> None:
         """Flush any remaining incomplete line from the uniform stream buffer."""
