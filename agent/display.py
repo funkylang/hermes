@@ -29,6 +29,25 @@ _MAX_INLINE_DIFF_FILES = 6
 _MAX_INLINE_DIFF_LINES = 80
 
 
+# The DIFF box's default palette doubles as the diff renderer's "active skin": the state
+# every rendered line restores after its own color run. This keeps gaps between colored
+# segments inside the box's background instead of resetting to terminal defaults.
+_diff_base_restore_cached: str | None = None
+
+
+def _diff_base_restore() -> str:
+    """SGR restoring the DIFF box's default text+background; terminal reset as fallback."""
+    global _diff_base_restore_cached
+    if _diff_base_restore_cached is not None:
+        return _diff_base_restore_cached
+    try:
+        from agent.conversation_loop import LineKind, kind_infos, kind_to_sgr
+        _diff_base_restore_cached = kind_to_sgr(kind_infos[LineKind.DIFF.value])
+    except Exception:
+        _diff_base_restore_cached = _ANSI_RESET
+    return _diff_base_restore_cached
+
+
 def _display_url(value: Any) -> str:
     """Extract a display-only URL without assuming model argument types."""
     value = (value.get("url") or value.get("href")) if isinstance(value, dict) else value
@@ -753,6 +772,11 @@ def _render_inline_unified_diff(diff: str) -> list[str]:
     """Render unified diff lines in Hermes' inline transcript style."""
     rendered: list[str] = []
     from_file = to_file = None
+    # Non-diff lines (file/hunk/context/bare) set no background of their own, so each
+    # carries the DIFF box's default state up front — otherwise the gap shows the
+    # terminal's background instead of the box's. +/- lines are self-contained: their
+    # escapes already set fg+bg per line and need no help.
+    base = _diff_base_restore()
     for raw_line in diff.splitlines():
         if raw_line.startswith("--- "):
             from_file = raw_line[4:].strip()
@@ -760,13 +784,15 @@ def _render_inline_unified_diff(diff: str) -> list[str]:
         if raw_line.startswith("+++ "):
             to_file = raw_line[4:].strip()
             if from_file or to_file:
-                rendered.append(f"{_diff_ansi()['file']}{from_file or 'a/?'} → {to_file or 'b/?'}{_ANSI_RESET}")
+                rendered.append(f"{base}{_diff_ansi()['file']}{from_file or 'a/?'} → {to_file or 'b/?'}")
             continue
         color = next((c for prefix, c in _DIFF_LINE_COLORS if raw_line.startswith(prefix)), None)
-        if color:
+        if color == "minus" or color == "plus":
             rendered.append(f"{_diff_ansi()[color]}{raw_line}{_ANSI_RESET}")
+        elif color:
+            rendered.append(f"{base}{_diff_ansi()[color]}{raw_line}")
         elif raw_line:
-            rendered.append(raw_line)
+            rendered.append(f"{base}{raw_line}")
     return rendered
 
 
@@ -807,7 +833,7 @@ def _summarize_rendered_diff_sections(
         summary = t("display.diff.omitted_lines", count=omitted_lines)
         if omitted_files:
             summary += t("display.diff.omitted_files", count=omitted_files)
-        rendered.append(f"{_diff_ansi()['hunk']}{summary}{_ANSI_RESET}")
+        rendered.append(f"{_diff_base_restore()}{_diff_ansi()['hunk']}{summary}")
     return rendered
 
 
@@ -1343,33 +1369,30 @@ def _transparent_error_message(tool_name: str, result) -> str | None:
     return text or None
 
 
-def _get_transparent_tool_message(tool_name: str, args: dict | None, duration: float, result: str | None = None) -> str:
+def _get_transparent_tool_message(tool_name: str, args: dict | None, result: str | None = None) -> str:
     args = redact_tool_args_for_display(tool_name, args) or (args if isinstance(args, dict) else {})
     emoji = tool_row_emoji(tool_name, args or None)
     is_failure = _detect_tool_failure(tool_name, result)[0]
 
-    def _duration_part() -> str:
-        return f"  {duration:.1f}s" if isinstance(duration, (int, float)) else ""
-
     arg_pieces = _transparent_args_line(tool_name, args)
     if not arg_pieces:
-        lines = [f"{emoji} {tool_name}{_duration_part()}"]
+        lines = [f"{emoji} {tool_name}"]
     elif len(arg_pieces) == 1:
-        # Short single-arg calls stay one line; long ones wrap with the status.
-        line = f"{emoji} {tool_name} {arg_pieces[0]}{_duration_part()}"
-        lines = [line] if len(line) <= _transparent_arg_limit() else [f"{emoji} {tool_name}", f"    {arg_pieces[0]}{_duration_part()}"]
+        # Short single-arg calls stay one line; long ones wrap.
+        line = f"{emoji} {tool_name} {arg_pieces[0]}"
+        lines = [line] if len(line) <= _transparent_arg_limit() else [f"{emoji} {tool_name}", f"    {arg_pieces[0]}"]
     else:
         # Many args: header line plus one indented line per arg (all of them).
-        lines = [f"{emoji} {tool_name} ({len(arg_pieces)} args){_duration_part()}"]
+        lines = [f"{emoji} {tool_name} ({len(arg_pieces)} args)"]
         for piece in arg_pieces:
             lines.append(f"    {piece}")
 
     if is_failure:
         message = _transparent_error_message(tool_name, result)
-        status = f"✗ ERROR{': ' + message if message else ''}"
+        status = f"❌ ERROR{': ' + message if message else ''}"
     else:
         summary = _transparent_summary(tool_name, result, args)
-        status = f"✓ SUCCESS{f' — {summary}' if summary else ''}"
+        status = f"✅ SUCCESS{f' — {summary}' if summary else ''}"
     lines.append(f"    {status}")
 
     return "\n  ".join(lines)
@@ -1380,11 +1403,11 @@ def _transparent_arg_limit() -> int:
     return 100
 
 
-def get_transparent_tool_message(tool_name: str, args: dict | None, duration: float, result: str | None = None) -> str:
-    """Render a full-detail completion line without letting cosmetic failures escape."""
+def get_transparent_tool_message(tool_name: str, args: dict | None, result: str | None = None) -> str:
+    """Render a full-detail completion line without letting cosmetic failures escape.
+    (Duration moved to the TOOL_RESULT box header via print_text_box.)"""
     try:
-        return _get_transparent_tool_message(tool_name, args, duration, result=result)
+        return _get_transparent_tool_message(tool_name, args, result=result)
     except Exception as exc:  # noqa: BLE001 — display must never abort a turn
         logger.debug("Transparent tool label failed for %s: %s", tool_name, exc)
-        return f"{tool_row_emoji(tool_name)} {tool_name or '?'}  {'✗ ERROR' if result and _detect_tool_failure(str(tool_name), result)[0] else '✓ SUCCESS'}"
-
+        return f"{tool_row_emoji(tool_name)} {tool_name or '?'}  {'❌ ERROR' if result and _detect_tool_failure(str(tool_name), result)[0] else '✅ SUCCESS'}"

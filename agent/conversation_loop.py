@@ -1710,12 +1710,14 @@ ACTIVE_CLI = None
 ACTIVE_AGENT = None
 
 
-def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
-    """Render a section header rule: {symbol×5} {label or title} {HH:MM} {symbol fill}.
+def print_header_line(kind: LineKind, title: Optional[str] = None,
+                      duration: Optional[float] = None) -> None:
+    """Render a section header rule: {symbol×5} {label or title} {HH:MM}[ (X.Xs)] {symbol fill}.
 
     A title replaces the kind's fixed label (used for per-tool TOOL_CALL headers);
     it must carry any emoji/verb itself. The rule uses the kind's symbol; background
-    continues to end of line via ESC[0K. Timestamp always shown.
+    continues to end of line via ESC[0K. Timestamp always shown; a tool-box duration
+    appends "(X.Xs)" after it.
     """
     from datetime import datetime as _datetime
     from wcwidth import wcswidth  # wide chars (emojis) count double, same as wrap_box_lines
@@ -1723,7 +1725,10 @@ def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
     info = kind_infos[kind.value]
     ts = _datetime.now().strftime("%H:%M")
     heading = title if title else info.label
-    inner = f" {heading} {ts} "
+    inner = f" {heading} {ts}"
+    if isinstance(duration, (int, float)):
+        inner += f" ({duration:.1f}s)"
+    inner += " "
     # Display-width math: len() counts a 2-cell emoji as 1 char, which overruns the row.
     width = max(_line_terminal_columns(), wcswidth(inner) + 5)
     rule_tail_count = max(width - 5 - wcswidth(inner), 0)
@@ -1794,9 +1799,10 @@ def wrap_box_lines(text: str, box_width: int) -> List[str]:
     return lines
 
 
-def print_text_box(kind: LineKind, text: str) -> None:
-    """Render a complete box: header rule + all wrapped content lines."""
-    print_header_line(kind)
+def print_text_box(kind: LineKind, text: str, duration: Optional[float] = None) -> None:
+    """Render a complete box: header rule (kind label + timestamp, plus duration when given)
+    + all wrapped content lines."""
+    print_header_line(kind, duration=duration)
     box_width = max(_line_terminal_columns(), 20)
     for raw_line in (text or "").split("\n"):
         if not raw_line:

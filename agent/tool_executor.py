@@ -1151,7 +1151,8 @@ def _commit_tool_result(
         _is_tool_failure = _detect_tool_failure(function_name, function_result)[0]
         print_text_box(
             LineKind.TOOL_FAILURE if _is_tool_failure else LineKind.TOOL_RESULT,
-            get_transparent_tool_message(function_name, function_args, tool_duration, result=function_result),
+            get_transparent_tool_message(function_name, function_args, result=function_result),
+            duration=tool_duration,
         )
     except Exception as exc:  # display must never abort a turn
         logging.debug("tool call box render failed for %s: %s", function_name, exc)

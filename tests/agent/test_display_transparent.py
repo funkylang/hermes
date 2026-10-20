@@ -16,7 +16,7 @@ class TestRealToolName:
 
     def test_search_files_shows_real_name(self):
         line = get_transparent_tool_message(
-            "search_files", {"pattern": "foo", "path": "."}, 0.4,
+            "search_files", {"pattern": "foo", "path": "."},
             result=json.dumps({"total_count": 3}),
         )
         assert "search_files" in line
@@ -25,7 +25,7 @@ class TestRealToolName:
 
     def test_terminal_shows_real_name(self):
         line = get_transparent_tool_message(
-            "terminal", {"command": "ls"}, 0.5,
+            "terminal", {"command": "ls"},
             result=json.dumps({"output": "", "exit_code": 0}),
         )
         assert "terminal" in line
@@ -36,7 +36,7 @@ class TestPathResolution:
 
     def test_dot_path_resolved(self):
         line = get_transparent_tool_message(
-            "search_files", {"pattern": "foo", "path": "."}, 0.4,
+            "search_files", {"pattern": "foo", "path": "."},
             result=json.dumps({"total_count": 1}),
         )
         # The raw '.' should not be the value shown; an absolute path is.
@@ -58,7 +58,7 @@ class TestStatusSuccess:
 
     def test_search_files_match_count(self):
         line = get_transparent_tool_message(
-            "search_files", {"pattern": "foo"}, 0.4,
+            "search_files", {"pattern": "foo"},
             result=json.dumps({"total_count": 5}),
         )
         assert "SUCCESS" in line
@@ -66,7 +66,7 @@ class TestStatusSuccess:
 
     def test_search_files_single_match(self):
         line = get_transparent_tool_message(
-            "search_files", {"pattern": "foo"}, 0.4,
+            "search_files", {"pattern": "foo"},
             result=json.dumps({"total_count": 1}),
         )
         assert "1 match" in line
@@ -74,7 +74,7 @@ class TestStatusSuccess:
 
     def test_terminal_exit_code(self):
         line = get_transparent_tool_message(
-            "terminal", {"command": "true"}, 0.5,
+            "terminal", {"command": "true"},
             result=json.dumps({"output": "", "exit_code": 0}),
         )
         assert "SUCCESS" in line
@@ -82,7 +82,7 @@ class TestStatusSuccess:
 
     def test_read_file_line_count(self):
         line = get_transparent_tool_message(
-            "read_file", {"path": "f.py"}, 0.1,
+            "read_file", {"path": "f.py"},
             result=json.dumps({"content": "", "total_lines": 42}),
         )
         assert "SUCCESS" in line
@@ -91,7 +91,7 @@ class TestStatusSuccess:
     def test_success_without_known_summary(self):
         """A tool with no recognized summary shape still shows SUCCESS (no fabricated detail)."""
         line = get_transparent_tool_message(
-            "my_custom_tool", {"a": 1}, 0.7,
+            "my_custom_tool", {"a": 1},
             result=json.dumps({"ok": True}),
         )
         assert "SUCCESS" in line
@@ -102,7 +102,7 @@ class TestStatusError:
 
     def test_terminal_nonzero_exit(self):
         line = get_transparent_tool_message(
-            "terminal", {"command": "make"}, 1.0,
+            "terminal", {"command": "make"},
             result=json.dumps({"output": "", "exit_code": 2}),
         )
         assert "ERROR" in line
@@ -110,7 +110,7 @@ class TestStatusError:
 
     def test_terminal_error_message_shown(self):
         line = get_transparent_tool_message(
-            "terminal", {"command": "make"}, 1.0,
+            "terminal", {"command": "make"},
             result=json.dumps({"output": "", "exit_code": 1, "error": "recipe for target failed"}),
         )
         assert "ERROR" in line
@@ -118,7 +118,7 @@ class TestStatusError:
 
     def test_structured_error_shown(self):
         line = get_transparent_tool_message(
-            "read_file", {"path": "/nope"}, 0.1,
+            "read_file", {"path": "/nope"},
             result=json.dumps({"success": False, "error": "File not found: /nope"}),
         )
         assert "ERROR" in line
@@ -131,7 +131,7 @@ class TestArgumentDisplay:
 
     def test_multiple_args_all_shown(self):
         line = get_transparent_tool_message(
-            "search_files", {"pattern": "foo", "path": ".", "file_glob": "*.py"}, 0.4,
+            "search_files", {"pattern": "foo", "path": ".", "file_glob": "*.py"},
             result=json.dumps({"total_count": 2}),
         )
         assert "pattern=foo" in line
@@ -140,7 +140,7 @@ class TestArgumentDisplay:
     def test_long_value_truncated(self):
         long_code = "x" * 500
         line = get_transparent_tool_message(
-            "execute_code", {"code": long_code}, 0.3,
+            "execute_code", {"code": long_code},
             result=json.dumps({"ok": True}),
         )
         # The full 500-char code must not be inlined verbatim
@@ -149,7 +149,7 @@ class TestArgumentDisplay:
 
     def test_empty_args_hidden(self):
         line = get_transparent_tool_message(
-            "skills_list", {"category": ""}, 0.2,
+            "skills_list", {"category": ""},
             result=json.dumps({}),
         )
         # Empty value should not produce a dangling "category="
@@ -160,6 +160,6 @@ class TestFailSafe:
     """Cosmetic failures never abort the turn (mirrors get_cute_tool_message)."""
 
     def test_garbage_input_returns_something(self):
-        out = get_transparent_tool_message("x", None, 0.5, result="not json")
+        out = get_transparent_tool_message("x", None, result="not json")
         assert isinstance(out, str)
         assert len(out) > 0
