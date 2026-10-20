@@ -1655,6 +1655,7 @@ class LineKind(Enum):
     DIAGNOSTICS = auto()
     INJECTED_INPUT = auto()
     DEBUG = auto()
+    DIFF = auto()
 
 
 @dataclass(frozen=True)
@@ -1669,13 +1670,14 @@ class KindInfo:
 kind_infos = [
     None,                                        # index 0 unused (auto() starts at 1)
     KindInfo("User", "─", "FFBF00", "2A2418", 0),                  # INPUT — skin accent resolved at render time
-    KindInfo("Reasoning", "─", "8A867B", "232019", ITALIC),         # REASONING
+    KindInfo("Reasoning", "─", "A5A196", "2A261D", ITALIC),         # REASONING
     KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL — also the streaming tool-args phase
     KindInfo("Tool Result", "┄", "5C9EAD", "1B2A1B", 0),            # TOOL_RESULT
     KindInfo("Hermes", "─", "FFF8DC", "1C1A14", 0),                 # RESPONSE — response box header
     KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
     KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
     KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
+    KindInfo("Diff", "─", "7A9BB5", "1E2530", 0),                   # DIFF — file edit review diff
 ]
 
 
