@@ -109,20 +109,24 @@ class CLIInputHookMixin:
                 on_diagnostics=_on_diagnostics,
             )
 
-            from cli import _DIM, _RST, _cprint
+            # from cli import _DIM, _RST, _cprint
 
-            # 1. Diagnostics (label, blank line, then content — all left-aligned)
+            # 1. Diagnostics box (agent-owns-display LineKind).
             if _diag.get("text"):
-                _cprint(f"{_DIM}🔬 Input hook diagnostics:{_RST}")
-                _cprint("")
-                for line in _diag["text"].splitlines():
-                    _cprint(line)
+                from agent.conversation_loop import LineKind, print_text_box
+                print_text_box(LineKind.DIAGNOSTICS, _diag["text"])
+                # _cprint(f"{_DIM}🔬 Input hook diagnostics:{_RST}")
+                # _cprint("")
+                # for line in _diag["text"].splitlines():
+                #     _cprint(line)
 
-            # 2. Auto-reply notice, then queue it as the next user message.
+            # 2. Injected-input box for the auto-reply text, then queue it as the next user message.
             if auto_reply:
-                _cprint("")
-                _cprint(f"{_DIM}⚡ Input hook auto-reply{_RST}")
+                from agent.conversation_loop import LineKind, print_text_box
+                print_text_box(LineKind.INJECTED_INPUT, auto_reply)
                 self._pending_input.put(auto_reply)
+                # _cprint("")
+                # _cprint(f"{_DIM}⚡ Input hook auto-reply{_RST}")
 
         except Exception as exc:
             # Fail-open: never break the CLI on input_hook errors
