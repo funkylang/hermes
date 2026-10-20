@@ -36,7 +36,7 @@ from agent.surface_switch import (
 )
 from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
 # Fork addition (agent-owns-display): raw ANSI line rendering through the CLI's printer.
-from hermes_cli.cli_render import _accent_hex as _ui_accent_hex, _cprint, _terminal_columns as _line_terminal_columns
+from hermes_cli.cli_render import _cprint, _terminal_columns as _line_terminal_columns
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from agent.turn_retry_state import TurnRetryState
 # Placeholder assistant line appended by a mid-turn redirect: keeps role alternation
@@ -1668,11 +1668,11 @@ class KindInfo:
 
 kind_infos = [
     None,                                        # index 0 unused (auto() starts at 1)
-    KindInfo("User", "─", "FFBF00", "2A2418", 0),                  # INPUT — skin accent resolved at render time
+    KindInfo("User", "─", "FFFFFF", "182B42", 0),                 # INPUT — white on blue
     KindInfo("Reasoning", "─", "A5A196", "2A261D", ITALIC),         # REASONING
     KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL — also the streaming tool-args phase
     KindInfo("Tool Result", "┄", "7BC47F", "1B2A1B", 0),            # TOOL_RESULT — greener text on dark-green bg
-    KindInfo("Hermes", "─", "FFF8DC", "1C1A14", 0),                 # RESPONSE — response box header
+    KindInfo("Hermes", "─", "FFBF00", "1C1A14", 0),                 # RESPONSE — Hermes amber (agent colour; not the user's)
     KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
     KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
     KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
@@ -1686,12 +1686,7 @@ def kind_to_sgr(kind_info: KindInfo) -> str:
     def hex_triplets(hex_colour):
         return [int(hex_colour[i:i + 2], 16) for i in range(0, 6, 2)]
 
-    # The User box follows the active skin accent ("golden letter"), not a fixed hex;
-    # the table value is the fallback when the skin engine is unavailable.
-    text_colour = kind_info.text_colour
-    if kind_info is kind_infos[LineKind.INPUT.value]:
-        text_colour = _ui_accent_hex().lstrip("#").upper() or kind_info.text_colour
-    codes = [38, 2, *hex_triplets(text_colour),
+    codes = [38, 2, *hex_triplets(kind_info.text_colour),
              48, 2, *hex_triplets(kind_info.background_colour)]
     attrs = kind_info.text_attributes
     if attrs & BOLD:
