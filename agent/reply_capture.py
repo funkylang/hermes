@@ -65,10 +65,34 @@ def write_reply_capture(content: str | None, finish_reason: str,
             parts.append(f"== CONTENT ==\n{content}")
         if tool_calls:
             import json
-            parts.append(f"== TOOL CALLS ==\n{json.dumps(tool_calls, indent=2)}")
+            
+            # Convert SimpleNamespace objects to dicts for JSON serialization
+            def _serialize_tool_calls(tcs):
+                result = []
+                for tc in tcs:
+                    if isinstance(tc, dict):
+                        result.append(tc)
+                    elif hasattr(tc, 'id') and hasattr(tc, 'function'):
+                        # SimpleNamespace or similar object
+                        result.append({
+                            'id': getattr(tc, 'id', None),
+                            'type': getattr(tc, 'type', None),
+                            'function': {
+                                'name': getattr(getattr(tc, 'function', None), 'name', None),
+                                'arguments': getattr(getattr(tc, 'function', None), 'arguments', None)
+                            }
+                        })
+                    else:
+                        # Fallback for unknown types
+                        result.append(str(tc))
+                return result
+            
+            parts.append(f"== TOOL CALLS ==\n{json.dumps(_serialize_tool_calls(tool_calls), indent=2)}")
         parts.append(f"[[finish_reason]] {finish_reason}")
 
         with open(next_reply_capture_path(), "w", encoding="utf-8") as f:
             f.write("\n\n".join(parts) + "\n")
-    except Exception:
+    except Exception as _exc_dbg:
+        import sys as _sys_dbg2
+        print(f"[DEBUG-write_reply_capture] ERROR: {_exc_dbg}", file=_sys_dbg2.stderr, flush=True)
         pass  # Never block streaming for debugging
