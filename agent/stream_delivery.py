@@ -325,7 +325,8 @@ class StreamDeliveryMixin:
         if ACTIVE_CLI is None:
             return
         
-        from agent.conversation_loop import print_header_line, print_text_line, wrap_box_lines  # lazy: import graph
+        from agent.conversation_loop import (print_header_line, print_text_line, wrap_box_lines,
+                                             print_text_box)  # lazy: import graph
         from hermes_cli.cli_render import _terminal_columns
         
         # Draw header when phase changes
@@ -342,41 +343,63 @@ class StreamDeliveryMixin:
         # No text to render - just header handling
         if text is None or not text:
             return
-        
-        # Get box width and add new text to the shared stream buffer (one stream active at a time)
+
+        # Box width is needed by both paths below (steer-deferral handling and normal rendering).
         box_width = max(_terminal_columns(), 20)
-        current_buf = self.stream_buffer + text
-        
-        # If we have a newline, extract and print complete lines (word wrap if needed)
-        while '\n' in current_buf:
-            line, current_buf = current_buf.split('\n', 1)
-            
-            # For complete lines with newlines, always word wrap them
-            wrapped_lines = wrap_box_lines(line, box_width)
-            if not wrapped_lines and not line:
-                # Blank line - print a single space to maintain line height
-                print_text_line(kind, ' ')
-            else:
-                for wrapped_line in wrapped_lines:
-                    print_text_line(kind, wrapped_line)
-        
-        # For text without newlines (partial lines during streaming):
-        # Only print when we have enough text to fill at least one line
-        if current_buf and len(current_buf) >= box_width:
-            # Wrap the entire buffer into physical lines
-            wrapped_lines = wrap_box_lines(current_buf, box_width)
-            
-            # Print all but the last line (keep it in buffer for next time)
-            if wrapped_lines:
-                for i, line in enumerate(wrapped_lines):
-                    if i < len(wrapped_lines) - 1:
-                        print_text_line(kind, line)
-                
-                # Store only the last (partial) line in buffer for next time
-                current_buf = wrapped_lines[-1]
-        
-        # Store remaining text in buffer for next call
-        self.stream_buffer = current_buf
+
+        # Steering boundary: cheap local checks first (phase + newline); only when both hold
+        # do we touch shared user_input - and there, atomically read+clear in one critical section.
+        drained_input = ""
+        if kind == LineKind.REASONING and "\n" in text:
+            with ACTIVE_CLI.lock:
+                drained_input = ACTIVE_CLI.user_input
+                ACTIVE_CLI.user_input = ""
+
+        if drained_input:
+            text = text.split("\n")[0]  # cut everything from the first newline onward
+            current_buf = self.stream_buffer + text
+            # A completed line at the steering boundary: print it completely (no hold-back).
+            for wrapped_line in wrap_box_lines(current_buf, box_width):
+                print_text_line(kind, wrapped_line)
+            # Open the RESPONSE box for the injected assistant message (after the reasoning lines).
+            print_header_line(LineKind.RESPONSE)
+            self.stream_buffer = ""
+            # Show the user's steering text in its own input box.
+            print_text_box(LineKind.INPUT, drained_input)
+        else:
+            # Add new text to the shared stream buffer (one stream active at a time)
+            current_buf = self.stream_buffer + text
+
+            # If we have a newline, extract and print complete lines (word wrap if needed)
+            while '\n' in current_buf:
+                line, current_buf = current_buf.split('\n', 1)
+
+                # For complete lines with newlines, always word wrap them
+                wrapped_lines = wrap_box_lines(line, box_width)
+                if not wrapped_lines and not line:
+                    # Blank line - print a single space to maintain line height
+                    print_text_line(kind, ' ')
+                else:
+                    for wrapped_line in wrapped_lines:
+                        print_text_line(kind, wrapped_line)
+
+            # For text without newlines (partial lines during streaming):
+            # Only print when we have enough text to fill at least one line
+            if current_buf and len(current_buf) >= box_width:
+                # Wrap the entire buffer into physical lines
+                wrapped_lines = wrap_box_lines(current_buf, box_width)
+
+                # Print all but the last line (keep it in buffer for next time)
+                if wrapped_lines:
+                    for i, line in enumerate(wrapped_lines):
+                        if i < len(wrapped_lines) - 1:
+                            print_text_line(kind, line)
+
+                    # Store only the last (partial) line in buffer for next time
+                    current_buf = wrapped_lines[-1]
+
+            # Store remaining text in buffer for next call
+            self.stream_buffer = current_buf
 
     def flush_stream_event(self, kind) -> None:
         """Flush any remaining incomplete line from the shared stream buffer."""
