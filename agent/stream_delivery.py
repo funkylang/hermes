@@ -318,14 +318,14 @@ class StreamDeliveryMixin:
         """Unified streaming display handler - manages box headers and content rendering.
 
         When called with just kind: draws header if phase changed.
-        When called with kind + text: prints text immediately for real-time streaming."""
+        When called with kind + text: buffers text and prints complete lines as they fill."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
         from agent.conversation_loop import ACTIVE_CLI
         if ACTIVE_CLI is None:
             return
         
-        from agent.conversation_loop import print_header_line, kind_to_sgr, RAW_OPEN, RAW_CLOSE, kind_infos  # lazy: import graph
-        from hermes_cli.cli_render import _terminal_columns as _line_terminal_columns, _cprint_impl
+        from agent.conversation_loop import print_header_line, print_text_line, wrap_box_lines  # lazy: import graph
+        from hermes_cli.cli_render import _terminal_columns
         
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
@@ -335,13 +335,43 @@ class StreamDeliveryMixin:
         if text is None or not text:
             return
         
-        # Print text immediately without waiting for newlines
-        info = kind_infos[kind.value]
-        attributes = kind_to_sgr(info)
+        # Get box width and buffer attribute for this stream kind
+        box_width = max(_terminal_columns(), 20)
+        buf_attr = f"_uniform_stream_buf_{kind.name}"
         
-        # Use _cprint_impl directly with add_newline=False to stream without adding line breaks
-        from hermes_cli.cli_render import _cprint_impl
-        _cprint_impl(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{text}", add_newline=False)
+        # Add new text to buffer
+        current_buf = getattr(self, buf_attr, "") + text
+        
+        # If we have a newline, extract and print complete lines (word wrap if needed)
+        while '\n' in current_buf:
+            line, current_buf = current_buf.split('\n', 1)
+            
+            # For complete lines with newlines, always word wrap them
+            wrapped_lines = wrap_box_lines(line, box_width)
+            if not wrapped_lines and not line:
+                # Blank line - print a single space to maintain line height
+                print_text_line(kind, ' ')
+            else:
+                for wrapped_line in wrapped_lines:
+                    print_text_line(kind, wrapped_line)
+        
+        # For text without newlines (partial lines during streaming):
+        # Only print when we have enough text to fill at least one line
+        if current_buf and len(current_buf) >= box_width:
+            # Wrap the entire buffer into physical lines
+            wrapped_lines = wrap_box_lines(current_buf, box_width)
+            
+            # Print all but the last line (keep it in buffer for next time)
+            if wrapped_lines:
+                for i, line in enumerate(wrapped_lines):
+                    if i < len(wrapped_lines) - 1:
+                        print_text_line(kind, line)
+                
+                # Store only the last (partial) line in buffer for next time
+                current_buf = wrapped_lines[-1]
+        
+        # Store remaining text in buffer for next call
+        setattr(self, buf_attr, current_buf)
 
     def flush_stream_event(self, kind) -> None:
         """Flush any remaining incomplete line from the uniform stream buffer."""
