@@ -330,6 +330,13 @@ class StreamDeliveryMixin:
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
             print_header_line(kind)
+            
+            # Signal that this kind has been streamed so fallback renderers skip it
+            if kind == LineKind.REASONING:
+                ACTIVE_CLI._reasoning_shown_this_turn = True
+            elif kind == LineKind.RESPONSE:
+                ACTIVE_CLI._stream_started = True
+                ACTIVE_CLI._stream_box_opened = True
         
         # No text to render - just header handling
         if text is None or not text:
