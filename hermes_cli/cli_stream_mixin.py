@@ -890,19 +890,23 @@ class CLIStreamMixin:
         Fires once per tool CALL, so a batch of parallel calls to the same tool printed the same
         line N times (#10478); repeats within one generation batch are coalesced. The set is
         cleared when a tool actually starts (``tool.started``), i.e. on the next batch."""
-        from cli import _cprint
         if getattr(self, '_stream_box_opened', False):
             self._flush_stream()
             self._stream_box_opened = False
         self._close_reasoning_box()
         self._close_tool_args_box()
-        announced = self.__dict__.setdefault("_tool_gen_announced", set())
-        if tool_name in announced:
-            return
-        announced.add(tool_name)
-        from agent.display import bridge_generating_phrase, get_tool_emoji
-        what = bridge_generating_phrase(tool_name) or tool_name
-        _cprint(f"  ┊ {t('cli.stream.tool_preparing', emoji=get_tool_emoji(tool_name, default='⚡'), what=what)}")
+        # Old "preparing" status line REMOVED 2026-10-20: the agent-owns-display box engine
+        # (stream_delivery._fire_tool_args_stream → print_header_line TOOL_CALL) now renders
+        # the per-tool header itself ("🔍 using {tool}"), so printing it here doubled the line.
+        # Kept as no-op for callback registration + the box state management above.
+        return
+        # announced = self.__dict__.setdefault("_tool_gen_announced", set())
+        # if tool_name in announced:
+        #     return
+        # announced.add(tool_name)
+        # from agent.display import bridge_generating_phrase, get_tool_emoji
+        # what = bridge_generating_phrase(tool_name) or tool_name
+        # _cprint(f"  ┊ {t('cli.stream.tool_preparing', emoji=get_tool_emoji(tool_name, default='⚡'), what=what)}")
 
     def _on_tool_args_stream(self, tool_name: str, text_chunk: str) -> None:
         """Stream raw tool-call argument fragments into a dim box (reasoning-box style).

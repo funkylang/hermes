@@ -1670,14 +1670,14 @@ kind_infos = [
     None,                                        # index 0 unused (auto() starts at 1)
     KindInfo("User", "─", "FFFFFF", "182B42", 0),                 # INPUT — white on blue
     KindInfo("Reasoning", "─", "A5A196", "2A261D", ITALIC),         # REASONING
-    KindInfo("Tool Call", "━", "5C9EAD", "1A262E", 0),              # TOOL_CALL — also the streaming tool-args phase
-    KindInfo("Tool Result", "┄", "7BC47F", "1B2A1B", 0),            # TOOL_RESULT — greener text on dark-green bg
-    KindInfo("Hermes", "─", "FFBF00", "1C1A14", 0),                 # RESPONSE — Hermes amber (agent colour; not the user's)
+    KindInfo("Tool Call", "━", "FFD166", "2A2510", 0),              # TOOL_CALL — yellowish (contrast vs result/failure boxes)
+    KindInfo("Result", "┄", "7BC47F", "1B2A1B", 0),                 # TOOL_RESULT — greener text on dark-green bg
+    KindInfo("Hermes", "─", "DCA000", "1C1A14", 0),                 # RESPONSE — Hermes amber, darkened (contrast tuning)
     KindInfo("Diagnostics", "┅", "9C8A6E", "241F17", 0),            # DIAGNOSTICS
     KindInfo("Injected Input", "┈", "C77DFF", "281F2E", 0),         # INJECTED_INPUT
     KindInfo("Debug", "─", "6A6A6A", "222222", 0),                  # DEBUG
     KindInfo("Diff", "─", "9CA3AF", "262626", 0),                   # DIFF — file edit review diff (grey)
-    KindInfo("Tool Failure", "┄", "FF5252", "2A1515", 0),           # TOOL_FAILURE — failed tool result, reddish box
+    KindInfo("Failure", "┄", "FF5252", "2A1515", 0),                # TOOL_FAILURE — failed tool result, reddish box
 ]
 
 
@@ -1711,18 +1711,22 @@ ACTIVE_AGENT = None
 
 
 def print_header_line(kind: LineKind, title: Optional[str] = None) -> None:
-    """Render a section header rule: {symbol×5} {label} {title} {HH:MM} {symbol fill}.
+    """Render a section header rule: {symbol×5} {label or title} {HH:MM} {symbol fill}.
 
-    The rule uses the kind's symbol; background continues to end of line via ESC[0K.
-    Timestamp always shown.
+    A title replaces the kind's fixed label (used for per-tool TOOL_CALL headers);
+    it must carry any emoji/verb itself. The rule uses the kind's symbol; background
+    continues to end of line via ESC[0K. Timestamp always shown.
     """
     from datetime import datetime as _datetime
+    from wcwidth import wcswidth  # wide chars (emojis) count double, same as wrap_box_lines
 
     info = kind_infos[kind.value]
     ts = _datetime.now().strftime("%H:%M")
-    inner = f" {info.label} " + (f"{title} " if title else "") + f"{ts} "
-    width = max(_line_terminal_columns(), len(inner) + 5)
-    rule_tail_count = max(width - 5 - len(inner), 0)
+    heading = title if title else info.label
+    inner = f" {heading} {ts} "
+    # Display-width math: len() counts a 2-cell emoji as 1 char, which overruns the row.
+    width = max(_line_terminal_columns(), wcswidth(inner) + 5)
+    rule_tail_count = max(width - 5 - wcswidth(inner), 0)
     line = info.symbol * 5 + inner + info.symbol * rule_tail_count
     attributes = kind_to_sgr(info)
     _cprint(f"{RAW_OPEN}{attributes}{RAW_CLOSE}{line}\x1b[0m")

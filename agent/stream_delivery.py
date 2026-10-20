@@ -314,10 +314,11 @@ class StreamDeliveryMixin:
     #   _fire_tool_args_stream -> LineKind.TOOL_CALL  (raw argument fragments)
     # Unified stream display work belongs HERE, not in the per-frontend renderers. ──
 
-    def handle_stream_event(self, kind, text=None) -> None:
+    def handle_stream_event(self, kind, text=None, title=None) -> None:
         """Unified streaming display handler - manages box headers and content rendering.
 
-        When called with just kind: draws header if phase changed.
+        When called with just kind: draws header if phase changed (title optionally
+        replaces the kind's fixed label on that first draw).
         When called with kind + text: buffers text and prints complete lines as they fill."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
         from agent.conversation_loop import ACTIVE_CLI
@@ -329,7 +330,7 @@ class StreamDeliveryMixin:
         
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
-            print_header_line(kind)
+            print_header_line(kind, title=title)
             
             # Signal that this kind has been streamed so fallback renderers skip it
             if kind == LineKind.REASONING:
@@ -472,7 +473,19 @@ class StreamDeliveryMixin:
         Lets UI layers render the arguments being generated (live JSON stream), not just
         a frozen 'generating…' spinner. Called from the streaming loop per argument chunk;
         ``tool_name`` is best-effort (empty string until the provider sends the name)."""
-        self.handle_stream_event(LineKind.TOOL_CALL, text_chunk)
+        title = None
+        if tool_name:
+            # Per-tool header: "🔍 preparing session_search" replaces the fixed label.
+            # Lazy imports: display pulls in heavy deps; streaming runs long after module load.
+            from agent.display import tool_row_emoji
+            from wcwidth import wcswidth
+            emoji = tool_row_emoji(tool_name)
+            # Text-presentation emoji (e.g. plain U+26A1) render 1 cell wide in many
+            # terminals; pad to the common 2-cell width with hair spaces so the verb
+            # aligns across tools. Hair space = invisible, never a visible gap.
+            emoji = emoji + "\u200a" * max(0, 2 - wcswidth(emoji))
+            title = f"{emoji} using {tool_name}"
+        self.handle_stream_event(LineKind.TOOL_CALL, text_chunk, title=title)
         self._call_quietly(self.tool_args_stream_callback, tool_name, text_chunk)
 
     def _has_stream_consumers(self) -> bool:
