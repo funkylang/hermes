@@ -348,28 +348,26 @@ class CLIStreamMixin:
     def _stream_reasoning_delta(self, text: str) -> None:
         """Stream reasoning tokens into a dim box above the response.
 
-        Opened on the first token, closed when content arrives (_emit_stream_text). Once the
-        response box is open further reasoning is suppressed — a late thinking block (e.g. after
-        an interrupt) would otherwise draw a reasoning box inside the response box.
+        DISABLED 2026-10-19: unified streaming via handle_stream_event now renders
+        reasoning directly; this old path was causing double display. Kept as no-op
+        for callback registration compatibility.
         """
-        from cli import _DIM, _RST, _cprint, datetime
-
         if not text:
             return
-        self._reasoning_shown_this_turn = True
-        if getattr(self, "_stream_box_opened", False):
-            return
-        box_width = self._scrollback_box_width()
-        if not getattr(self, "_reasoning_box_opened", False):
-            if self.busy_input_mode == "smart":
-                self._print_pending_redirection()  # show pending steer input above the reasoning box
-            self._reasoning_box_opened = True
-            r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
-            r_fill = box_width - 2 - len(r_label)
-            _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
-
-        # Process the text with line buffering and wrapping.
-        self._process_dim_box_text(text)
+        # Old rendering commented out - new system in stream_delivery.handle_stream_event
+        pass
+        # self._reasoning_shown_this_turn = True
+        # if getattr(self, "_stream_box_opened", False):
+        #     return
+        # box_width = self._scrollback_box_width()
+        # if not getattr(self, "_reasoning_box_opened", False):
+        #     if self.busy_input_mode == "smart":
+        #         self._print_pending_redirection()
+        #     self._reasoning_box_opened = True
+        #     r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
+        #     r_fill = box_width - 2 - len(r_label)
+        #     _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
+        # self._process_dim_box_text(text)
 
     def _process_dim_box_text(self, text: str) -> None:
         """Buffer dim box text (reasoning/tool args) and print complete lines with word-wrapping."""

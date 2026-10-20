@@ -340,8 +340,14 @@ class StreamDeliveryMixin:
         while '\n' in current_buf:
             line, current_buf = current_buf.split('\n', 1)
             box_width = max(_terminal_columns(), 20)
-            for wrapped_line in wrap_box_lines(line, box_width):
-                print_text_line(kind, wrapped_line)
+            # Ensure blank lines are preserved for markdown paragraph breaks
+            wrapped_lines = wrap_box_lines(line, box_width)
+            if not wrapped_lines and not line:
+                # Blank line - print a single space to maintain line height
+                print_text_line(kind, ' ')
+            else:
+                for wrapped_line in wrapped_lines:
+                    print_text_line(kind, wrapped_line)
         
         # Store remainder for next call (incomplete line buffered until newline arrives)
         setattr(self, buf_attr, current_buf)
