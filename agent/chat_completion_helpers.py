@@ -3450,8 +3450,7 @@ class _StreamingCall(StreamingWaitMonitor):
                 "cleanly; not an output-length truncation.",
                 _dropped_names)
             # Capture reply for debugging interruptions
-            if full_content or full_reasoning or mock_tool_calls:
-                _write_reply_capture(full_content, "interrupted", full_reasoning, mock_tool_calls)
+            _write_reply_capture(full_content, "interrupted", full_reasoning, mock_tool_calls)
             return _build_partial_stream_stub(
                 role, full_content, full_reasoning, model_name, usage_obj, dropped_tool_names=_dropped_names or None,
                 clean_eof=True)
@@ -3464,8 +3463,7 @@ class _StreamingCall(StreamingWaitMonitor):
                 "Clean EOF, no finish_reason: server ended the stream (no transport exception) after delivering "
                 "text with no tool calls. The server or a proxy closed the stream cleanly.")
             # Capture reply for debugging interruptions
-            if full_content or full_reasoning:
-                _write_reply_capture(full_content, "interrupted", full_reasoning)
+            _write_reply_capture(full_content, "interrupted", full_reasoning)
             return _build_partial_stream_stub(role, full_content, full_reasoning, model_name, usage_obj, clean_eof=True)
         effective_finish_reason = "length" if has_truncated_tool_args else (finish_reason or "stop")
         provider_stream_error = _provider_stream_error_from_text(
@@ -3489,8 +3487,7 @@ class _StreamingCall(StreamingWaitMonitor):
         if not is_router_timeout_shim(response):
             flush_pending()
         # Capture reply for debugging interruptions
-        if full_content or full_reasoning or mock_tool_calls:
-            _write_reply_capture(full_content, effective_finish_reason, full_reasoning, mock_tool_calls)
+        _write_reply_capture(full_content, effective_finish_reason, full_reasoning, mock_tool_calls)
         return response
 
     # ── anthropic_messages wire ─────────────────────────────────────────

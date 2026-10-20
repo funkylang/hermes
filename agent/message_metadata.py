@@ -263,5 +263,9 @@ def append_message(
     timestamp: Optional[float] = None,
 ) -> _Message:
     """Stamp and append one live transcript message."""
+    # TEMP debug: log every transcript append (remove when done).
+    from agent.message_debug_log import debug_log_message_append
+
+    debug_log_message_append(message)
     messages.append(stamp_message_timestamp(message, timestamp=timestamp))
     return message

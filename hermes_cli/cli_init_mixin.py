@@ -312,8 +312,11 @@ class CLIInitMixin:
         # NEW (streaming boxes): kind of the last box header drawn on this CLI
         # ("reasoning" / "tool_args" / "response", ...); None before the first header.
         self.header_kind: Optional[str] = None
-        # Register as the process display context so agent-side render helpers can reach it.
+        # Current line kind for print_text_line/print_header_line with LineKind.CURRENT;
+        # starts as INPUT (the user input row is drawn before any box).
         from agent import conversation_loop as _cl  # lazy: import graph
+        self.current_line_kind = _cl.LineKind.INPUT
+        # Register as the process display context so agent-side render helpers can reach it.
         _cl.ACTIVE_CLI = self
         self.session_start = datetime.now()
         # Per-prompt elapsed timer shown in the status bar.

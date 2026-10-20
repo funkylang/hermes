@@ -28,7 +28,10 @@ class StreamDeliveryMixin:
         try:
             cb(*args)
             return True
-        except Exception:
+        except Exception as e:
+            import traceback
+            print(f"\n[CALL_QUIETLY ERROR] {type(e).__name__}: {e}")
+            traceback.print_exc()
             return False
 
     def _deliver_to_stream_callbacks(self, text: str) -> bool:
@@ -52,10 +55,8 @@ class StreamDeliveryMixin:
         straddling the boundary must still be caught), then the context scrubber's own tail.
         """
         # Flush any incomplete lines from uniform streaming buffers
-        self.flush_stream_event(LineKind.RESPONSE)
-        self.flush_stream_event(LineKind.REASONING)
-        self.flush_stream_event(LineKind.TOOL_CALL)
-        
+        self.flush_stream_event()
+
         think_scrubber = getattr(self, "_stream_think_scrubber", None)
         ctx_scrubber = getattr(self, "_stream_context_scrubber", None)
         # Inline <think> text is forwarded to the reasoning pane only while no native reasoning delta
@@ -301,9 +302,7 @@ class StreamDeliveryMixin:
     def _emit_stream_end(self, *, final_text: str, finished: bool, error: str | None) -> None:
         self._enqueue_stream_hook("on_stream_end", final_text=final_text, finished=finished, error=error)
         # Flush remaining buffer content so lines without trailing newlines render immediately
-        self.flush_stream_event(LineKind.RESPONSE)
-        self.flush_stream_event(LineKind.REASONING)
-        self.flush_stream_event(LineKind.TOOL_CALL)
+        self.flush_stream_event()
 
     # ── OUR MAIN STREAMING HOOK POINT ─────────────────────────────────────────────
     # handle_stream_event is the one display funnel all streaming phases pass through:
@@ -324,22 +323,22 @@ class StreamDeliveryMixin:
         from agent.conversation_loop import ACTIVE_CLI
         if ACTIVE_CLI is None:
             return
-        
+
         from agent.conversation_loop import (print_header_line, print_text_line, wrap_box_lines,
                                              print_text_box)  # lazy: import graph
         from hermes_cli.cli_render import _terminal_columns
-        
+
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
             print_header_line(kind, title=title)
-            
+
             # Signal that this kind has been streamed so fallback renderers skip it
             if kind == LineKind.REASONING:
                 ACTIVE_CLI._reasoning_shown_this_turn = True
             elif kind == LineKind.RESPONSE:
                 ACTIVE_CLI._stream_started = True
                 ACTIVE_CLI._stream_box_opened = True
-        
+
         # No text to render - just header handling
         if text is None or not text:
             return
@@ -355,7 +354,10 @@ class StreamDeliveryMixin:
                 drained_input = ACTIVE_CLI.user_input
                 ACTIVE_CLI.user_input = ""
 
+        # TEMP DEBUG (steer-deferral probe): a newline arriving during REASONING while
+        # user_input is pending marks the delivery boundary. Show it once found.
         if drained_input:
+            print_text_line(LineKind.DEBUG, f"newline in reasoning with user_input pending: {text!r}")
             text = text.split("\n")[0]  # cut everything from the first newline onward
             current_buf = self.stream_buffer + text
             # A completed line at the steering boundary: print it completely (no hold-back).
@@ -401,23 +403,23 @@ class StreamDeliveryMixin:
             # Store remaining text in buffer for next call
             self.stream_buffer = current_buf
 
-    def flush_stream_event(self, kind) -> None:
+    def flush_stream_event(self) -> None:
         """Flush any remaining incomplete line from the shared stream buffer."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
         from agent.conversation_loop import ACTIVE_CLI
         if ACTIVE_CLI is None:
             return
-        
+
         from agent.conversation_loop import print_text_line, wrap_box_lines
         from hermes_cli.cli_render import _terminal_columns
-        
+
         remaining = self.stream_buffer
         if not remaining:
             return
-        
+
         box_width = max(_terminal_columns(), 20)
         for wrapped_line in wrap_box_lines(remaining, box_width):
-            print_text_line(kind, wrapped_line)
+            print_text_line(LineKind.CURRENT, wrapped_line)
         # Clear the buffer after flushing
         self.stream_buffer = ""
 

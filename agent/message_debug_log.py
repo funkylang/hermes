@@ -1,0 +1,65 @@
+"""TEMP debug: log every live-transcript message append as a DEBUG box line (CLI only).
+
+Instrumentation for the steering/display work — remove when done. Centralized so
+append_message (and the direct tool-result appends) each need one call.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Mapping
+
+logger = logging.getLogger("run_agent")
+
+# One row per logical message; long text is abbreviated to fit a single terminal line.
+_ABBREV_CHARS = 90
+
+
+def debug_log_message_append(message: Mapping[str, Any]) -> None:
+    """Print kind + abbreviated content for an appended transcript message.
+
+    ASSISTANT messages use two lines (reasoning first, then content); all others one.
+    No-op outside the interactive CLI (tests, gateway, headless) and on any error —
+    instrumentation must never break a turn."""
+    try:
+        from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_line
+
+        if ACTIVE_CLI is None or not isinstance(message, dict):
+            return
+        role = str(message.get("role", "?"))
+        if role == "assistant":
+            reasoning = message.get("reasoning_content") or ""
+            content = _abbrev(_content_text(message))
+            print_text_line(LineKind.DEBUG, f"ASSISTANT (reasoning): {_abbrev(reasoning)}")
+            print_text_line(LineKind.DEBUG, f"ASSISTANT: {content}")
+        elif role == "tool":
+            name = message.get("name") or ""
+            print_text_line(LineKind.DEBUG, f"TOOL {name}: {_abbrev(_content_text(message))}")
+        else:
+            print_text_line(LineKind.DEBUG, f"{role.upper()}: {_abbrev(_content_text(message))}")
+    except Exception as exc:  # noqa: BLE001 — debug path must never raise into the loop
+        logger.debug("debug_log_message_append failed: %s", exc)
+
+
+def _content_text(message: Mapping[str, Any]) -> str:
+    """Flatten a message's content (str or content-block list) to displayable text."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                part = block.get("text") or block.get("thinking") or ""
+                if part:
+                    parts.append(str(part))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    return "" if content is None else str(content)
+
+
+def _abbrev(text: Any) -> str:
+    text = " ".join(str(text or "").split())  # single-line, collapsed whitespace
+    if len(text) > _ABBREV_CHARS:
+        return text[:_ABBREV_CHARS] + "..."
+    return text

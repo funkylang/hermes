@@ -1645,6 +1645,7 @@ UNDERLINE = 4
 
 
 class LineKind(Enum):
+    CURRENT = auto()
     INPUT = auto()
     REASONING = auto()
     TOOL_CALL = auto()
@@ -1667,8 +1668,9 @@ class KindInfo:
 
 
 kind_infos = [
-    None,                                        # index 0 unused (auto() starts at 1)
-    KindInfo("User", "─", "FFFFFF", "182B42", 0),                 # INPUT — white on blue
+    None,
+    None,
+    KindInfo("User", "─", "FFFFFF", "182B42", 0),                   # INPUT — white on blue
     KindInfo("Reasoning", "─", "A5A196", "2A261D", ITALIC),         # REASONING
     KindInfo("Tool Call", "━", "FFD166", "2A2510", 0),              # TOOL_CALL — yellowish (contrast vs result/failure boxes)
     KindInfo("Result", "┄", "7BC47F", "1B2A1B", 0),                 # TOOL_RESULT — greener text on dark-green bg
@@ -1722,6 +1724,10 @@ def print_header_line(kind: LineKind, title: Optional[str] = None,
     from datetime import datetime as _datetime
     from wcwidth import wcswidth  # wide chars (emojis) count double, same as wrap_box_lines
 
+    if kind == LineKind.CURRENT:
+        kind = ACTIVE_CLI.current_line_kind
+    else:
+        ACTIVE_CLI.current_line_kind = kind
     info = kind_infos[kind.value]
     ts = _datetime.now().strftime("%H:%M")
     heading = title if title else info.label
@@ -1742,6 +1748,10 @@ def print_header_line(kind: LineKind, title: Optional[str] = None,
 
 def print_text_line(kind: LineKind, text: str = '') -> None:
     """Render a content line in the kind's colours; background extends to end of line."""
+    if kind == LineKind.CURRENT:
+        kind = ACTIVE_CLI.current_line_kind
+    else:
+        ACTIVE_CLI.current_line_kind = kind
     info = kind_infos[kind.value]
     attributes = kind_to_sgr(info)
     if text == '':

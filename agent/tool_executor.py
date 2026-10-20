@@ -337,7 +337,11 @@ def _append_skipped_tool_results(
     for tc in tool_calls:
         name = _tc_name(tc)
         result = content.format(name=name)
-        messages.append(make_tool_result_message(name, result, _pairing_tool_call_id(tc), effect_disposition="none"))
+        from agent.message_debug_log import debug_log_message_append  # TEMP debug
+
+        _msg = make_tool_result_message(name, result, _pairing_tool_call_id(tc), effect_disposition="none")
+        debug_log_message_append(_msg)
+        messages.append(_msg)
         if hook_error_type is not None:
             _ToolCallRef(name, {}, effective_task_id, (hook_id or _pairing_tool_call_id)(tc), []).emit_post(
                 agent, result,
@@ -1156,6 +1160,9 @@ def _commit_tool_result(
         )
     except Exception as exc:  # display must never abort a turn
         logging.debug("tool call box render failed for %s: %s", function_name, exc)
+    from agent.message_debug_log import debug_log_message_append  # TEMP debug
+
+    debug_log_message_append(tool_message)
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None
@@ -1737,7 +1744,11 @@ def _skip_remaining_sequential(agent, messages: list, remaining, effective_task_
 def _append_invalid_arguments_result(agent, messages: list, ref: _ToolCallRef, parse_error: str) -> bool:
     """Emit + append the parse-error result for a call whose arguments were not a JSON object."""
     ref.emit_invalid_arguments(agent, parse_error)
-    messages.append(make_tool_result_message(ref.name, parse_error, ref.call_id))
+    from agent.message_debug_log import debug_log_message_append  # TEMP debug
+
+    _msg = make_tool_result_message(ref.name, parse_error, ref.call_id)
+    debug_log_message_append(_msg)
+    messages.append(_msg)
     return _flush_session_db_after_tool_progress(agent, messages, stage=f"invalid tool arguments {ref.name}")
 
 
