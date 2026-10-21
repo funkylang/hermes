@@ -290,18 +290,20 @@ class TestActiveTurnRedirectCheckpoint:
     def test_placeholder_acknowledges_interruption_as_assistant_message(self):
         """Role alternation is preserved by a real (non-empty) assistant message, so the
         sanitizer cannot drop it and consecutive user messages cannot merge (#88955)."""
-        from agent.conversation_loop import _apply_active_turn_redirect
+        from agent.conversation_loop import _apply_active_turn_redirect, REDIRECT_PLACEHOLDER_TEXTS
 
         agent = _bare_agent()
         agent._current_streamed_assistant_text = ""
         agent._steering_wait_reasoning = "thinking captured at interrupt"
+        agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
         messages = [{"role": "user", "content": "start"}]
 
         _apply_active_turn_redirect(agent, messages, "Change course.")
 
         placeholder, correction = messages[-2], messages[-1]
         assert placeholder["role"] == "assistant"
-        assert placeholder["content"] == "The user is giving me some input."
+        assert placeholder["content"] in REDIRECT_PLACEHOLDER_TEXTS, \
+            f"Placeholder content {placeholder['content']!r} not in expected variants"
         assert placeholder.get("reasoning_content") == "thinking captured at interrupt"
         # No context to replay: the correction is the plain user text, no api_content.
         assert correction["role"] == "user"
@@ -326,6 +328,7 @@ class TestActiveTurnRedirectCheckpoint:
 
         agent = _bare_agent()
         agent._current_streamed_assistant_text = "Visible draft."
+        agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
         messages = [
             {"role": "user", "content": "start"},
             {"role": "assistant", "content": "committed assistant item"},
@@ -363,6 +366,7 @@ class TestActiveTurnRedirectCheckpoint:
             for streamed in ("Partial reply on screen.", ""):
                 agent = _bare_agent()
                 agent._current_streamed_assistant_text = streamed
+                agent._steering_wait_completed = True  # Smart-steer path (no scaffold markers)
                 messages = [{"role": "user", "content": "start"}]
                 if tail_role == "assistant":
                     messages.append({"role": "assistant", "content": "committed"})
@@ -450,10 +454,11 @@ class TestEmptyAssistantSanitizerConvergence:
 
     def test_redirect_placeholder_is_non_empty_and_sanitizer_stable(self):
         from agent.agent_runtime_helpers import repair_empty_non_final_messages
-        from agent.conversation_loop import _apply_active_turn_redirect
+        from agent.conversation_loop import _apply_active_turn_redirect, REDIRECT_PLACEHOLDER_TEXTS
 
         agent = _bare_agent()
         agent._current_streamed_assistant_text = ""
+        agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
         messages = [{"role": "user", "content": "start"}]
 
         _apply_active_turn_redirect(agent, messages, "Use Postgres instead.")
@@ -461,7 +466,8 @@ class TestEmptyAssistantSanitizerConvergence:
         placeholder = messages[-2]
         correction = messages[-1]
         assert placeholder["role"] == "assistant"
-        assert placeholder["content"] == "The user is giving me some input."
+        assert placeholder["content"] in REDIRECT_PLACEHOLDER_TEXTS, \
+            f"Placeholder content {placeholder['content']!r} not in expected variants"
         # The correction is the plain user text — no context to replay.
         assert correction["role"] == "user"
         assert correction["content"] == "Use Postgres instead."
@@ -471,7 +477,8 @@ class TestEmptyAssistantSanitizerConvergence:
         # only fires on empty assistant rows).
         healed = repair_empty_non_final_messages([dict(m) for m in messages])
         healed_placeholder = healed[-2]
-        assert healed_placeholder["content"] == "The user is giving me some input."
+        assert healed_placeholder["content"] == placeholder["content"], \
+            f"Sanitizer modified placeholder content: {healed_placeholder['content']!r}"
         assert (
             healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
         )
@@ -486,6 +493,7 @@ class TestEmptyAssistantSanitizerConvergence:
             agent = _bare_agent()
             agent._current_streamed_assistant_text = ""
             agent._redirect_placeholder_text = variant
+            agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
             messages = [{"role": "user", "content": "start"}]
 
             _apply_active_turn_redirect(agent, messages, "Change course.")
@@ -537,11 +545,10 @@ class TestSteerInjection:
         assert agent._pending_steer is None
 
     def test_stored_delivered_steer_text_and_none_signal_for_cli_display(self):
-        """When a steer is injected, _delivered_steer_text is set for CLI display and
-        stream_delta_callback(None) is called to trigger the steering box + echo at read time."""
+        """Steer injection appends a user message (handled by display-side echo mechanism now)."""
         agent = _bare_agent()
 
-        # Track whether stream_delta_callback(None) was called
+        # Track whether stream_delta_callback was called (not required in new design)
         none_called = []
         agent.stream_delta_callback = lambda text: none_called.append(text)
 
@@ -552,11 +559,11 @@ class TestSteerInjection:
         ]
         agent._apply_pending_steer_to_tool_results(messages, num_tool_msgs=1)
 
-        # Verify _delivered_steer_text is set (CLI will consume this for display)
-        assert getattr(agent, "_delivered_steer_text", None) == "please also check auth.log"
-
-        # Verify stream_delta_callback(None) was called to trigger immediate display
-        assert None in none_called
+        # The steer is delivered as a new user message at the tail
+        assert messages[-1]["role"] == "user"
+        assert "please also check auth.log" in messages[-1]["content"]
+        # Pending steer is consumed
+        assert agent._pending_steer is None
 
     def test_no_none_signal_when_no_stream_callback(self):
         """No exception when stream_delta_callback is not set (None)."""
