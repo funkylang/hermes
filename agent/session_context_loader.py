@@ -78,6 +78,18 @@ def get_previous_session_context(
                 "Previous session context loaded: session=%s messages=%d",
                 prev_session_id[:8], len(context_messages),
             )
+            # INFO box line (CLI only, lazy import): this is the one site that
+            # knows both the selected session and the message count.
+            try:
+                from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_line
+
+                if ACTIVE_CLI is not None:
+                    print_text_line(
+                        LineKind.INFO,
+                        f"Added {len(context_messages)} messages from session {prev_session_id}.",
+                    )
+            except Exception as exc:  # noqa: BLE001 — display must never break a turn
+                logger.debug("Previous-session INFO line failed: %s", exc)
             return context_messages
 
         return []

@@ -12,6 +12,8 @@ logger = logging.getLogger("run_agent")
 
 # One row per logical message; long text is abbreviated to fit a single terminal line.
 _ABBREV_CHARS = 90
+# Reasoning previews run at half length — they repeat densely and add little past 50 chars.
+_REASONING_ABBREV_CHARS = 50
 
 
 def debug_log_message_append(message: Mapping[str, Any]) -> None:
@@ -29,7 +31,7 @@ def debug_log_message_append(message: Mapping[str, Any]) -> None:
         if role == "assistant":
             reasoning = message.get("reasoning_content") or ""
             content = _abbrev(_content_text(message))
-            print_text_line(LineKind.DEBUG, f"ASSISTANT (reasoning): {_abbrev(reasoning)}")
+            print_text_line(LineKind.DEBUG, f"ASSISTANT (reasoning): {_abbrev(reasoning, _REASONING_ABBREV_CHARS)}")
             print_text_line(LineKind.DEBUG, f"ASSISTANT: {content}")
         elif role == "tool":
             name = message.get("name") or ""
@@ -58,8 +60,8 @@ def _content_text(message: Mapping[str, Any]) -> str:
     return "" if content is None else str(content)
 
 
-def _abbrev(text: Any) -> str:
+def _abbrev(text: Any, max_chars: int = _ABBREV_CHARS) -> str:
     text = " ".join(str(text or "").split())  # single-line, collapsed whitespace
-    if len(text) > _ABBREV_CHARS:
-        return text[:_ABBREV_CHARS] + "..."
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
     return text

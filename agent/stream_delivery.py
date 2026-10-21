@@ -355,9 +355,9 @@ class StreamDeliveryMixin:
                 ACTIVE_CLI.user_input = ""
 
         # TEMP DEBUG (steer-deferral probe): a newline arriving during REASONING while
-        # user_input is pending marks the delivery boundary. Show it once found.
+        # user_input is pending marks the delivery boundary.
         if drained_input:
-            print_text_line(LineKind.DEBUG, f"newline in reasoning with user_input pending: {text!r}")
+            # print_text_line(LineKind.DEBUG, f"newline in reasoning with user_input pending: {text!r}")  # REMARKED 2026-10-20: display verified correct
             text = text.split("\n")[0]  # cut everything from the first newline onward
             current_buf = self.stream_buffer + text
             # A completed line at the steering boundary: print it completely (no hold-back).

@@ -365,7 +365,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
                 )
             else:
                 # TEMP debug: trace message-append positions (remove when done).
-                print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")
+                # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # REMARKED 2026-10-20
                 append_message(messages, {"role": "user", "content": text})
         else:  # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw chain-of-thought never enters replayable content; the interruption scaffold is replay text carried only in the user correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``.
             checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
@@ -388,7 +388,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
                     placeholder["api_content"] = _INTERRUPTED_PLACEHOLDER
                 append_message(messages, placeholder)
             # Transcript shows the user's own words; the provider replays the scaffolded form.
-            print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug
+            # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug REMARKED 2026-10-20
             append_message(messages, {"role": "user", "content": text, "api_content": correction})
 
         agent._current_streamed_assistant_text = ""
@@ -444,7 +444,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
         msg: Dict[str, Any] = {"role": "user", "content": text}
         if context_parts:
             msg["api_content"] = correction
-        print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug
+        # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug REMARKED 2026-10-20
         append_message(messages, msg)
 
         # Stateful scrubber for <memory-context> spans split across stream deltas (#5719).  sanitize_context()
@@ -1656,6 +1656,7 @@ class LineKind(Enum):
     DEBUG = auto()
     DIFF = auto()
     TOOL_FAILURE = auto()
+    INFO = auto()
 
 
 @dataclass(frozen=True)
@@ -1680,6 +1681,7 @@ kind_infos = [
     KindInfo("Debug", "─", "FFFFFF", "FF0000", 0),                  # DEBUG — white on red (high visibility for live debugging)
     KindInfo("Diff", "─", "9CA3AF", "262626", 0),                   # DIFF — file edit review diff (grey)
     KindInfo("Failure", "┄", "FF5252", "2A1515", 0),                # TOOL_FAILURE — failed tool result, reddish box
+    KindInfo("Info", "─", "1A2530", "22D3EE", 0),                   # INFO — reversed: dark on cyan (distinct from INPUT blue)
 ]
 
 
