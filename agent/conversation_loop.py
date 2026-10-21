@@ -1714,6 +1714,16 @@ ACTIVE_CLI = None
 ACTIVE_AGENT = None
 
 
+def _debug_output_enabled() -> bool:
+    """True when --debug was passed for this process (DEBUG boxes may render).
+
+    Lazy import so importing hermes_cli.main doesn't join the startup graph here.
+    Set once at startup and never consumed, so it persists across /reset in-process.
+    """
+    from hermes_cli.main import DEBUG_MODE_ENABLED
+    return DEBUG_MODE_ENABLED
+
+
 def print_header_line(kind: LineKind, title: Optional[str] = None,
                       duration: Optional[float] = None) -> None:
     """Render a section header rule: {symbol×5} {label or title} {HH:MM}[ (X.Xs)] {symbol fill}.
@@ -1726,6 +1736,8 @@ def print_header_line(kind: LineKind, title: Optional[str] = None,
     from datetime import datetime as _datetime
     from wcwidth import wcswidth  # wide chars (emojis) count double, same as wrap_box_lines
 
+    if kind == LineKind.DEBUG and not _debug_output_enabled():
+        return  # --debug off: suppress diagnostic boxes/headers
     if kind == LineKind.CURRENT:
         kind = ACTIVE_CLI.current_line_kind
     else:
@@ -1750,6 +1762,8 @@ def print_header_line(kind: LineKind, title: Optional[str] = None,
 
 def print_text_line(kind: LineKind, text: str = '') -> None:
     """Render a content line in the kind's colours; background extends to end of line."""
+    if kind == LineKind.DEBUG and not _debug_output_enabled():
+        return  # --debug off: suppress diagnostic boxes/lines
     if kind == LineKind.CURRENT:
         kind = ACTIVE_CLI.current_line_kind
     else:

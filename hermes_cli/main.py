@@ -795,6 +795,7 @@ from hermes_cli.model_setup_flows_local import _model_flow_local
 logger = logging.getLogger(__name__)
 # CLI options that persist for the entire process lifetime (set once from argparse, never change)
 FRESH_MODE_ENABLED = False  # --fresh flag: skip previous session context injection
+DEBUG_MODE_ENABLED = False  # --debug flag: show DEBUG diagnostic boxes; set once, never consumed
 
 
 from hermes_cli.main_agent_cmds import (
@@ -1773,6 +1774,11 @@ def cmd_chat(args):
     global FRESH_MODE_ENABLED
     if getattr(args, "fresh", False):
         FRESH_MODE_ENABLED = True
+    # --debug: show DEBUG diagnostic boxes for this session. Set once and never
+    # consumed/reset (unlike --fresh), so it persists across /reset in-process.
+    global DEBUG_MODE_ENABLED
+    if getattr(args, "debug", False):
+        DEBUG_MODE_ENABLED = True
     # --source: tag session source for filtering (e.g. 'tool' for integrations)
     if getattr(args, "source", None):
         os.environ["HERMES_SESSION_SOURCE"] = args.source

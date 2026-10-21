@@ -211,6 +211,8 @@ def _add_top_level_flags(parser: argparse.ArgumentParser) -> None:
               help="Force the classic prompt_toolkit REPL (overrides display.interface=tui)")
     inherited(parser, "--fresh", action="store_true", default=False,
               help="Start fresh: skip automatic injection of previous session context messages")
+    inherited(parser, "--debug", action="store_true", default=False,
+              help="Show DEBUG diagnostic output boxes during this session (survives /reset)")
     inherited(parser, "--dev", dest="tui_dev", action="store_true", default=False,
               help="With --tui: run TypeScript sources via tsx (skip dist build)")
 
