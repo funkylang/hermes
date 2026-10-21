@@ -1220,6 +1220,17 @@ def _finalize_tool_batch(agent, messages: list, effective_task_id: str, num_tool
     enforce_turn_budget(batch, env=get_active_env(effective_task_id), config=budget)
     record_tool_batch(agent, batch, contents_before)
     agent._apply_pending_steer_to_tool_results(messages, num_tools)
+    # Deliver user input entered during args-streaming / tool execution: show it in an
+    # INPUT box and append it as a plain user message right after this batch.
+    from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_box
+
+    drained_input = ""
+    with ACTIVE_CLI.lock:
+        drained_input = ACTIVE_CLI.user_input
+        ACTIVE_CLI.user_input = ""
+    if drained_input:
+        print_text_box(LineKind.INPUT, drained_input)
+        messages.append({"role": "user", "content": drained_input})
 
 
 def _tool_progress_enabled(agent) -> bool:

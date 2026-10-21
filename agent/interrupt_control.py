@@ -413,12 +413,10 @@ class InterruptControlMixin:
             getattr(self, "_executing_tools", False)
             or self._get_streaming_phase() == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS
         ):
-            with _ic_lock(self, "_pending_redirect_lock"):
-                existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
-                if self._interrupt_requested and not existing:
-                    return False
-                self._pending_redirect = (existing + "\n\n" + cleaned) if existing else cleaned
-
+            # Text entered here is NOT queued in _pending_redirect: doing so races the
+            # completing response in turn_api_call.py and gets the just-streamed tool
+            # calls discarded. Delivery runs through the CLI user_input accumulator,
+            # drained in _finalize_tool_batch as a user message after the batch.
             return True
 
         # Never kill a tool to deliver guidance; the steer drain puts it on the final tool result.
