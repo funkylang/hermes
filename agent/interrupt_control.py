@@ -435,15 +435,14 @@ class InterruptControlMixin:
                         _request_yield(tid)
             return accepted
 
-        # smart mode + reasoning phase: don't abort. Arm the newline-boundary detection in the
-        # stream loop (chat_completion_helpers._check_steering_wait_completion); the stream stops
-        # gracefully at the next newline and the conversation loop consumes _pending_redirect as usual.
+        # smart mode + reasoning phase: don't abort. The steering text is already accumulating
+        # in ACTIVE_CLI.user_input (unconditional at submit time) and handle_stream_event owns
+        # its delivery — it appends the wire rows at the next reasoning newline. This path only
+        # arms the stream loop so it stops gracefully at that same boundary.
         if busy_input_mode == "smart" and self._get_streaming_phase() == InterruptControlMixin.STREAMING_PHASE_REASONING:
             with _ic_lock(self, "_pending_redirect_lock"):
-                existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
-                if self._interrupt_requested and not existing:
+                if self._interrupt_requested:
                     return False
-                self._pending_redirect = (existing + "\n\n" + cleaned) if existing else cleaned
                 # Set steering completion wait flag (don't set _interrupt_requested or abort)
                 self._steer_completion_wait_active = True
                 self._steer_completion_deadline = time.time() + 30.0

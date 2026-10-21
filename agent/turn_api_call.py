@@ -162,10 +162,7 @@ def perform_api_call(
                 bool(agent._pending_redirect) if _redirect_lock is not None
                 else agent._has_pending_redirect()
             ) and not _smart_deferred
-    if _redirect_crossed_response:
-        # Response and redirect can cross threads: discard the now-stale
-        # response and rebuild from the correction rather than lose it.
-        
+    if _redirect_crossed_response or getattr(agent, "_steering_wait_completed", False):
         # If steering wait completed, preserve the reasoning text for the next iteration
         if getattr(agent, "_steering_wait_completed", False):
             logger.info("Steering wait completed - preserving reasoning for next API call")
@@ -193,9 +190,20 @@ def perform_api_call(
             # starts in fresh boxes — same channel as tool-round boundaries.
             if getattr(agent, "stream_delta_callback", None):
                 agent._call_quietly(agent.stream_delta_callback, None)
-        
+
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
-        if agent.clear_interrupt(preserve_redirect=True):
+
+        _steer_boundary_only = not (
+            bool(agent._pending_redirect) if _redirect_lock is not None
+            else agent._has_pending_redirect()
+        )
+        if _steer_boundary_only:
+            # Unified steering path: handle_stream_event already appended the wire rows at
+            # the boundary newline, so nothing is queued here. Discard this stale partial
+            # response, clear the wait markers, rebuild from the transcript (rows included).
+            agent._clear_steering_wait_markers()
+            _retry.restart_with_redirected_messages = True
+        elif agent.clear_interrupt(preserve_redirect=True):
             _retry.restart_with_redirected_messages = True
         else:
             interrupted = True

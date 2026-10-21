@@ -343,6 +343,10 @@ class StreamDeliveryMixin:
         if text is None or not text:
             return
 
+        # Accumulate everything that flows through the funnel (all streaming phases):
+        # the steering boundary delivers it as the interrupted assistant row's context.
+        self.accumulated_text += text
+
         # Box width is needed by both paths below (steer-deferral handling and normal rendering).
         box_width = max(_terminal_columns(), 20)
 
@@ -354,19 +358,24 @@ class StreamDeliveryMixin:
                 drained_input = ACTIVE_CLI.user_input
                 ACTIVE_CLI.user_input = ""
 
-        # TEMP DEBUG (steer-deferral probe): a newline arriving during REASONING while
-        # user_input is pending marks the delivery boundary.
+        # Steering delivery: the newline in reasoning is the boundary signal. The display funnel
+        # sees it before any control path, so this is the single owner — render AND append the
+        # wire rows here. handle_stream_event runs on the AIAgent (StreamDeliveryMixin), and
+        # self._messages is the live turn list: prepare_iteration refreshes that reference every
+        # iteration (and mid-turn rebuilds can't stale it), so during streaming it IS the exact
+        # list the conversation loop will build the next request from. The stream itself still
+        # stops gracefully at this same newline via _check_steering_wait_completion; its old
+        # wire role is retired.
         if drained_input:
-            # print_text_line(LineKind.DEBUG, f"newline in reasoning with user_input pending: {text!r}")  # REMARKED 2026-10-20: display verified correct
-            text = text.split("\n")[0]  # cut everything from the first newline onward
+            # Cut everything from the first newline onward — the boundary line completes, the
+            # rest never renders: the model's thinking about the pre-steer direction ends here.
+            text = text.split("\n")[0]
             current_buf = self.stream_buffer + text
             # A completed line at the steering boundary: print it completely (no hold-back).
             for wrapped_line in wrap_box_lines(current_buf, box_width):
                 print_text_line(kind, wrapped_line)
-            # Replay-parity: pick this steering's placeholder variant HERE — the display runs
-            # before _StreamingCall.run's completion check sees the same newline, so the
-            # display side must own the pick; the transcript row (conversation_loop
-            # _apply_active_turn_redirect) and the live box both read the stored value.
+            # Replay-parity: pick this steering's placeholder variant HERE so the displayed box
+            # and the persisted wire row carry identical text.
             from agent.conversation_loop import _random_redirect_placeholder
 
             self._redirect_placeholder_text = _random_redirect_placeholder()
@@ -376,6 +385,24 @@ class StreamDeliveryMixin:
             self.stream_buffer = ""
             # Show the user's steering text in its own input box.
             print_text_box(LineKind.INPUT, drained_input)
+
+            # Wire: append exactly what was just rendered, every time. The screen always draws
+            # both boxes, so the wire always gets both rows — alternation holds structurally
+            # (placeholder separates any prior user tail from this one). accumulated_text is
+            # the reasoning streamed before the boundary (the funnel hasn't seen anything else
+            # yet in the reasoning phase); hand it back as the row's reasoning_content and
+            # reset: each steering's placeholder carries its own context, never stale text.
+            if self.accumulated_text.strip():
+                self._messages.append(
+                    {"role": "assistant", "content": self._redirect_placeholder_text,
+                     "reasoning_content": self.accumulated_text}
+                )
+            else:
+                self._messages.append(
+                    {"role": "assistant", "content": self._redirect_placeholder_text}
+                )
+            self.accumulated_text = ""
+            self._messages.append({"role": "user", "content": drained_input})
         else:
             # Add new text to the shared stream buffer (one stream active at a time)
             current_buf = self.stream_buffer + text

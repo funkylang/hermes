@@ -3162,6 +3162,7 @@ class _StreamingCall(StreamingWaitMonitor):
         
         # Reset streaming state for this attempt
         agent._reset_streaming_reasoning_text()
+        agent.accumulated_text = ""
         agent._set_streaming_phase(agent.STREAMING_PHASE_INACTIVE)
         
         from agent import relay_llm

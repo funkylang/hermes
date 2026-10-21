@@ -184,7 +184,10 @@ class TestRedirectSteeringBehavior:
         
         assert result is True
         assert agent._steer_completion_wait_active
-        assert "please change direction" in (agent._pending_redirect or "")
+        # Unified steering: nothing is queued here. The text accumulates in
+        # ACTIVE_CLI.user_input at submit time and handle_stream_event delivers it
+        # (display + wire rows) at the next reasoning newline this wait arms.
+        assert not (agent._pending_redirect or "")
 
     def test_redirect_outside_smart_reasoning_aborts(self):
         """Redirect in any other situation uses the upstream immediate-abort path."""
@@ -207,10 +210,11 @@ class TestRedirectSteeringBehavior:
 
 
 class TestSmartSteerToolPhase:
-    """Smart mode deferral during tool execution / args streaming (no interrupt)."""
+    """Smart mode deferral during tool execution / args streaming (no interrupt, no queue):
+    the CLI user_input accumulator owns delivery, drained in _finalize_tool_batch."""
 
     def test_redirect_during_tool_execution_defers(self):
-        """Smart + tools executing: defer via _pending_redirect, no abort, no steer()."""
+        """Smart + tools executing: accepted at agent level, nothing queued, no abort."""
         agent = make_test_agent()
         agent._executing_tools = True
         agent._set_streaming_phase(STREAMING_PHASE_INACTIVE)
@@ -218,13 +222,14 @@ class TestSmartSteerToolPhase:
         result = agent.redirect("steer one", busy_input_mode="smart")
 
         assert result is True
-        assert agent._pending_redirect == "steer one"
+        # Delivery runs through the CLI user_input accumulator, not _pending_redirect.
+        assert not (agent._pending_redirect or "")
         assert not agent._interrupt_requested
         # steer() must not be touched (dead mechanism) — its Mock attr stays un-called text-wise
         assert agent._pending_steer is None
 
     def test_redirect_during_tool_args_defers(self):
-        """Smart + args streaming: same deferral, stream left to finish."""
+        """Smart + args streaming: same acceptance, nothing queued, stream left to finish."""
         agent = make_test_agent()
         agent._executing_tools = False
         agent._set_streaming_phase(STREAMING_PHASE_TOOL_ARGS)
@@ -232,18 +237,18 @@ class TestSmartSteerToolPhase:
         result = agent.redirect("steer one", busy_input_mode="smart")
 
         assert result is True
-        assert agent._pending_redirect == "steer one"
+        assert not (agent._pending_redirect or "")
         assert not agent._interrupt_requested
 
-    def test_smart_steers_append_plainly(self):
-        """Multiple smart-mode steers concatenate with a blank line (no decoration)."""
+    def test_smart_steers_never_queue_pending_redirect(self):
+        """Multiple smart-mode steers in the tool phase: still nothing queued at agent level."""
         agent = make_test_agent()
         agent._executing_tools = True
 
-        agent.redirect("first", busy_input_mode="smart")
-        agent.redirect("second", busy_input_mode="smart")
+        assert agent.redirect("first", busy_input_mode="smart") is True
+        assert agent.redirect("second", busy_input_mode="smart") is True
 
-        assert agent._pending_redirect == "first\n\nsecond"
+        assert not (agent._pending_redirect or "")
 
 
 class TestSmartSteerConsumption:
