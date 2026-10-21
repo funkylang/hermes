@@ -3269,13 +3269,9 @@ class _StreamingCall(StreamingWaitMonitor):
                 # One-shot marker for the CLI: draw the redirect Hermes box at the
                 # stream boundary (after the reasoning box closes, before the next one).
                 agent._steering_wait_ui_announce = True
-                # Replay-parity: pick this steering's placeholder variant now and store it on
-                # the agent so the live display box and the persisted/replayed message match.
-                try:
-                    from agent.conversation_loop import _random_redirect_placeholder
-                    agent._redirect_placeholder_text = _random_redirect_placeholder()
-                except Exception:
-                    pass
+                # NOTE: the placeholder variant is picked on the display side at the
+                # steering boundary (stream_delivery.handle_stream_event) — it runs BEFORE
+                # this completion check sees the same newline, so it must own the pick.
                 break
             # Not routed to the live display: the transport promotes a sole-payload
             # refusal to content + ``content_filter`` and the loop surfaces it terminally.

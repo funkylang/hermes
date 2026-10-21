@@ -363,8 +363,16 @@ class StreamDeliveryMixin:
             # A completed line at the steering boundary: print it completely (no hold-back).
             for wrapped_line in wrap_box_lines(current_buf, box_width):
                 print_text_line(kind, wrapped_line)
-            # Open the RESPONSE box for the injected assistant message (after the reasoning lines).
-            print_header_line(LineKind.RESPONSE)
+            # Replay-parity: pick this steering's placeholder variant HERE — the display runs
+            # before _StreamingCall.run's completion check sees the same newline, so the
+            # display side must own the pick; the transcript row (conversation_loop
+            # _apply_active_turn_redirect) and the live box both read the stored value.
+            from agent.conversation_loop import _random_redirect_placeholder
+
+            self._redirect_placeholder_text = _random_redirect_placeholder()
+            # The injected assistant's placeholder box (after the reasoning lines):
+            # header + the steering variant as its content.
+            print_text_box(LineKind.RESPONSE, self._redirect_placeholder_text)
             self.stream_buffer = ""
             # Show the user's steering text in its own input box.
             print_text_box(LineKind.INPUT, drained_input)
