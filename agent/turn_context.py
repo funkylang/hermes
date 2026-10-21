@@ -1343,6 +1343,10 @@ def build_api_messages(
     fresh_mode_enabled = _hermes_main.FRESH_MODE_ENABLED
     if fresh_mode_enabled:
         _hermes_main.FRESH_MODE_ENABLED = False
+        # Consume-once AND close the fetch guard: without this cache, a later API call of
+        # the same agent (e.g. a steering-redirect rebuild) would pass the hasattr check
+        # and inject previous-session context mid-turn despite --fresh.
+        agent._previous_session_context = []
 
     if not has_assistant_response and not hasattr(agent, '_previous_session_context') and not fresh_mode_enabled:
         try:

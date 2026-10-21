@@ -611,9 +611,11 @@ def test_fresh_mode_consumed_after_first_session(reset_fresh_flag):
             plugin_user_context=None, moa_config=None, active_system_prompt="SYSTEM",
         )
 
-        # Fresh mode took effect: no injection on session 1 ...
+        # Fresh mode took effect: no injection on session 1, and the fetch guard is
+        # CLOSED for this agent (empty cache) so a later API call of the same agent
+        # (e.g. a steering-redirect rebuild) cannot inject either.
         loader.assert_not_called()
-        assert not hasattr(agent1, "_previous_session_context")
+        assert agent1._previous_session_context == []
         # ... and the flag was consumed.
         assert main.FRESH_MODE_ENABLED is False
 
