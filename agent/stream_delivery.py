@@ -461,12 +461,16 @@ class StreamDeliveryMixin:
     def flush_stream_event(self) -> None:
         """Flush any remaining incomplete line from the shared stream buffer."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
-        from agent.conversation_loop import ACTIVE_CLI
+        from agent.conversation_loop import ACTIVE_CLI, LineKind
         if ACTIVE_CLI is None:
             return
 
         from agent.conversation_loop import print_text_line, wrap_box_lines
         from hermes_cli.cli_render import _terminal_columns
+
+        # Save accumulated_text as reasoning_text when leaving the reasoning phase
+        if ACTIVE_CLI.current_line_kind == LineKind.REASONING:
+            self.reasoning_text = self.accumulated_text
 
         remaining = self.stream_buffer
         if not remaining:
