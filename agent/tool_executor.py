@@ -1223,8 +1223,6 @@ def _finalize_tool_batch(agent, messages: list, effective_task_id: str, num_tool
     # Deliver user input entered during args-streaming / tool execution: show it in an
     # INPUT box and append it as a plain user message right after this batch.
     from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_box
-
-    print_text_line(LineKind.DEBUG, "_finalize_tool_batch")
     drained_input = ""
     with ACTIVE_CLI.lock:
         drained_input = ACTIVE_CLI.user_input
