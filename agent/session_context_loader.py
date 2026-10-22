@@ -47,9 +47,11 @@ def get_previous_session_context(
         # Candidate shortlist ordered by most recently active. Deliberately no
         # message-count filter in SQL (see docstring); eligibility is checked
         # per candidate from the actual rows.
+        # Walk far enough back to find an eligible session past any run of recent
+        # stubs or test sessions — not capped at the default page size.
         sessions = session_db.list_sessions_rich(
             order_by_last_active=True,
-            limit=8,
+            limit=200,
         )
 
         for session in sessions:
