@@ -331,6 +331,11 @@ class StreamDeliveryMixin:
 
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
+            # Reasoning → anything else: flush now while reasoning content is still current,
+            # capturing it into reasoning_text for later steering delivery.
+            if ACTIVE_CLI.header_kind == LineKind.REASONING:
+                self.flush_stream_event()
+
             print_header_line(kind, title=title)
 
             # Signal that this kind has been streamed so fallback renderers skip it
@@ -377,7 +382,7 @@ class StreamDeliveryMixin:
                 print_text_line(kind, wrapped_line)
 
             self.stream_buffer = ""
-            
+
             if kind == LineKind.REASONING:
                 # Reasoning phase: pick this steering's placeholder variant HERE so the displayed box
                 # and the persisted wire row carry identical text.
@@ -402,13 +407,23 @@ class StreamDeliveryMixin:
                         tag="HSE-REA"
                     )
             elif kind == LineKind.RESPONSE:
-                # Response phase: the streamed text becomes the assistant message's content directly
-                if self.accumulated_text.strip():
-                    append_message(
-                        self._messages,
-                        {"role": "assistant", "content": self.accumulated_text},
-                        tag="HSE-RES"
-                    )
+                # Response phase: the streamed text becomes the assistant message's content directly.
+                # An empty response phase (steer before any token arrived) still needs an assistant row:
+                # use a sentinel so the prompt stays valid and the oddity is visible if it ever shows up.
+                if not self.accumulated_text.strip():
+                    self.accumulated_text = "*no content*"
+                    print_text_box(LineKind.RESPONSE, self.accumulated_text)
+
+                msg = {"role": "assistant", "content": self.accumulated_text}
+                # Include reasoning content if we accumulated any during reasoning phase
+                if self.reasoning_text.strip():
+                    msg["reasoning_content"] = self.reasoning_text
+                self.reasoning_text = ""
+                append_message(
+                    self._messages,
+                    msg,
+                    tag="HSE-RES"
+                )
 
             # Show the user's steering text in its own input box.
             print_text_box(LineKind.INPUT, drained_input)
@@ -418,7 +433,7 @@ class StreamDeliveryMixin:
                 {"role": "user", "content": drained_input},
                 tag="HSE-USR"
             )
-            
+
             # Signal to stream loop: close current stream
             self.do_close_current_stream = True
             # Indicate unified steering mechanism is in use (messages already delivered)
@@ -468,9 +483,16 @@ class StreamDeliveryMixin:
         from agent.conversation_loop import print_text_line, wrap_box_lines
         from hermes_cli.cli_render import _terminal_columns
 
+        # DEBUG: trace flush_stream_event calls to find when reasoning gets captured
+        print_text_line(LineKind.DEBUG,
+                        f"[FLUSH_STREAM_EVENT] kind={ACTIVE_CLI.current_line_kind.value} "
+                        f"accumulated={len(self.accumulated_text)} chars, "
+                        f"reasoning_so_far={len(getattr(self, 'reasoning_text', '') or '')} chars")
+
         # Save accumulated_text as reasoning_text when leaving the reasoning phase
         if ACTIVE_CLI.current_line_kind == LineKind.REASONING:
             self.reasoning_text = self.accumulated_text
+            self.accumulated_text = ""  # Clear accumulator so response-phase content doesn't mix in
 
         remaining = self.stream_buffer
         if not remaining:

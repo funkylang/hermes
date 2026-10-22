@@ -404,12 +404,12 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
         return
     else:
         """Steering wait completed - handle_stream_event already appended wire rows at detection time.
-        
+
         This path used to append an assistant placeholder + user correction here, but that duplicates
         what our unified mechanism already did. The steering rows are on agent._messages from the
         moment they were detected in the stream funnel (stream_delivery.handle_stream_event), so we
         return immediately without touching the messages list.
-        
+
         Legacy code preserved below for reference - do NOT re-enable without removing the
         handle_stream_event append logic or you'll get duplicate steering rows.
         """
@@ -1752,7 +1752,7 @@ def print_header_line(kind: LineKind, title: Optional[str] = None,
         return  # --debug off: suppress diagnostic boxes/headers
     if kind == LineKind.CURRENT:
         kind = ACTIVE_CLI.current_line_kind
-    else:
+    elif kind != LineKind.DEBUG:
         ACTIVE_CLI.current_line_kind = kind
     info = kind_infos[kind.value]
     ts = _datetime.now().strftime("%H:%M")
@@ -1778,7 +1778,7 @@ def print_text_line(kind: LineKind, text: str = '') -> None:
         return  # --debug off: suppress diagnostic boxes/lines
     if kind == LineKind.CURRENT:
         kind = ACTIVE_CLI.current_line_kind
-    else:
+    elif kind != LineKind.DEBUG:
         ACTIVE_CLI.current_line_kind = kind
     info = kind_infos[kind.value]
     attributes = kind_to_sgr(info)
