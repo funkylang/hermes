@@ -184,6 +184,21 @@ def execute(
 ) -> Any:
     """Run one non-streaming physical provider attempt through Relay.
     ``session_id`` defaults to the inherited Hermes turn's session (unmanaged when there is none)."""
+    # TEMP debug: log prompt send so the steering work can correlate send -> close.
+    try:
+        from agent.message_debug_log import debug_log_event
+
+        messages = (request or {}).get("messages") if isinstance(request, dict) else None
+        msg_count = len(messages) if isinstance(messages, list) else 0
+        call_role = (metadata or {}).get("call_role", "primary")
+        api_mode = (metadata or {}).get("api_mode", "?")
+        debug_log_event(
+            f"PROMPT_SEND non-stream msgs={msg_count} role={call_role[:4]} {api_mode}",
+            tag="PSEND",
+        )
+    except Exception:  # noqa: BLE001 — debug path must never raise into the call lifecycle
+        pass
+
     attempt = _ManagedAttempt.resolve(session_id, request, metadata, name=name, model_name=model_name)
     if attempt is None:
         return callback(request)
@@ -317,6 +332,22 @@ class ManagedLlmStream(Iterator[Any]):
         completed_response_predicate: Callable[[Any], bool] | None = None,
         metadata: dict[str, Any] | None = None, defer_logical_completion: bool = False,
     ) -> None:
+        # TEMP debug: log prompt send so the steering work can correlate send -> close.
+        try:
+            from agent.message_debug_log import debug_log_event
+
+            messages = (request or {}).get("messages") if isinstance(request, dict) else None
+            msg_count = len(messages) if isinstance(messages, list) else 0
+            call_role = (metadata or {}).get("call_role", "primary")
+            api_mode = (metadata or {}).get("api_mode", "?")
+            self._debug_id = id(self)
+            debug_log_event(
+                f"PROMPT_SEND 0x{id(self):x} msgs={msg_count} role={call_role[:4]} {api_mode}",
+                tag="PSEND",
+            )
+        except Exception:  # noqa: BLE001 — debug path must never raise into the stream lifecycle
+            pass
+
         self._defer_logical_completion = defer_logical_completion
         # Only auxiliary calls report model/provider on their logical scope.
         auxiliary = str((metadata or {}).get("call_role") or "").startswith("auxiliary:")

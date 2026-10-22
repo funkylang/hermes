@@ -43,6 +43,23 @@ def debug_log_message_append(message: Mapping[str, Any], tag: str = "") -> None:
         logger.debug("debug_log_message_append failed: %s", exc)
 
 
+def debug_log_event(text: str, tag: str = "") -> None:
+    """Print one DEBUG box line for any lifecycle event (not tied to append_message).
+
+    Same gating as ``debug_log_message_append``: CLI-only, exception-safe. Used for
+    stream-close / prompt-send instrumentation so the steering work can trace when
+    prompts go over the wire and when the corresponding streams end."""
+    try:
+        from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_line
+
+        if ACTIVE_CLI is None:
+            return
+        prefix = f"[{tag}] " if tag else ""
+        print_text_line(LineKind.DEBUG, f"{prefix}{text}")
+    except Exception as exc:  # noqa: BLE001 — debug path must never raise into the loop
+        logger.debug("debug_log_event failed: %s", exc)
+
+
 def _content_text(message: Mapping[str, Any]) -> str:
     """Flatten a message's content (str or content-block list) to displayable text."""
     content = message.get("content")

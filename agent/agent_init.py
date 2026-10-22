@@ -639,6 +639,7 @@ _SESSION_STATE: Dict[str, Any] = {
 _STREAM_STATE: Dict[str, Any] = {
     "stream_buffer": "",  # shared partial-line buffer for the active stream (one stream at a time)
     "accumulated_text": "",  # everything through handle_stream_event (all lanes); steering boundary ships it as the interrupted row's context
+    "do_close_current_stream": False,  # set by handle_stream_event at steering boundary; stream loop breaks when True
     "_stream_callback": None,  # streaming TTS; set early so _vprint can reference it
     # Stateful scrubbers: <memory-context> / thinking spans split across deltas defeat
     # per-delta regexes (both tags must be in one string).
