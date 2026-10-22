@@ -1099,7 +1099,7 @@ def build_turn_context(
     # Every estimator this turn prices images at the cost learned from this model's real usage.
     bind_image_token_cost(agent)
     # Append the user message now that close persistence is safe.
-    append_message(messages, user_msg)
+    append_message(messages, user_msg, tag="CLI-USR")
     current_turn_user_idx = len(messages) - 1
     agent._persist_user_message_idx = current_turn_user_idx
 

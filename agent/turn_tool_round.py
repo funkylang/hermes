@@ -108,7 +108,7 @@ def run_tool_round(
     assistant_msg, duplicate_previous_interim = stage_tool_call_message(
         agent, assistant_message=assistant_message, finish_reason=finish_reason, messages=messages
     )
-    append_message(messages, assistant_msg)
+    append_message(messages, assistant_msg, tag="TCH-AST")
 
     # Mixed batch: error-result invalid calls and drop them from execution.
     if _invalid_batch_calls:
@@ -120,7 +120,7 @@ def run_tool_round(
                 "content": _invalid_tool_name_error_content(
                     tc.function.name, agent.valid_tool_names
                 ),
-            })
+            }, tag="ERR-TOL")
         assistant_message.tool_calls = [
             tc for tc in assistant_message.tool_calls if tc.function.name in agent.valid_tool_names
         ]
@@ -173,10 +173,10 @@ def run_tool_round(
                 "name": tc.function.name,
                 "tool_call_id": coalesce_tool_call_id(tc),
                 "content": "Tool call halted by user emergency brake ('halt' command).",
-            })
+            }, tag="HLT-TOL")
         
         # Append the final response AFTER tool results (correct API ordering)
-        append_message(messages, {"role": "assistant", "content": final_response})
+        append_message(messages, {"role": "assistant", "content": final_response}, tag="HLT-AST")
         
         # Emit the halt so it isn't mistaken for a crash; the stream callback is still alive.
         if final_response:
@@ -205,7 +205,7 @@ def run_tool_round(
         _turn_exit_reason = "guardrail_halt"
         final_response = agent._toolguard_controlled_halt_response(decision)
         agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
-        append_message(messages, {"role": "assistant", "content": final_response})
+        append_message(messages, {"role": "assistant", "content": final_response}, tag="GRD-AST")
         # Emit the halt so it isn't mistaken for a crash; the stream callback is still
         # alive, so SSE/TUI clients see the explanation.
         if final_response:

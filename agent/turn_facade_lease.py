@@ -373,7 +373,7 @@ def carry_unadmitted_user_message(
         deferred_user["display_metadata"] = display_metadata
     if platform_id is not None:
         deferred_user["platform_message_id"] = platform_id
-    append_message(early_result["messages"], deferred_user, timestamp=timestamp)
+    append_message(early_result["messages"], deferred_user, timestamp=timestamp, tag="DEF-USR")
 
 
 def _lease_not_acquired_result(agent, session_id: str, conversation_history) -> Dict[str, Any]:

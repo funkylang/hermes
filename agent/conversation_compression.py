@@ -2458,7 +2458,7 @@ def _ensure_compressed_has_user_turn(original_messages: list, compressed: list) 
         if steer_text:
             return _insert_real_user_anchor(compressed, {"role": "user", "content": steer_text})
     from agent.message_metadata import append_message
-    append_message(compressed, {"role": "user", "content": COMPRESSION_CONTINUATION_USER_CONTENT})
+    append_message(compressed, {"role": "user", "content": COMPRESSION_CONTINUATION_USER_CONTENT}, tag="CMP-USR")
     return "placeholder_appended"
 
 

@@ -233,7 +233,7 @@ def finish_text_response(
             # Same sidecar as the final row: the wire copy must carry the promoted text, not only
             # ``reasoning_content``, or the continuation replays an empty assistant turn.
             interim_msg["api_content"] = final_response
-        append_message(messages, interim_msg)
+        append_message(messages, interim_msg, tag="COD-ITM")
         agent._emit_interim_assistant_message(interim_msg)
         append_message(messages, {
             "role": "user",
@@ -241,7 +241,7 @@ def finish_text_response(
                 _DEGENERATE_FINAL_NUDGE if _continuation_kind == "degenerate"
                 else _CODEX_ACK_CONTINUATION_NUDGE
             ),
-        })
+        }, tag="COD-USR")
         agent._session_messages = messages
         # An acknowledgment is non-final: its text must not suppress iteration-limit
         # summarization if the continuation exhausts budget.
@@ -307,12 +307,12 @@ def finish_text_response(
         # Both halves of the re-prompt pair are ephemeral scaffolding: never persisted,
         # and the finalization pop strips an unanswered tail pair.
         final_msg["_dropped_toolcall_nudge"] = True
-        append_message(messages, final_msg)
+        append_message(messages, final_msg, tag="TCL-AST")
         append_message(messages, {
             "role": "user",
             "content": _DROPPED_TOOLCALL_NUDGE_CONTENT,
             "_dropped_toolcall_nudge": True,
-        })
+        }, tag="TCL-USR")
         agent._session_messages = messages
         final_response = None
         return _verdict("continue")
@@ -357,7 +357,7 @@ def finish_text_response(
         else:
             final_msg["content"] = final_response
 
-    append_message(messages, final_msg)
+    append_message(messages, final_msg, tag="FIN-AST")
     # Make the answer durable before leaving the loop (_DB_PERSISTED_MARKER keeps
     # _persist_session idempotent). Failure must NOT abort the turn: finalize retries.
     try:

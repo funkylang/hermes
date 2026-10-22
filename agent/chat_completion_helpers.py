@@ -2325,7 +2325,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     # Shared constant so compaction recognizers can identify this runtime nudge by its stable
     # content after SessionDB projection strips metadata flags.
     from agent.context_compressor import MAX_ITERATIONS_SUMMARY_REQUEST
-    nudge = append_message(messages, {"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
+    nudge = append_message(messages, {"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST}, tag="SUM-USR")
 
     try:
         api_messages = _iteration_summary_api_messages(agent, messages)
@@ -2342,7 +2342,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
             if text:
                 summary_call_outcome = "success"
-                append_message(messages, {"role": "assistant", "content": text})
+                append_message(messages, {"role": "assistant", "content": text}, tag="SUM-AST")
                 final_response = text
             break
 

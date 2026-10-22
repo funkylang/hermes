@@ -10,34 +10,35 @@ from typing import Any, Mapping
 
 logger = logging.getLogger("run_agent")
 
-# One row per logical message; long text is abbreviated to fit a single terminal line.
-_ABBREV_CHARS = 90
-# Reasoning previews run at half length — they repeat densely and add little past 50 chars.
-_REASONING_ABBREV_CHARS = 50
+# One row per logical message; long text is abbreviated to fit a single terminal line:
+# first N chars + "..." + last N chars, so both ends of the message stay visible.
+_ABBREV_CHARS = 30
 
 
-def debug_log_message_append(message: Mapping[str, Any]) -> None:
+def debug_log_message_append(message: Mapping[str, Any], tag: str = "") -> None:
     """Print kind + abbreviated content for an appended transcript message.
 
     ASSISTANT messages use two lines (reasoning first, then content); all others one.
-    No-op outside the interactive CLI (tests, gateway, headless) and on any error —
-    instrumentation must never break a turn."""
+    When ``tag`` is given, every emitted line carries the ``[TAG] `` prefix so field
+    descriptions stay attached to their source site. No-op outside the interactive CLI
+    (tests, gateway, headless) and on any error — instrumentation must never break a turn."""
     try:
         from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_line
 
         if ACTIVE_CLI is None or not isinstance(message, dict):
             return
+        prefix = f"[{tag}] " if tag else ""
         role = str(message.get("role", "?"))
         if role == "assistant":
             reasoning = message.get("reasoning_content") or ""
             content = _abbrev(_content_text(message))
-            print_text_line(LineKind.DEBUG, f"ASSISTANT (reasoning): {_abbrev(reasoning, _REASONING_ABBREV_CHARS)}")
-            print_text_line(LineKind.DEBUG, f"ASSISTANT: {content}")
+            print_text_line(LineKind.DEBUG, f"{prefix}ASSISTANT (reasoning): {_abbrev(reasoning)}")
+            print_text_line(LineKind.DEBUG, f"{prefix}ASSISTANT: {content}")
         elif role == "tool":
             name = message.get("name") or ""
-            print_text_line(LineKind.DEBUG, f"TOOL {name}: {_abbrev(_content_text(message))}")
+            print_text_line(LineKind.DEBUG, f"{prefix}TOOL {name}: {_abbrev(_content_text(message))}")
         else:
-            print_text_line(LineKind.DEBUG, f"{role.upper()}: {_abbrev(_content_text(message))}")
+            print_text_line(LineKind.DEBUG, f"{prefix}{role.upper()}: {_abbrev(_content_text(message))}")
     except Exception as exc:  # noqa: BLE001 — debug path must never raise into the loop
         logger.debug("debug_log_message_append failed: %s", exc)
 
@@ -60,8 +61,8 @@ def _content_text(message: Mapping[str, Any]) -> str:
     return "" if content is None else str(content)
 
 
-def _abbrev(text: Any, max_chars: int = _ABBREV_CHARS) -> str:
+def _abbrev(text: Any, chars: int = _ABBREV_CHARS) -> str:
     text = " ".join(str(text or "").split())  # single-line, collapsed whitespace
-    if len(text) > max_chars:
-        return text[:max_chars] + "..."
+    if len(text) > chars * 2 + 3:  # abbreviated form is exactly chars*2+3 wide — no gain below that
+        return text[:chars] + "..." + text[-chars:]
     return text

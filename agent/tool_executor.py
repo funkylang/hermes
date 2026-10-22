@@ -340,7 +340,7 @@ def _append_skipped_tool_results(
         from agent.message_debug_log import debug_log_message_append  # TEMP debug
 
         _msg = make_tool_result_message(name, result, _pairing_tool_call_id(tc), effect_disposition="none")
-        debug_log_message_append(_msg)
+        debug_log_message_append(_msg, tag="TX-SKIP")
         messages.append(_msg)
         if hook_error_type is not None:
             _ToolCallRef(name, {}, effective_task_id, (hook_id or _pairing_tool_call_id)(tc), []).emit_post(
@@ -1162,7 +1162,7 @@ def _commit_tool_result(
         logging.debug("tool call box render failed for %s: %s", function_name, exc)
     from agent.message_debug_log import debug_log_message_append  # TEMP debug
 
-    debug_log_message_append(tool_message)
+    debug_log_message_append(tool_message, tag="TX-CMT")
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None
@@ -1757,7 +1757,7 @@ def _append_invalid_arguments_result(agent, messages: list, ref: _ToolCallRef, p
     from agent.message_debug_log import debug_log_message_append  # TEMP debug
 
     _msg = make_tool_result_message(ref.name, parse_error, ref.call_id)
-    debug_log_message_append(_msg)
+    debug_log_message_append(_msg, tag="TX-INV")
     messages.append(_msg)
     return _flush_session_db_after_tool_progress(agent, messages, stage=f"invalid tool arguments {ref.name}")
 

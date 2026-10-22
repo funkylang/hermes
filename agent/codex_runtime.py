@@ -678,7 +678,7 @@ def _persist_projected_messages(agent, turn, messages: List[Dict[str, Any]]) -> 
             and first.get("content") == submitted_user_text):
         projected_messages = projected_messages[1:]
     for projected_message in projected_messages:
-        append_message(messages, projected_message)
+        append_message(messages, projected_message, tag="CDX-PRJ")
     if getattr(agent, "_session_db", None) is None:
         return False
     flush_ok = False

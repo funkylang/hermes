@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 from agent.memory_manager import sanitize_context
 from agent.message_content import flatten_message_text
+from agent.message_metadata import append_message  # tagged appends at the steering boundary
 from agent.history_commentary import visible_commentary
 from agent.conversation_loop import LineKind  # streaming phase → box kind mapping (agent-owns-display)
 
@@ -353,12 +354,12 @@ class StreamDeliveryMixin:
         # Steering boundary: cheap local checks first (phase + newline); only when both hold
         # do we touch shared user_input - and there, atomically read+clear in one critical section.
         drained_input = ""
-        if kind == LineKind.REASONING and "\n" in text:
+        if kind in (LineKind.REASONING, LineKind.RESPONSE) and "\n" in text:
             with ACTIVE_CLI.lock:
                 drained_input = ACTIVE_CLI.user_input
                 ACTIVE_CLI.user_input = ""
 
-        # Steering delivery: the newline in reasoning is the boundary signal. The display funnel
+        # Steering delivery: a newline in reasoning or response is the boundary signal. The display funnel
         # sees it before any control path, so this is the single owner — render AND append the
         # wire rows here. handle_stream_event runs on the AIAgent (StreamDeliveryMixin), and
         # self._messages is the live turn list: prepare_iteration refreshes that reference every
@@ -368,41 +369,55 @@ class StreamDeliveryMixin:
         # wire role is retired.
         if drained_input:
             # Cut everything from the first newline onward — the boundary line completes, the
-            # rest never renders: the model's thinking about the pre-steer direction ends here.
+            # rest never renders: the model's text about the pre-steer direction ends here.
             text = text.split("\n")[0]
             current_buf = self.stream_buffer + text
             # A completed line at the steering boundary: print it completely (no hold-back).
             for wrapped_line in wrap_box_lines(current_buf, box_width):
                 print_text_line(kind, wrapped_line)
-            # Replay-parity: pick this steering's placeholder variant HERE so the displayed box
-            # and the persisted wire row carry identical text.
-            from agent.conversation_loop import _random_redirect_placeholder
 
-            self._redirect_placeholder_text = _random_redirect_placeholder()
-            # The injected assistant's placeholder box (after the reasoning lines):
-            # header + the steering variant as its content.
-            print_text_box(LineKind.RESPONSE, self._redirect_placeholder_text)
             self.stream_buffer = ""
+            
+            if kind == LineKind.REASONING:
+                # Reasoning phase: pick this steering's placeholder variant HERE so the displayed box
+                # and the persisted wire row carry identical text.
+                from agent.conversation_loop import _random_redirect_placeholder
+
+                self._redirect_placeholder_text = _random_redirect_placeholder()
+                # The injected assistant's placeholder box (after the reasoning lines):
+                # header + the steering variant as its content.
+                print_text_box(LineKind.RESPONSE, self._redirect_placeholder_text)
+
+                if self.accumulated_text.strip():
+                    append_message(
+                        self._messages,
+                        {"role": "assistant", "content": self._redirect_placeholder_text,
+                         "reasoning_content": self.accumulated_text},
+                        tag="HSE-REA"
+                    )
+                else:
+                    append_message(
+                        self._messages,
+                        {"role": "assistant", "content": self._redirect_placeholder_text},
+                        tag="HSE-REA"
+                    )
+            elif kind == LineKind.RESPONSE:
+                # Response phase: the streamed text becomes the assistant message's content directly
+                if self.accumulated_text.strip():
+                    append_message(
+                        self._messages,
+                        {"role": "assistant", "content": self.accumulated_text},
+                        tag="HSE-RES"
+                    )
+
             # Show the user's steering text in its own input box.
             print_text_box(LineKind.INPUT, drained_input)
-
-            # Wire: append exactly what was just rendered, every time. The screen always draws
-            # both boxes, so the wire always gets both rows — alternation holds structurally
-            # (placeholder separates any prior user tail from this one). accumulated_text is
-            # the reasoning streamed before the boundary (the funnel hasn't seen anything else
-            # yet in the reasoning phase); hand it back as the row's reasoning_content and
-            # reset: each steering's placeholder carries its own context, never stale text.
-            if self.accumulated_text.strip():
-                self._messages.append(
-                    {"role": "assistant", "content": self._redirect_placeholder_text,
-                     "reasoning_content": self.accumulated_text}
-                )
-            else:
-                self._messages.append(
-                    {"role": "assistant", "content": self._redirect_placeholder_text}
-                )
             self.accumulated_text = ""
-            self._messages.append({"role": "user", "content": drained_input})
+            append_message(
+                self._messages,
+                {"role": "user", "content": drained_input},
+                tag="HSE-USR"
+            )
         else:
             # Add new text to the shared stream buffer (one stream active at a time)
             current_buf = self.stream_buffer + text

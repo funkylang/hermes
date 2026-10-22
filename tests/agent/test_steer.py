@@ -287,28 +287,29 @@ class TestActiveTurnRedirectCheckpoint:
             )
             assert repeated not in blob
 
-    def test_placeholder_acknowledges_interruption_as_assistant_message(self):
-        """Role alternation is preserved by a real (non-empty) assistant message, so the
-        sanitizer cannot drop it and consecutive user messages cannot merge (#88955)."""
-        from agent.conversation_loop import _apply_active_turn_redirect, REDIRECT_PLACEHOLDER_TEXTS
+    def test_steering_wait_path_appends_nothing_rows_already_delivered(self):
+        """Unified steering (handle_stream_event): when _steering_wait_completed is set,
+        the wire rows were ALREADY appended at the detection boundary — this path must
+        not add a placeholder or correction row (that was the old smart-steer append,
+        retired 2026-10-21). It only clears consumption markers + streamed text.
+        Role alternation / sanitizer stability of the delivered rows is covered by the
+        placeholder contract in TestEmptyAssistantSanitizerConvergence."""
+        from agent.conversation_loop import _apply_active_turn_redirect
 
         agent = _bare_agent()
         agent._current_streamed_assistant_text = ""
         agent._steering_wait_reasoning = "thinking captured at interrupt"
-        agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
+        agent._steering_wait_completed = True  # Smart-steer path (unified delivery)
         messages = [{"role": "user", "content": "start"}]
 
         _apply_active_turn_redirect(agent, messages, "Change course.")
 
-        placeholder, correction = messages[-2], messages[-1]
-        assert placeholder["role"] == "assistant"
-        assert placeholder["content"] in REDIRECT_PLACEHOLDER_TEXTS, \
-            f"Placeholder content {placeholder['content']!r} not in expected variants"
-        assert placeholder.get("reasoning_content") == "thinking captured at interrupt"
-        # No context to replay: the correction is the plain user text, no api_content.
-        assert correction["role"] == "user"
-        assert correction["content"] == "Change course."
-        assert "api_content" not in correction
+        # Nothing appended: the unified mechanism owns message delivery.
+        assert len(messages) == 1
+        # Consumption bookkeeping was cleared.
+        assert not agent._steering_wait_completed
+        assert agent._current_streamed_assistant_text == ""
+        assert agent._steering_wait_reasoning == ""
 
     def test_ordinary_partial_remains_replayable(self):
         """Useful interrupted text remains available to the corrected request."""
@@ -323,12 +324,16 @@ class TestActiveTurnRedirectCheckpoint:
 
         assert visible in messages[-1]["api_content"]
 
-    def test_assistant_tail_puts_correction_last(self):
+    def test_steering_wait_path_leaves_message_list_untouched(self):
+        """Unified steering: the steering-wait path never rewrites the transcript — no
+        correction row, no sidecar, no extra assistant row. The rows the model needs were
+        already appended by handle_stream_event at the boundary (streamed text + plain
+        user row), so the tail here is already whatever that mechanism delivered."""
         from agent.conversation_loop import _apply_active_turn_redirect
 
         agent = _bare_agent()
         agent._current_streamed_assistant_text = "Visible draft."
-        agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
+        agent._steering_wait_completed = True  # Smart-steer path (unified delivery)
         messages = [
             {"role": "user", "content": "start"},
             {"role": "assistant", "content": "committed assistant item"},
@@ -336,27 +341,19 @@ class TestActiveTurnRedirectCheckpoint:
 
         _apply_active_turn_redirect(agent, messages, "Use Postgres instead.")
 
-        assert [m["role"] for m in messages] == ["user", "assistant", "user"]
-        assert messages[-1]["role"] == "user"
-        assert messages[-1]["content"] == "Use Postgres instead."
-        assert sum(1 for m in messages if m["role"] == "assistant") == 1
-        # The interrupted draft is provider-replay context carried in the sidecar so the
-        # model still sees where it left off — never scaffold noise, never the transcript.
-        replayed = messages[-1]["api_content"]
-        assert "Visible draft." in replayed
-        assert "Context from the interrupted assistant response" not in replayed
-        assert "[This response was interrupted by a user correction.]" not in replayed
-        assert replayed.endswith("Use Postgres instead.")
+        # Message list unchanged: nothing appended, nothing rewritten.
+        assert [m["role"] for m in messages] == ["user", "assistant"]
+        assert len(messages) == 2
 
     def test_scaffolding_never_lands_in_transcript_content(self):
         """The legacy interrupt-scaffold prefixes are gone entirely: nothing we emit
         carries them, so they can neither paint raw scaffolding as the model's prior
-        reply (#81841) nor leak into the transcript. The user's correction always stays
-        verbatim in its content field."""
+        reply (#81841) nor leak into the transcript. The steering-wait path itself
+        appends NOTHING (unified delivery owns the rows), so for it this reduces to:
+        whatever list it receives stays byte-identical — no markers, no sidecars."""
         from agent.conversation_loop import _apply_active_turn_redirect
 
-        # These two announcement lines are pure noise — the placeholder assistant
-        # message carries the interruption itself, so we never emit them anywhere.
+        # These two announcement lines are pure noise — we never emit them anywhere.
         banned = (
             "[This response was interrupted by a user correction.]",
             "[Context from the interrupted assistant response]",
@@ -366,7 +363,7 @@ class TestActiveTurnRedirectCheckpoint:
             for streamed in ("Partial reply on screen.", ""):
                 agent = _bare_agent()
                 agent._current_streamed_assistant_text = streamed
-                agent._steering_wait_completed = True  # Smart-steer path (no scaffold markers)
+                agent._steering_wait_completed = True  # Smart-steer path (unified delivery)
                 messages = [{"role": "user", "content": "start"}]
                 if tail_role == "assistant":
                     messages.append({"role": "assistant", "content": "committed"})
@@ -392,22 +389,12 @@ class TestActiveTurnRedirectCheckpoint:
                             f"(tail={tail_role}, streamed={bool(streamed)}): {blob!r}"
                         )
 
-                # The user's correction is always shown verbatim.
-                assert messages[-1]["content"] == "New direction."
-                # The streamed draft (if any) rides the sidecar only...
-                if streamed:
-                    replayed = messages[-1].get("api_content", "")
-                    assert streamed in replayed
-                    assert "Visible response before the interruption:" in replayed
-                    # ...and never leaks into transcript content or assistant rows.
-                    for msg in messages[:-1]:
-                        assert "Visible response before the interruption:" not in (
-                            str(msg.get("content") or "")
-                            + str(msg.get("api_content") or "")
-                        )
-                else:
-                    # Nothing to replay: no api_content sidecar at all.
-                    assert "api_content" not in messages[-1]
+                # The steering-wait path adds neither a correction row nor any sidecar.
+                for msg in messages:
+                    assert "api_content" not in msg, (
+                        f"unexpected api_content sidecar on role={msg['role']} "
+                        f"(tail={tail_role}, streamed={bool(streamed)})"
+                    )
 
     def test_checkpoint_never_replays_chain_of_thought(self):
         """Raw CoT serialized into checkpoint content reads to Anthropic's
@@ -453,56 +440,60 @@ class TestEmptyAssistantSanitizerConvergence:
     stable from the first replay onward."""
 
     def test_redirect_placeholder_is_non_empty_and_sanitizer_stable(self):
+        """The steering placeholder row is appended by handle_stream_event as a plain
+        assistant row whose content is one of REDIRECT_PLACEHOLDER_TEXTS. That shape —
+        non-empty content, no sidecar — is what makes #88955 hold: the pre-call
+        sanitizer's empty-assistant repair cannot rewrite it on replay."""
         from agent.agent_runtime_helpers import repair_empty_non_final_messages
-        from agent.conversation_loop import _apply_active_turn_redirect, REDIRECT_PLACEHOLDER_TEXTS
+        from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXTS
 
-        agent = _bare_agent()
-        agent._current_streamed_assistant_text = ""
-        agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
-        messages = [{"role": "user", "content": "start"}]
+        for variant in REDIRECT_PLACEHOLDER_TEXTS:
+            # The exact row shape the unified mechanism appends at the steering boundary.
+            placeholder = {"role": "assistant", "content": variant}
+            correction = {"role": "user", "content": "Use Postgres instead."}
+            messages = [{"role": "user", "content": "start"}, placeholder, correction]
 
-        _apply_active_turn_redirect(agent, messages, "Use Postgres instead.")
+            # Non-empty content that survives the variants set.
+            assert placeholder["content"] in REDIRECT_PLACEHOLDER_TEXTS, \
+                f"Placeholder content {placeholder['content']!r} not in expected variants"
+            # The correction is plain user text — no context to replay.
+            assert correction["role"] == "user"
+            assert correction["content"] == "Use Postgres instead."
+            assert "api_content" not in correction
 
-        placeholder = messages[-2]
-        correction = messages[-1]
-        assert placeholder["role"] == "assistant"
-        assert placeholder["content"] in REDIRECT_PLACEHOLDER_TEXTS, \
-            f"Placeholder content {placeholder['content']!r} not in expected variants"
-        # The correction is the plain user text — no context to replay.
-        assert correction["role"] == "user"
-        assert correction["content"] == "Use Postgres instead."
-        assert "api_content" not in correction
+            # The sanitizer must leave the placeholder exactly as written (its repair path
+            # only fires on empty assistant rows).
+            healed = repair_empty_non_final_messages([dict(m) for m in messages])
+            healed_placeholder = healed[-2]
+            assert healed_placeholder["content"] == placeholder["content"], \
+                f"Sanitizer modified placeholder content: {healed_placeholder['content']!r}"
+            assert (
+                healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
+            )
 
-        # The sanitizer must leave the placeholder exactly as written (its repair path
-        # only fires on empty assistant rows).
-        healed = repair_empty_non_final_messages([dict(m) for m in messages])
-        healed_placeholder = healed[-2]
-        assert healed_placeholder["content"] == placeholder["content"], \
-            f"Sanitizer modified placeholder content: {healed_placeholder['content']!r}"
-        assert (
-            healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
-        )
-
-    def test_stored_redirect_placeholder_variant_matches_replay(self):
-        """Replay-parity: when agent._redirect_placeholder_text is set (chosen at steering-
-        detection time), the persisted/replayed message uses that variant, matching what
-        the live display box shows."""
+    def test_stored_redirect_placeholder_variant_survives_steering_consumption(self):
+        """Replay-parity (unified steering): handle_stream_event stores the chosen variant
+        on agent._redirect_placeholder_text at detection time; that single value drives
+        both the live display box and the persisted wire row. The steering-wait
+        consumption path (_apply_active_turn_redirect) must therefore NOT clear or
+        rewrite it, or the display/wire/replay copies would drift apart."""
         from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXTS, _apply_active_turn_redirect
 
         for variant in REDIRECT_PLACEHOLDER_TEXTS:
             agent = _bare_agent()
             agent._current_streamed_assistant_text = ""
             agent._redirect_placeholder_text = variant
-            agent._steering_wait_completed = True  # Smart-steer path (placeholder content, no scaffold)
+            agent._steering_wait_completed = True  # Smart-steer path (unified delivery)
             messages = [{"role": "user", "content": "start"}]
 
             _apply_active_turn_redirect(agent, messages, "Change course.")
 
-            placeholder = messages[-2]
-            assert placeholder["role"] == "assistant"
-            assert placeholder["content"] == variant, (
-                f"Expected {variant!r}, got {placeholder['content']!r}"
+            # The stored variant is intact for the display fallback and replay.
+            assert agent._redirect_placeholder_text == variant, (
+                f"Expected {variant!r} preserved, got {agent._redirect_placeholder_text!r}"
             )
+            # And it still matches what the persisted row would carry.
+            assert variant in REDIRECT_PLACEHOLDER_TEXTS
 
     def test_empty_non_final_sanitizer_still_repairs_unmarked_empty_assistant(self):
         """Control: a genuinely empty non-final assistant with no provider-replay

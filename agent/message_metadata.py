@@ -261,11 +261,16 @@ def append_message(
     message: _Message,
     *,
     timestamp: Optional[float] = None,
+    tag: str = "",
 ) -> _Message:
-    """Stamp and append one live transcript message."""
+    """Stamp and append one live transcript message.
+
+    ``tag``: short source label (e.g. "HSE-REA" for handle_stream_event/reasoning);
+    when set, the debug box lines carry it so appends are traceable to their call site.
+    """
     # TEMP debug: log every transcript append (remove when done).
     from agent.message_debug_log import debug_log_message_append
 
-    debug_log_message_append(message)
+    debug_log_message_append(message, tag=tag)
     messages.append(stamp_message_timestamp(message, timestamp=timestamp))
     return message

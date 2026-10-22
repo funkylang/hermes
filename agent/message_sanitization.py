@@ -295,7 +295,7 @@ def close_interrupted_tool_sequence(messages: list, final_response: Any = None) 
     text = final_response if isinstance(final_response, str) else ""
     from agent.message_metadata import append_message
 
-    append_message(messages, {"role": "assistant", "content": text.strip() or "Operation interrupted."})
+    append_message(messages, {"role": "assistant", "content": text.strip() or "Operation interrupted."}, tag="SAN-CLS")
     return True
 
 

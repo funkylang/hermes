@@ -87,7 +87,7 @@ def collapse_continuation_trail(
         _join_truncated_parts(join_parts)
     ).strip()
     if partial:
-        append_message(messages, {"role": "assistant", "content": partial, "finish_reason": finish_reason})
+        append_message(messages, {"role": "assistant", "content": partial, "finish_reason": finish_reason}, tag="TRC-PAR")
     agent._session_messages = messages
     return partial
 
@@ -320,7 +320,7 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
     if _interim_content:
         interim_msg = agent._build_assistant_message(assistant_message, st.finish_reason)
         interim_msg["_length_continuation_fragment"] = True  # ceiling exit drops these
-        append_message(messages, interim_msg)
+        append_message(messages, interim_msg, tag="TRC-LNC")
         st.truncated_response_parts.append((_interim_content, st.is_stub))
 
     filled = st.window_filled

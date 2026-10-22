@@ -199,7 +199,7 @@ def _restore_user_after_reference_handoff(
     last = messages[-1] if messages else None
     if isinstance(last, dict) and last.get("role") == "user" and last.get("content") == user_message:
         return False
-    append_message(messages, {"role": "user", "content": user_message})
+    append_message(messages, {"role": "user", "content": user_message}, tag="RST-USR")
     return True
 
 
@@ -366,7 +366,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
             else:
                 # TEMP debug: trace message-append positions (remove when done).
                 # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # REMARKED 2026-10-20
-                append_message(messages, {"role": "user", "content": text})
+                append_message(messages, {"role": "user", "content": text}, tag="RED-USR")
         else:  # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw chain-of-thought never enters replayable content; the interruption scaffold is replay text carried only in the user correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``.
             checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
             if is_runaway_repetition(visible):
@@ -386,10 +386,10 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
                     # Hidden row, but a non-empty neutral api_content so the pre-call sanitizer does not re-heal it every call (#88955). Never _INTERRUPT_SCAFFOLD_MARKER: as assistant text the model echoes it (#81841).
                     from agent.agent_runtime_helpers import _INTERRUPTED_PLACEHOLDER
                     placeholder["api_content"] = _INTERRUPTED_PLACEHOLDER
-                append_message(messages, placeholder)
+                append_message(messages, placeholder, tag="RED-AST")
             # Transcript shows the user's own words; the provider replays the scaffolded form.
             # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug REMARKED 2026-10-20
-            append_message(messages, {"role": "user", "content": text, "api_content": correction})
+            append_message(messages, {"role": "user", "content": text, "api_content": correction}, tag="RED-COR")
 
         agent._current_streamed_assistant_text = ""
         return
@@ -2162,7 +2162,7 @@ def _close_durable_failed_turn(agent, result: Any) -> None:
         }
         if failure := _failed_turn_display_metadata(agent, result):
             boundary["display_metadata"] = failure
-        append_message(messages, boundary)
+        append_message(messages, boundary, tag="FIN-FAIL")
         agent._flush_messages_to_session_db(messages)
     except Exception:
         logger.debug("failed-turn boundary not written", exc_info=True)

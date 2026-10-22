@@ -110,7 +110,7 @@ def _terminal_empty(agent: Any, assistant_message: Any, finish_reason: str, mess
     assistant_msg = agent._build_assistant_message(assistant_message, finish_reason)
     assistant_msg["content"] = "(empty)"
     assistant_msg["_empty_terminal_sentinel"] = True
-    append_message(messages, assistant_msg)
+    append_message(messages, assistant_msg, tag="EMP-TML")
 
     if not reasoning_text:
         logger.warning(
@@ -215,10 +215,10 @@ def recover_empty_response(
         _nudge_msg = agent._build_assistant_message(assistant_message, finish_reason)
         _nudge_msg["content"] = "(empty)"
         _nudge_msg["_empty_recovery_synthetic"] = True
-        append_message(messages, _nudge_msg)
+        append_message(messages, _nudge_msg, tag="EMT-AST")
         append_message(messages, {
             "role": "user", "content": _EMPTY_TOOL_RESPONSE_NUDGE, "_empty_recovery_synthetic": True
-        })
+        }, tag="EMT-USR")
         return _verdict("continue")
 
     # Thinking-only prefill: append the reasoning as-is and continue so the model sees
@@ -240,7 +240,7 @@ def recover_empty_response(
         )
         interim_msg = agent._build_assistant_message(assistant_message, "incomplete")
         interim_msg["_thinking_prefill"] = True
-        append_message(messages, interim_msg)
+        append_message(messages, interim_msg, tag="THK-PFL")
         agent._session_messages = messages
         return _verdict("continue")
 

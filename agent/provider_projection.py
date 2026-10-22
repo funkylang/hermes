@@ -31,7 +31,7 @@ def splice_provider_projection(agent: Any, response: Any, messages: list[dict[st
     projected = getattr(response, "hermes_projected_messages", None)
     rows = [m for m in projected if isinstance(m, dict)] if isinstance(projected, list) else []
     for row in rows:
-        append_message(messages, row)
+        append_message(messages, row, tag="PVD-PRJ")
     if rows:
         logger.debug(
             "spliced %d provider-projected transcript row(s) from %s", len(rows), getattr(agent, "provider", "?"),

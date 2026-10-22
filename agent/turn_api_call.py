@@ -255,12 +255,12 @@ def handle_api_interrupt(
         append_message(messages, {
             "role": "assistant", "content": "", "display_kind": "hidden",
             "api_content": _INTERRUPTED_API_CALL_PLACEHOLDER,
-        })
+        }, tag="RPT-HDN")
         final_response = REPETITION_LOOP_INTERRUPTED
     elif _partial:
         append_message(messages, {
             "role": "assistant", "content": _partial, "display_metadata": {"interrupted": True},
-        })
+        }, tag="INT-PRT")
         final_response = _partial
     else:
         final_response = f"{INTERRUPT_WAITING_FOR_MODEL_PREFIX}{api_elapsed:.1f}s elapsed)."

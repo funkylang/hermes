@@ -265,7 +265,7 @@ def _close_transcript_tail(agent, messages, final_response, interrupted, _recove
             # TEMP debug: trace message-append positions (remove when done).
             from agent.conversation_loop import LineKind, print_text_line  # lazy: conversation_loop imports this module
             print_text_line(LineKind.DEBUG, "turn_finalizer._close_transcript_tail")
-            append_message(messages, {"role": "assistant", "content": final_response})
+            append_message(messages, {"role": "assistant", "content": final_response}, tag="FIN-TAIL")
         elif (
             _tail.get("content") != final_response
             and _assistant_row_missing_visible_text(_tail)
