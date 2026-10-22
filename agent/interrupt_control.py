@@ -129,18 +129,19 @@ class InterruptControlMixin:
         return getattr(self, "_streaming_phase", default)
 
     def _check_steering_wait_completion(self, reasoning_text: str) -> bool:
-        """Check if steering wait should complete (newline detected in reasoning).
+        """Check if steering wait should complete (newline detected in streamed text).
 
-        Called from stream loop during reasoning phase; returns True when we
-        should stop the stream gracefully.
+        Called from stream loop during reasoning/content streaming; returns True when we
+        should stop the stream gracefully. Reads accumulated_text — the single source of
+        truth for everything streamed through the display funnel since its last reset.
         """
         if not getattr(self, "_steer_completion_wait_active", False):
             return False
 
-        # Check if accumulated reasoning has a newline (natural completion point)
-        full_reasoning = getattr(self, "_current_streaming_reasoning_text", "") or ""
-        if "\n" in full_reasoning:
-            logger.debug("Steering wait completed: newline detected in reasoning")
+        # Check if accumulated text has a newline (natural completion point)
+        full_text = getattr(self, "accumulated_text", "") or ""
+        if "\n" in full_text:
+            logger.debug("Steering wait completed: newline detected")
             self._steer_completion_wait_active = False
             self._steering_wait_completed = True
             return True
@@ -165,22 +166,25 @@ class InterruptControlMixin:
         with _ic_lock(self, "_pending_redirect_lock"):
             self._pending_redirect = None
 
-    def _append_streaming_reasoning_text(self, text: str) -> None:
-        """Append reasoning text for steering completion check."""
-        if not text:
-            return
+    # REMARKED 2026-10-22: legacy per-phase reasoning accumulators retired — duplicated
+    # accumulated_text (the single source of truth, fed by handle_stream_event). Newline
+    # detection now reads accumulated_text directly in _check_steering_wait_completion.
+    # def _append_streaming_reasoning_text(self, text: str) -> None:
+    #     """Append reasoning text for steering completion check."""
+    #     if not text:
+    #         return
 
-        if not hasattr(self, "_current_streaming_reasoning_text"):
-            self._current_streaming_reasoning_text = ""
-        self._current_streaming_reasoning_text += text
+    #     if not hasattr(self, "_current_streaming_reasoning_text"):
+    #         self._current_streaming_reasoning_text = ""
+    #     self._current_streaming_reasoning_text += text
 
-    def _reset_streaming_reasoning_text(self) -> None:
-        """Reset the accumulated reasoning text."""
-        self._current_streaming_reasoning_text = ""
+    # def _reset_streaming_reasoning_text(self) -> None:
+    #     """Reset the accumulated reasoning text."""
+    #     self._current_streaming_reasoning_text = ""
 
-    def _get_accumulated_reasoning_text(self) -> str:
-        """Get the accumulated reasoning text for steering completion check."""
-        return getattr(self, "_current_streaming_reasoning_text", "") or ""
+    # def _get_accumulated_reasoning_text(self) -> str:
+    #     """Get the accumulated reasoning text for steering completion check."""
+    #     return getattr(self, "_current_streaming_reasoning_text", "") or ""
 
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
@@ -447,10 +451,9 @@ class InterruptControlMixin:
                 self._steer_completion_wait_active = True
                 self._steer_completion_deadline = time.time() + 30.0
 
-                # Reset streaming reasoning text so only NEWLY ARRIVED text after the steer
-                # counts toward the newline check. This prevents immediate completion due to
-                # pre-existing newlines from before the interrupt.
-                self._reset_streaming_reasoning_text()
+                # REMARKED 2026-10-22: no local reset here — accumulated_text is the single
+                # source of truth and is reset at the steering boundary in handle_stream_event.
+                # self._reset_streaming_reasoning_text()
 
                 logger.info("Steering completion wait activated during reasoning phase (smart mode)")
 

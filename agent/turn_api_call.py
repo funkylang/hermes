@@ -166,25 +166,26 @@ def perform_api_call(
         # If steering wait completed, preserve the reasoning text for the next iteration
         if getattr(agent, "_steering_wait_completed", False):
             logger.info("Steering wait completed - preserving reasoning for next API call")
-            # Extract reasoning from the response before discarding it
-            reasoning_text = ""
-            if response is not None:
-                # Try standard location first (choices[0].message.reasoning_content)
-                try:
-                    choices = getattr(response, "choices", None) or []
-                    if choices and len(choices) > 0:
-                        message = getattr(choices[0], "message", None)
-                        if message is not None:
-                            reasoning_text = getattr(message, "reasoning_content", None) or ""
-                except (IndexError, AttributeError):
-                    pass
-            
-            if reasoning_text:
-                agent._steering_wait_reasoning = reasoning_text
-            else:
-                # Fallback: use the accumulated text we tracked during streaming
-                agent._steering_wait_reasoning = agent._get_accumulated_reasoning_text()
-            
+            # REMARKED 2026-10-22: dead "preserve reasoning" block retired — its only read site
+            # (conversation_loop.py steering_reasoning) is already commented out, and it relied on
+            # the retired _get_accumulated_reasoning_text(). Reasoning for continuation now rides
+            # accumulated_text / the saved reasoning captured at phase end.
+            # reasoning_text = ""
+            # if response is not None:
+            #     try:
+            #         choices = getattr(response, "choices", None) or []
+            #         if choices and len(choices) > 0:
+            #             message = getattr(choices[0], "message", None)
+            #             if message is not None:
+            #                 reasoning_text = getattr(message, "reasoning_content", None) or ""
+            #     except (IndexError, AttributeError):
+            #         pass
+            #
+            # if reasoning_text:
+            #     agent._steering_wait_reasoning = reasoning_text
+            # else:
+            #     agent._steering_wait_reasoning = agent._get_accumulated_reasoning_text()
+
             # Stream-boundary signal for the CLI: close the open boxes and draw the
             # redirect notice (consumes _steering_wait_ui_announce) so the continuation
             # starts in fresh boxes — same channel as tool-round boundaries.

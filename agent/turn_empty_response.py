@@ -229,20 +229,24 @@ def recover_empty_response(
         or getattr(assistant_message, "reasoning_details", None)
         or _has_inline_thinking
     )
-    if _has_structured and agent._thinking_prefill_retries < 2:
-        agent._thinking_prefill_retries += 1
-        logger.info(
-            "Thinking-only response (no visible content) — prefilling to continue (%d/2)",
-            agent._thinking_prefill_retries,
-        )
-        agent._buffer_diagnostic_status(
-            f"↻ Thinking-only response — prefilling to continue ({agent._thinking_prefill_retries}/2)"
-        )
-        interim_msg = agent._build_assistant_message(assistant_message, "incomplete")
-        interim_msg["_thinking_prefill"] = True
-        append_message(messages, interim_msg, tag="THK-PFL")
-        agent._session_messages = messages
-        return _verdict("continue")
+    # DISABLED: conflicts with steering boundary mechanism in handle_stream_event.
+    # When steering was pending, the assistant row was already appended; this block
+    # would duplicate the reasoning. Thinking-only responses now fall through to
+    # terminal empty (no prefill continuation). User is testing the impact.
+    # if _has_structured and agent._thinking_prefill_retries < 2:
+    #     agent._thinking_prefill_retries += 1
+    #     logger.info(
+    #         "Thinking-only response (no visible content) — prefilling to continue (%d/2)",
+    #         agent._thinking_prefill_retries,
+    #     )
+    #     agent._buffer_diagnostic_status(
+    #         f"↻ Thinking-only response — prefilling to continue ({agent._thinking_prefill_retries}/2)"
+    #     )
+    #     interim_msg = agent._build_assistant_message(assistant_message, "incomplete")
+    #     interim_msg["_thinking_prefill"] = True
+    #     append_message(messages, interim_msg, tag="THK-PFL")
+    #     agent._session_messages = messages
+    #     return _verdict("continue")
 
     # Empty-response retries: truly empty replies AND reasoning-only replies after
     # prefill exhaustion.

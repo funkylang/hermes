@@ -418,6 +418,11 @@ class StreamDeliveryMixin:
                 {"role": "user", "content": drained_input},
                 tag="HSE-USR"
             )
+            
+            # Signal to stream loop: close current stream
+            self.do_close_current_stream = True
+            # Indicate unified steering mechanism is in use (messages already delivered)
+            self._steering_wait_completed = True
         else:
             # Add new text to the shared stream buffer (one stream active at a time)
             current_buf = self.stream_buffer + text
