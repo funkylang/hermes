@@ -388,24 +388,30 @@ class StreamDeliveryMixin:
                 # and the persisted wire row carry identical text.
                 from agent.conversation_loop import _random_redirect_placeholder
 
-                self._redirect_placeholder_text = _random_redirect_placeholder()
+                append_message(
+                    self._messages,
+                    {"role": "assistant", "content": self.accumulated_text},
+                    tag="HSE-REA"
+                )
+
+                #self._redirect_placeholder_text = _random_redirect_placeholder()
                 # The injected assistant's placeholder box (after the reasoning lines):
                 # header + the steering variant as its content.
-                print_text_box(LineKind.RESPONSE, self._redirect_placeholder_text)
+                #print_text_box(LineKind.RESPONSE, self._redirect_placeholder_text)
 
-                if self.accumulated_text.strip():
-                    append_message(
-                        self._messages,
-                        {"role": "assistant", "content": self._redirect_placeholder_text,
-                         "reasoning_content": self.accumulated_text},
-                        tag="HSE-REA"
-                    )
-                else:
-                    append_message(
-                        self._messages,
-                        {"role": "assistant", "content": self._redirect_placeholder_text},
-                        tag="HSE-REA"
-                    )
+                #if self.accumulated_text.strip():
+                #    append_message(
+                #        self._messages,
+                #        {"role": "assistant", "content": self._redirect_placeholder_text,
+                #         "reasoning_content": self.accumulated_text},
+                #        tag="HSE-REA"
+                #    )
+                #else:
+                #    append_message(
+                #        self._messages,
+                #        {"role": "assistant", "content": self._redirect_placeholder_text},
+                #        tag="HSE-REA"
+                #    )
             elif kind == LineKind.RESPONSE:
                 # Response phase: the streamed text becomes the assistant message's content directly.
                 # An empty response phase (steer before any token arrived) still needs an assistant row:
