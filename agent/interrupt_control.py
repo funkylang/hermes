@@ -459,29 +459,16 @@ class InterruptControlMixin:
 
             return True
         else:
-            # Upstream immediate-abort redirect handling: cancel only the in-flight
-            # model request; the loop appends partial context + correction and retries.
-            _model_active = getattr(self, "_model_request_active", None)
-            with _ic_lock(self, "_pending_redirect_lock"):
-                if _model_active is None or not _model_active.is_set():
-                    return False  # response completed before we got the lock: surface queues a new turn
-                existing = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
-                if self._interrupt_requested and not existing:
-                    return False
-                self._pending_redirect = (
-                    f"{existing}\n\n[Additional user correction]\n{cleaned}" if existing else cleaned
-                )
-                self._interrupt_requested = True
-                self._interrupt_message = None
-
-            # Interrupt only the model request — no fan-out to tool workers / child agents as interrupt() does.
-            _execution_thread_id = getattr(self, "_execution_thread_id", None)
-            if _execution_thread_id is not None:
-                _set_interrupt(True, _execution_thread_id)
-                self._interrupt_thread_signal_pending = False
-            else:
-                self._interrupt_thread_signal_pending = True
-            _ic_abort_active_request(self, "redirect_abort", "Failed to abort request for redirect")
+            # REMARKED 2026-10-22: legacy abort-based redirect retired — our unified mechanism
+            # (user_input accumulation + handle_stream_event + do_close_current_stream) owns
+            # steering delivery and stream closure for ALL phases; _interrupt_requested must
+            # only be set by hard interrupts (stop, ctrl-c), never by redirects.
+            #
+            # if busy_input_mode != "smart" or not in REASONING phase, steering was previously
+            # aborted via _interrupt_requested — this raced handle_stream_event and closed the
+            # stream before our wire rows could be appended. Now we just accept the steer text
+            # (already in ACTIVE_CLI.user_input) and let handle_stream_event close at the next
+            # newline boundary regardless of phase.
             return True
 
     def _has_pending_redirect(self) -> bool:

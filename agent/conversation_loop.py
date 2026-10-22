@@ -349,6 +349,15 @@ def _moa_reference_metrics_for_hook(agent: Any) -> Any:
 
 
 def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
+    # TEMP-DISABLED (steering-unify): this is the last legacy append site — it merged steers
+    # into the original user row or appended RED-USR/RED-AST/RED-COR rows. Delivery is owned
+    # exclusively by user_input + handle_stream_event; never append from here.
+    if True:
+        agent._current_streamed_assistant_text = ""
+        if hasattr(agent, "_clear_steering_wait_markers"):
+            agent._clear_steering_wait_markers()
+        agent._steering_wait_reasoning = ""
+        return
     if not getattr(agent, "_steering_wait_completed", False):
         visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
 

@@ -352,8 +352,10 @@ def begin_iteration(
             _turn_exit_reason=_turn_exit_reason,
         )
 
+    # TEMP-DISABLED (steering-unify): legacy steering append — delivery is owned by
+    # user_input + handle_stream_event; drain + clear only, never apply to messages.
     _redirect_text = agent._drain_pending_redirect()
-    if _redirect_text:
+    if False and _redirect_text:
         _apply_active_turn_redirect(agent, messages, _redirect_text)
         # Stash for the smart-mode display path's one-shot echo (box + user row).
         # Append, never replace: a steer sent while this request is already in flight

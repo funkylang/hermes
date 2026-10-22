@@ -1556,6 +1556,11 @@ class CLITuiMixin:
             preview = preview[:80] + ('...' if len(preview) > 80 else '')
             _cprint("  " + t("cli.tui.queued_next_turn", preview=preview))
         elif _effective_mode in ("interrupt", "smart"):
+            # TEMP-DISABLED (steering-unify): all steering text goes through user_input
+            # accumulation + handle_stream_event — never the interrupt queue. The queue's
+            # consumer calls legacy agent.interrupt(), which re-injects the text via
+            # _apply_active_turn_redirect (merge into the original user row). Queue as a
+            # next-turn message instead when there is no live agent/redirect support.
             if not images and text:
                 try:
                     if (
@@ -1571,14 +1576,17 @@ class CLITuiMixin:
                 preview = text[:80] + ("..." if len(text) > 80 else "")
                 _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
             if not redirected:
-                self._interrupt_queue.put(payload)
-                try:
-                    with open(_hermes_home / "interrupt_debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(
-                            f"{time.strftime('%H:%M:%S')} ENTER: queued interrupt msg={str(payload)[:60]!r}, "
-                            f"agent_running={self._agent_running}\n")
-                except Exception:
-                    pass
+                # TEMP-DISABLED (steering-unify): never enqueue for legacy agent.interrupt()
+                # consumption; queue as a next-turn message so nothing is lost.
+                # self._interrupt_queue.put(payload)
+                # try:
+                #     with open(_hermes_home / "interrupt_debug.log", "a", encoding="utf-8") as _f:
+                #         _f.write(
+                #             f"{time.strftime('%H:%M:%S')} ENTER: queued interrupt msg={str(payload)[:60]!r}, "
+                #             f"agent_running={self._agent_running}\n")
+                # except Exception:
+                #     pass
+                self._pending_input.put(payload)
         # First-touch onboarding: one-line tip about the /busy knob on the first busy-while-
         # running event for this install; the flag persists to config.yaml. Guarded so
         # onboarding can never break the input loop.
