@@ -552,6 +552,12 @@ class CLISessionMixin:
             self.agent.reset_session_state()
             if hasattr(self.agent, "_last_flushed_db_idx"):
                 self.agent._last_flushed_db_idx = 0
+            # A /new or /reset in this process must refetch previous-session context for the next
+            # turn: turn_context gates the fetch on hasattr(agent, "_previous_session_context"),
+            # and a stale cache silently injects the old session's context (the pre-previous
+            # work) into the fresh conversation. Deleting re-arms the gate.
+            if hasattr(self.agent, "_previous_session_context"):
+                del self.agent._previous_session_context
             if hasattr(self.agent, "_todo_store"):
                 with contextlib.suppress(Exception):
                     from tools.todo_tool import TodoStore
