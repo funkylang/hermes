@@ -193,7 +193,7 @@ def execute(
         call_role = (metadata or {}).get("call_role", "primary")
         api_mode = (metadata or {}).get("api_mode", "?")
         debug_log_event(
-            f"PROMPT_SEND non-stream msgs={msg_count} role={call_role[:4]} {api_mode}",
+            f"PROMPT_SEND non-stream msgs={msg_count} role={call_role} api_mode={api_mode}",
             tag="PSEND",
         )
     except Exception:  # noqa: BLE001 — debug path must never raise into the call lifecycle
@@ -342,7 +342,7 @@ class ManagedLlmStream(Iterator[Any]):
             api_mode = (metadata or {}).get("api_mode", "?")
             self._debug_id = id(self)
             debug_log_event(
-                f"PROMPT_SEND 0x{id(self):x} msgs={msg_count} role={call_role[:4]} {api_mode}",
+                f"PROMPT_SEND 0x{id(self):x} msgs={msg_count} role={call_role} api_mode={api_mode}",
                 tag="PSEND",
             )
         except Exception:  # noqa: BLE001 — debug path must never raise into the stream lifecycle
