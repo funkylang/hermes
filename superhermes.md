@@ -2,7 +2,7 @@
 
 Observability, control words, steering/agent-control, and memory improvements built on top of the Hermes Agent core. These features work across all interfaces: CLI, TUI, messaging platforms, and API.
 
-> **Last updated 2026-10-17.** Verify current state with `git log --oneline -1`.
+> **Last updated 2026-10-23.** Verify current state with `git log --oneline -1`.
 
 ---
 
@@ -41,19 +41,28 @@ The capture path is configurable: set `HERMES_PROMPT_CAPTURE` to any file path (
 
 The `smart` busy input mode provides phase-aware steering behavior that improves user experience when redirecting the agent while it's working.
 
-### How it works
+### How it works (UNIFIED DESIGN, 2026-10-23)
 
-When you type a new instruction while the agent is processing (during reasoning or tool execution), smart mode handles it gracefully based on the current phase:
+**Core principle**: ONE place owns steering delivery — both display boxes AND wire rows must match exactly.
 
-1. **During reasoning**: Smart mode waits for a natural boundary in the reasoning process before injecting your steering
-2. **During tool execution/argument streaming**: The steering is deferred until the current batch completes, avoiding interruption of ongoing operations
+When you type a new instruction while the agent is processing:
+
+1. **During reasoning**: At newline boundaries, `handle_stream_event` renders input boxes and appends user wire rows with real accumulated_text (byte-identical to screen)
+2. **During tool execution/argument streaming**: Steering deferred until current batch completes; boxes + wire rows appended at phase boundary
 3. **Multiple steers**: Consecutive messages concatenate cleanly without visual noise or decorations
 
-This allows you to course-correct during complex operations without breaking the agent's workflow.
+### Architecture
+
+**Single owner**: `agent/stream_delivery.py::StreamDeliveryMixin.handle_stream_event(kind, text, title)` is the sole steering delivery mechanism. At phase boundaries it:
+- Renders display boxes (INPUT/RESPONSE/TOOL_RESULT etc.)
+- Appends wire rows to conversation history with ACTUAL streamed text (via `accumulated_text`)
+- Guarantees display and prompt are IDENTICAL — no more drift between what you see vs what model receives
+
+**Tagged observability**: Every append site is tagged (`append_message(tag=...)`), so debug logs show which code path wrote each message: `HSE-*` (steering boundary), `RED-*` (redirect), `CLI-USR` (user input), etc.
 
 ### Usage
 
-Smart mode is enabled by default in the CLI. You can switch modes using:
+Smart mode is enabled by default in the CLI:
 
 ```bash
 /busy smart        # Smart steering (default, recommended)
@@ -246,5 +255,48 @@ Implementation: `_on_tool_args_stream()` in `hermes_cli/cli_stream_mixin.py` (sh
 In quiet mode, the waiting indicator starts with a neutral placeholder and is updated with the **real** character count once the wire bytes are actually known (via the `on_prompt_sent` hook) — never a stale pre-flight estimate. This gives an accurate "Sent N chars" signal instead of a fabricated token guess.
 
 Implementation: `agent/prompt_capture.py` (`set_on_prompt_sent`) + `agent/turn_iteration_prep.py`.
+
+---
+
+## Debug Instrumentation (2026-10-23)
+
+CLI-only debug logging for tracing steering behavior and stream lifecycle. All instrumentation is tagged and exception-safe — it never breaks a turn.
+
+### PROMPT_SEND
+
+Logs when each API prompt is sent, showing message count, call role, and API mode. Two locations:
+
+- **Non-stream**: `agent/relay_llm.py::execute()` — logs before each non-streaming provider call
+- **Stream**: `agent/relay_llm.py::ManagedLlmStream.__init__()` — logs at stream initialization with a unique stream ID (0x...) for correlating with STREAM_CLOSE events
+
+Format: `PROMPT_SEND [non-stream | 0x<id>] msgs=<count> role=<call_role> api_mode=<api_mode>`
+
+### STREAM_CLOSE
+
+Logs when streams are closed, with UNIQUE tags to identify the close site. Only logs once per stream (guarded by `_closed` flag) — multiple close callsites won't duplicate events.
+
+Four distinct close locations:
+- `SCR-F`: Finalizer close (normal completion path)
+- `SCR-H`: Halt abort (mid-turn "stop" control word)
+- `SCR-S`: Stream end (model sent finish_reason, stream naturally complete)
+- `SCR-B`: Buffer drain (async cleanup after main loop exits)
+
+Format: `STREAM_CLOSE <tag> 0x<id> [reason]` where reason varies by close type.
+
+### Usage
+
+Enable via environment variable or flag:
+
+```bash
+# Runtime flag
+hermes --debug
+
+# Or environment variable
+export HERMES_DEBUG_LOG=1
+```
+
+Debug events log to `/tmp/hermes_debug.log` (configurable via `HERMES_DEBUG_LOG_FILE`). Use with grep/tail to trace steering boundary behavior and correlate prompt send → stream close sequences.
+
+**Temporary**: This instrumentation is TEMPORARY — it's currently enabled to help debug the steering race condition (see improve/todo.txt "STEERING CRASH RACE"). Will be removed once that issue is resolved.
 
 ---
