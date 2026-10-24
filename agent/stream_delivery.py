@@ -424,6 +424,10 @@ class StreamDeliveryMixin:
                 # Include reasoning content if we accumulated any during reasoning phase
                 if self.reasoning_text.strip():
                     msg["reasoning_content"] = self.reasoning_text
+                # Clear both accumulators - the steering boundary has delivered them to the wire now.
+                # FSE (flush_stream_event) checks for non-empty accumulated_text, so this prevents
+                # a double-append when the stream ends after a steering interruption.
+                self.accumulated_text = ""
                 self.reasoning_text = ""
                 append_message(
                     self._messages,
@@ -509,6 +513,31 @@ class StreamDeliveryMixin:
             print_text_line(LineKind.CURRENT, wrapped_line)
         # Clear the buffer after flushing
         self.stream_buffer = ""
+
+        # FSE: append the assistant wire row at stream end in RESPONSE phase.
+        # This replaces the FIN-AST append in finish_text_response — we own both display and wire
+        # from the stream funnel now (same pattern as steering via handle_stream_event).
+        # Content comes directly from what we streamed: accumulated_text is the response,
+        # reasoning_text is any reasoning captured when we left the REASONING phase.
+        if ACTIVE_CLI.current_line_kind == LineKind.RESPONSE and self.accumulated_text.strip():
+            from agent.message_metadata import append_message
+
+            msg = {"role": "assistant", "content": self.accumulated_text}
+
+            # Include reasoning content if we accumulated any during reasoning phase
+            _rz = getattr(self, "reasoning_text", "") or ""
+            if _rz.strip():
+                msg["reasoning_content"] = _rz
+                self.reasoning_text = ""
+
+            append_message(
+                self._messages,
+                msg,
+                tag="FSE-AST"
+            )
+
+            # Clear the accumulator — we've delivered it to the wire now
+            self.accumulated_text = ""
 
     def _fire_stream_delta(self, text: str) -> None:
         """Fire all registered stream delta callbacks (display + TTS)."""

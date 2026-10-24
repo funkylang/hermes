@@ -357,7 +357,12 @@ def finish_text_response(
         else:
             final_msg["content"] = final_response
 
-    append_message(messages, final_msg, tag="FIN-AST")
+    # FSE now owns the assistant row append at stream end (stream_delivery.py flush_stream_event).
+    # This append has been retired to avoid double-appending — the wire row is already on the
+    # transcript when finish_text_response runs, so we skip it here. (#agent-owns-display)
+    # _tail = messages[-1] if messages else None
+    # if not isinstance(_tail, dict) or _tail.get("role") != "assistant":
+    #     append_message(messages, final_msg, tag="FIN-AST")
     # Make the answer durable before leaving the loop (_DB_PERSISTED_MARKER keeps
     # _persist_session idempotent). Failure must NOT abort the turn: finalize retries.
     try:
