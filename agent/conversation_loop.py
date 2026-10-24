@@ -22,14 +22,14 @@ from agent.message_metadata import append_message, without_persistence_fields
 from agent.message_sanitization import _repair_tool_call_arguments, _sanitize_surrogates
 from agent.model_metadata import MINIMUM_CONTEXT_LENGTH, _estimate_tools_tokens_rough
 from agent.process_bootstrap import _install_safe_stdio
-from agent.prompt_builder import RUNTIME_ENVIRONMENT_END, RUNTIME_ENVIRONMENT_HEADING
+
 from agent.prompt_caching import (
     build_prompt_cache_plan,
     effective_cache_ttl,
     strip_anthropic_cache_control,
     strip_anthropic_tool_cache_control,
 )
-from agent.repetition_guard import REPETITION_LOOP_INTERRUPTED, is_runaway_repetition
+
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.surface_switch import (
     identity_line_value, note_inert_pinned_tools, runtime_host_value, stage_surface_switch_note,
@@ -349,79 +349,24 @@ def _moa_reference_metrics_for_hook(agent: Any) -> Any:
 
 
 def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
-    # TEMP-DISABLED (steering-unify): this is the last legacy append site — it merged steers
-    # into the original user row or appended RED-USR/RED-AST/RED-COR rows. Delivery is owned
-    # exclusively by user_input + handle_stream_event; never append from here.
-    if True:
-        agent._current_streamed_assistant_text = ""
-        if hasattr(agent, "_clear_steering_wait_markers"):
-            agent._clear_steering_wait_markers()
-        agent._steering_wait_reasoning = ""
-        return
-    if not getattr(agent, "_steering_wait_completed", False):
-        visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
+    """Consume and clear steering-wait markers; actual delivery happens at the steering boundary.
 
-        if getattr(agent, "_smart_steer_active", False):  # CLI + /busy smart (persistent mode flag): no assistant placeholder, no api_content decoration — plain user row only.
-            # Smart-mode steers arrive pre-concatenated (plain newlines) by redirect(); the tail is
-            # normally tool/assistant here, so user-after-batch is alternation-safe (#88955
-            # pre-call sanitizer heals the rest). If the tail is already a user row, merge rather
-            # than emit consecutive user rows.
-            tail = messages[-1] if messages else None
-            if isinstance(tail, dict) and tail.get("role") == "user":
-                existing_content = tail.get("content") or ""
-                tail["content"] = (
-                    f"{existing_content}\n{text}" if isinstance(existing_content, str) else text
-                )
-            else:
-                # TEMP debug: trace message-append positions (remove when done).
-                # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # REMARKED 2026-10-20
-                append_message(messages, {"role": "user", "content": text}, tag="RED-USR")
-        else:  # Upstream version (restored): provider-safe checkpoint + correction; INVARIANTS: raw chain-of-thought never enters replayable content; the interruption scaffold is replay text carried only in the user correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``.
-            checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
-            if is_runaway_repetition(visible):
-                # Runaway shape only (a correct batch-style partial stays replayable): the looped bytes must reach neither the replayed correction nor the placeholder below (empty ``visible`` takes the hidden shape).
-                checkpoint_parts.append(REPETITION_LOOP_INTERRUPTED)
-                visible = ""
-            elif visible:
-                checkpoint_parts += ["Visible response before the interruption:", visible]
-            checkpoint = "\n\n".join(checkpoint_parts)
-            correction = f"[Context from the interrupted assistant response]\n{checkpoint}\n\n{text}"
+    The unified steering mechanism (stream_delivery.handle_stream_event) appends wire rows when
+    it detects the steering signal. This function now only serves as a cleanup point to reset
+    our tracking state — the messages have already been delivered by then.
 
-            # The live tail is normally user or tool, so an assistant placeholder + correction keeps strict alternation; if the tail is already assistant, the checkpoint is folded into the user correction instead of creating assistant→assistant.
-            if not (messages and messages[-1].get("role") == "assistant"):
-                placeholder: Dict[str, Any] = {"role": "assistant", "content": visible or ""}
-                if not visible:
-                    placeholder["display_kind"] = "hidden"
-                    # Hidden row, but a non-empty neutral api_content so the pre-call sanitizer does not re-heal it every call (#88955). Never _INTERRUPT_SCAFFOLD_MARKER: as assistant text the model echoes it (#81841).
-                    from agent.agent_runtime_helpers import _INTERRUPTED_PLACEHOLDER
-                    placeholder["api_content"] = _INTERRUPTED_PLACEHOLDER
-                append_message(messages, placeholder, tag="RED-AST")
-            # Transcript shows the user's own words; the provider replays the scaffolded form.
-            # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug REMARKED 2026-10-20
-            append_message(messages, {"role": "user", "content": text, "api_content": correction}, tag="RED-COR")
+    Args:
+        agent: AIAgent instance
+        messages: The transcript messages (not modified - handle_stream_event owns delivery)
+        text: The steering/correction text from the user
+    """
+    # Clear the streaming buffer (its content was consumed for display + wire rows by HSE)
+    agent._current_streamed_assistant_text = ""
 
-        agent._current_streamed_assistant_text = ""
-        return
-    else:
-        """Steering wait completed - handle_stream_event already appended wire rows at detection time.
-
-        This path used to append an assistant placeholder + user correction here, but that duplicates
-        what our unified mechanism already did. The steering rows are on agent._messages from the
-        moment they were detected in the stream funnel (stream_delivery.handle_stream_event), so we
-        return immediately without touching the messages list.
-        """
-        # Stateful scrubber for <memory-context> spans split across stream deltas (#5719).  sanitize_context()
-        # alone can't survive chunk boundaries because the block regex needs both tags in one string.
-        # Stateful scrubber for reasoning/thinking tags in streamed deltas (#17924). Replaces the per-delta
-        # _strip_think_blocks regex that destroyed downstream state (e.g. MiniMax-M2.7 streaming 'think' as
-        # delta1 and 'Let me check' as delta2 — the regex erased delta1, so downstream state machines never
-        # learned a block was open and leaked delta2 as content).
-        agent._current_streamed_assistant_text = ""
-
-        # Clear steering wait markers (reasoning has been consumed)
-        if hasattr(agent, "_clear_steering_wait_markers"):
-            agent._clear_steering_wait_markers()
-        agent._steering_wait_reasoning = ""
+    # Clear steering wait markers (reasoning has been consumed, steering is done)
+    if hasattr(agent, "_clear_steering_wait_markers"):
+        agent._clear_steering_wait_markers()
+    agent._steering_wait_reasoning = ""
 
 
 def _is_copilot_provider(agent: Any) -> bool:

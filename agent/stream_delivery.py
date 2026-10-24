@@ -386,7 +386,6 @@ class StreamDeliveryMixin:
             if kind == LineKind.REASONING:
                 # Reasoning phase: pick this steering's placeholder variant HERE so the displayed box
                 # and the persisted wire row carry identical text.
-                from agent.conversation_loop import _random_redirect_placeholder
 
                 append_message(
                     self._messages,

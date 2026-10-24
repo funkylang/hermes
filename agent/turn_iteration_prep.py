@@ -341,9 +341,7 @@ def begin_iteration(
     """Iteration entry in the original order: apply a pending redirect, reset the checkpoint
     dedup, then the interrupt / review-budget / iteration-budget exits. ``api_call_count`` is
     incremented here (the grace call consumes its flag instead of the budget)."""
-    from agent.conversation_loop import (
-        _apply_active_turn_redirect, _review_input_budget_exhausted
-    )
+    from agent.conversation_loop import _review_input_budget_exhausted
 
     def _verdict(action: str) -> IterationStart:
         return IterationStart(
@@ -351,24 +349,6 @@ def begin_iteration(
             api_call_count=api_call_count, interrupted=interrupted,
             _turn_exit_reason=_turn_exit_reason,
         )
-
-    # TEMP-DISABLED (steering-unify): legacy steering append — delivery is owned by
-    # user_input + handle_stream_event; drain + clear only, never apply to messages.
-    _redirect_text = agent._drain_pending_redirect()
-    if False and _redirect_text:
-        _apply_active_turn_redirect(agent, messages, _redirect_text)
-        # Stash for the smart-mode display path's one-shot echo (box + user row).
-        # Append, never replace: a steer sent while this request is already in flight
-        # reaches this line on the next begin_iteration BEFORE the first echo is read,
-        # and its text only lands here via _pending_redirect — replacing would silently
-        # drop everything stashed before it (only the last redirect was shown).
-        _prev_echo = getattr(agent, "_steer_echo_text", None) or ""
-        agent._steer_echo_text = f"{_prev_echo}\n\n{_redirect_text}" if _prev_echo else _redirect_text
-        if isinstance(original_user_message, str):
-            original_user_message = (
-                f"{original_user_message}\n\n" f"User correction during the turn: {_redirect_text}"
-            )
-        agent._persist_session(messages, conversation_history)
 
     # Reset per-turn checkpoint dedup so each iteration can take one snapshot.
     agent._checkpoint_mgr.new_turn()
