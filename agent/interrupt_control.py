@@ -166,26 +166,6 @@ class InterruptControlMixin:
         with _ic_lock(self, "_pending_redirect_lock"):
             self._pending_redirect = None
 
-    # REMARKED 2026-10-22: legacy per-phase reasoning accumulators retired — duplicated
-    # accumulated_text (the single source of truth, fed by handle_stream_event). Newline
-    # detection now reads accumulated_text directly in _check_steering_wait_completion.
-    # def _append_streaming_reasoning_text(self, text: str) -> None:
-    #     """Append reasoning text for steering completion check."""
-    #     if not text:
-    #         return
-
-    #     if not hasattr(self, "_current_streaming_reasoning_text"):
-    #         self._current_streaming_reasoning_text = ""
-    #     self._current_streaming_reasoning_text += text
-
-    # def _reset_streaming_reasoning_text(self) -> None:
-    #     """Reset the accumulated reasoning text."""
-    #     self._current_streaming_reasoning_text = ""
-
-    # def _get_accumulated_reasoning_text(self) -> str:
-    #     """Get the accumulated reasoning text for steering completion check."""
-    #     return getattr(self, "_current_streaming_reasoning_text", "") or ""
-
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
         tool_reason: Optional[str] = None, require_generation: Optional[int] = None,
@@ -450,10 +430,6 @@ class InterruptControlMixin:
                 # Set steering completion wait flag (don't set _interrupt_requested or abort)
                 self._steer_completion_wait_active = True
                 self._steer_completion_deadline = time.time() + 30.0
-
-                # REMARKED 2026-10-22: no local reset here — accumulated_text is the single
-                # source of truth and is reset at the steering boundary in handle_stream_event.
-                # self._reset_streaming_reasoning_text()
 
                 logger.info("Steering completion wait activated during reasoning phase (smart mode)")
 

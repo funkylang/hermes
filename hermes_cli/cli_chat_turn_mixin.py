@@ -104,11 +104,6 @@ class CLIChatTurnMixin:
         if isinstance(message, TimelineNotification):
             message = str(message)  # UI metadata is on the staged row, never in model content.
 
-        # Legacy user-box closing divider + blank line DISABLED (double display):
-        # the LineKind.INPUT box above draws its own header rule; nothing closes it.
-        # ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
-        # _cprint("")
-
         from agent.notification_presentation import notification_config_snapshot, notification_policy_snapshot
         with notification_policy_snapshot(agent, "cli", notification_config_snapshot()):
             turn = _ChatTurn()

@@ -355,19 +355,6 @@ class CLIStreamMixin:
         if not text:
             return
         # Old rendering commented out - new system in stream_delivery.handle_stream_event
-        pass
-        # self._reasoning_shown_this_turn = True
-        # if getattr(self, "_stream_box_opened", False):
-        #     return
-        # box_width = self._scrollback_box_width()
-        # if not getattr(self, "_reasoning_box_opened", False):
-        #     if self.busy_input_mode == "smart":
-        #         self._print_pending_redirection()
-        #     self._reasoning_box_opened = True
-        #     r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if self.show_timestamps else " Reasoning "
-        #     r_fill = box_width - 2 - len(r_label)
-        #     _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
-        # self._process_dim_box_text(text)
 
     def _process_dim_box_text(self, text: str) -> None:
         """Buffer dim box text (reasoning/tool args) and print complete lines with word-wrapping."""
@@ -487,80 +474,6 @@ class CLIStreamMixin:
             return
         # Old rendering commented out - new system in stream_delivery.handle_stream_event
         return  # Early return to prevent double rendering
-        self._stream_started = True
-        self._stream_prefilt = getattr(self, "_stream_prefilt", "") + text
-
-        # Open tags only count at a "block boundary" (stream start / after a newline plus
-        # optional whitespace) so prose that *mentions* a tag — "(/think not producing
-        # <think> tags)" — is not swallowed. _stream_last_was_newline tracks the boundary.
-        if not hasattr(self, "_stream_last_was_newline"):
-            self._stream_last_was_newline = True
-
-        if not getattr(self, "_in_reasoning_block", False):
-            # Lowercased view catches mixed-case variants (<Think>, <THINKING>, …).
-            prefilt_lower = self._stream_prefilt.lower()
-            for tag in _OPEN_TAGS:
-                tag_lower = tag.lower()
-                search_start = 0
-                while True:
-                    idx = prefilt_lower.find(tag_lower, search_start)
-                    if idx == -1:
-                        break
-                    preceding = self._stream_prefilt[:idx]
-                    # Boundary: only whitespace since the last newline — or, with no newline
-                    # buffered yet, since the last emit (which must have ended a line).
-                    is_block_boundary = preceding[preceding.rfind("\n") + 1:].strip() == "" and (
-                        "\n" in preceding or getattr(self, "_stream_last_was_newline", True))
-                    if is_block_boundary:
-                        if preceding:
-                            self._emit_stream_text(preceding)
-                            self._stream_last_was_newline = preceding.endswith("\n")
-                        self._in_reasoning_block = True
-                        self._stream_prefilt = self._stream_prefilt[idx + len(tag):]
-                        break
-                    search_start = idx + 1
-                if getattr(self, "_in_reasoning_block", False):
-                    break
-
-            if not getattr(self, "_in_reasoning_block", False):
-                # Hold back a possible partial open tag at the end (case-insensitive).
-                safe = self._stream_prefilt
-                for tag in _OPEN_TAGS:
-                    tag_lower = tag.lower()
-                    for i in range(1, len(tag)):
-                        if prefilt_lower.endswith(tag_lower[:i]):
-                            safe = self._stream_prefilt[:-i]
-                            break
-                if safe:
-                    self._emit_stream_text(safe)
-                    self._stream_last_was_newline = safe.endswith("\n")
-                    self._stream_prefilt = self._stream_prefilt[len(safe):]
-                return
-
-        # Inside a reasoning block — look for a close tag; keep accumulating because close tags
-        # can arrive split across tokens ("</REASONING_SCRATCH" + "PAD>...").
-        if getattr(self, "_in_reasoning_block", False):
-            prefilt_lower = self._stream_prefilt.lower()
-            for tag in _CLOSE_TAGS:
-                idx = prefilt_lower.find(tag.lower())
-                if idx != -1:
-                    self._in_reasoning_block = False
-                    if self.show_reasoning:
-                        inner = self._stream_prefilt[:idx]
-                        if inner:
-                            self._stream_reasoning_delta(inner)
-                    after = self._stream_prefilt[idx + len(tag):]
-                    self._stream_prefilt = ""
-                    if after:  # re-filter: the remainder could contain another open tag
-                        self._stream_delta(after)
-                    return
-            # Stream reasoning live when show_reasoning is on; keep only a possible partial
-            # close-tag tail.
-            if len(self._stream_prefilt) > _MAX_CLOSE_TAG_LEN:
-                if self.show_reasoning:
-                    self._stream_reasoning_delta(self._stream_prefilt[:-_MAX_CLOSE_TAG_LEN])
-                self._stream_prefilt = self._stream_prefilt[-_MAX_CLOSE_TAG_LEN:]
-            return
 
     def _emit_stream_line(self, printed_line: str, wrap: bool = True) -> None:
         """Print one response line with the skin's true-color text escape (if any).
@@ -924,27 +837,6 @@ class CLIStreamMixin:
         if not text_chunk:
             return
         # Old rendering commented out - new system in stream_delivery.handle_stream_event
-        pass
-        # A new call (or generation cycle) takes over: close the previous box first.
-        # current = getattr(self, "_tool_args_box_tool", None)
-        # if getattr(self, "_tool_args_box_opened", False) and tool_name and tool_name != current:
-        #     self._close_tool_args_box()
-        # if not getattr(self, "_tool_args_box_opened", False):
-        #     self._tool_args_box_opened = True
-        #     self._tool_args_box_tool = tool_name or None
-        #     label = f" Tool args{': ' + tool_name if tool_name else ''}"
-        #     if self.show_timestamps:
-        #         label += f" {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
-        #     else:
-        #         label += " "
-        #     w = self._scrollback_box_width()
-        #     _cprint(f"\n{_DIM}┌─{label}{'─' * max(w - 3 - len(label), 0)}┐{_RST}")
-        # Update the label once the provider delivers the name after an empty first chunk.
-        # if tool_name and self._tool_args_box_tool != tool_name:
-        #     self._tool_args_box_tool = tool_name
-        
-        # Render via the shared dim-box line buffer (same behavior as reasoning box).
-        # self._process_dim_box_text(text_chunk)
 
     def _close_tool_args_box(self) -> None:
         """Close the live tool-args box if open (renders the buffered argument tail)."""

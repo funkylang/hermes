@@ -409,56 +409,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
         what our unified mechanism already did. The steering rows are on agent._messages from the
         moment they were detected in the stream funnel (stream_delivery.handle_stream_event), so we
         return immediately without touching the messages list.
-
-        Legacy code preserved below for reference - do NOT re-enable without removing the
-        handle_stream_event append logic or you'll get duplicate steering rows.
         """
-        # TEMPORARILY DISABLED 2026-10-21: unified steering mechanism owns message delivery
-        # visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
-        # steering_reasoning = getattr(agent, "_steering_wait_reasoning", None) or ""
-
-        # # Context worth handing back to the model (its own partial reply, or a note that it
-        # # degenerated). The interruption itself is already carried by the placeholder assistant
-        # # message below, so no scaffold prefix is emitted.
-        # context_parts = []
-        # if is_runaway_repetition(visible):
-        #     # Runaway shape only (a correct batch-style partial stays replayable): the looped bytes must
-        #     # not be replayed; tell the model the reply degenerated instead (#112764).
-        #     context_parts.append(REPETITION_LOOP_INTERRUPTED)
-        #     visible = ""
-        # elif visible:
-        #     context_parts += ["Visible response before the interruption:", visible]
-
-        # correction = text
-        # if context_parts:
-        #     correction = "\n\n".join(context_parts) + "\n\n" + text
-
-        # # The live tail is normally user or tool, so an assistant placeholder + correction
-        # # keeps strict alternation; non-empty content survives the sanitizer (it treats " " as
-        # # empty), so the provider sees a real assistant acknowledgement instead of merging
-        # # consecutive user messages. reasoning_content carries the reasoning streamed before
-        # # the interruption (may be empty).
-        # if not (messages and messages[-1].get("role") == "assistant"):
-        #     placeholder: Dict[str, Any] = {
-        #         "role": "assistant",
-        #         # Replay-parity: use the variant stored when the steering was detected so the
-        #         # persisted message matches what the CLI box already displayed.
-        #         "content": getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT,
-        #     }
-        #     # Hand back only real reasoning: empty/whitespace-only reasoning_content is dropped
-        #     # at creation time everywhere else (build_assistant_message); keep this path aligned.
-        #     if isinstance(steering_reasoning, str) and steering_reasoning.strip():
-        #         placeholder["reasoning_content"] = steering_reasoning
-        # append_message(messages, placeholder)
-
-        # Transcript shows the user's own words; when there is interruption context, the provider
-        # replays the extended form via api_content.
-        # msg: Dict[str, Any] = {"role": "user", "content": text}
-        # if context_parts:
-        #     msg["api_content"] = correction
-        # print_text_line(LineKind.DEBUG, "conversation_loop._apply_active_turn_redirect")  # TEMP debug REMARKED 2026-10-20
-        # append_message(messages, msg)
-
         # Stateful scrubber for <memory-context> spans split across stream deltas (#5719).  sanitize_context()
         # alone can't survive chunk boundaries because the block regex needs both tags in one string.
         # Stateful scrubber for reasoning/thinking tags in streamed deltas (#17924). Replaces the per-delta

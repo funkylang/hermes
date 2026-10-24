@@ -3173,9 +3173,6 @@ class _StreamingCall(StreamingWaitMonitor):
         agent = self.agent
         
         # Reset streaming state for this attempt
-        # REMARKED 2026-10-22: legacy reasoning-text reset retired — accumulated_text (next
-        # line) is the single source of truth for steering newline detection.
-        # agent._reset_streaming_reasoning_text()
         agent.accumulated_text = ""
         # Per-attempt latch: the previous stream's steering-boundary close must not bleed into this one.
         agent.do_close_current_stream = False
@@ -3278,10 +3275,6 @@ class _StreamingCall(StreamingWaitMonitor):
             display_reasoning = detail_text or reasoning_text
             if display_reasoning:
                 self._emit_reasoning(display_reasoning)
-                # REMARKED 2026-10-22: legacy per-phase reasoning accumulator retired — the emit
-                # above flows through handle_stream_event which accumulates accumulated_text,
-                # the single source of truth for steering newline detection.
-                # agent._append_streaming_reasoning_text(display_reasoning)
                 if reasoning_watch.feed(reasoning_text) or detail_watch.feed(detail_text):
                     runaway = "reasoning"
                     break
@@ -3289,21 +3282,6 @@ class _StreamingCall(StreamingWaitMonitor):
             # Phase tracking and steering completion check - always run, not just when display_reasoning is truthy
             # This ensures interrupts during reasoning are detected even with empty chunks between updates
             agent._set_streaming_phase(agent.STREAMING_PHASE_REASONING)
-            # REMARKED 2026-10-22: legacy steering-wait close retired — a second "\n" detector that
-            # raced handle_stream_event (which owns steering delivery + do_close_current_stream),
-            # closing via 'steering_wait_complete' before the unified path could append HSE rows.
-            # if agent._check_steering_wait_completion(display_reasoning):
-            #     logger.info("Steering wait: stopping stream gracefully after newline in reasoning")
-            #     _close_half_read_stream("steering_wait_complete")
-            #     # Mark as completed so it's not treated as a dropped stream
-            #     finish_reason = "stop"
-            #     # One-shot marker for the CLI: draw the redirect Hermes box at the
-            #     # stream boundary (after the reasoning box closes, before the next one).
-            #     agent._steering_wait_ui_announce = True
-            #     # NOTE: the placeholder variant is picked on the display side at the
-            #     # steering boundary (stream_delivery.handle_stream_event) — it runs BEFORE
-            #     # this completion check sees the same newline, so it must own the pick.
-            #     break
             # Not routed to the live display: the transport promotes a sole-payload
             # refusal to content + ``content_filter`` and the loop surfaces it terminally.
             delta_refusal = getattr(delta, "refusal", None)
