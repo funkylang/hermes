@@ -53,7 +53,7 @@ def run_in_custody(project_root: Path, command: list, label: str, **kwargs):
     kill-on-close job), so the checkout is never handed to a contender while one of them still
     writes. Outside an update it is ``run_contained`` as is."""
     from pm.progress import run_contained
-    from hermes_cli.update_custody import contained_command
+    from hermes_cli.git_exec import contained_command
 
     with contained_command(command, root=project_root) as (argv, custody):
         return run_contained(argv, label, **kwargs, **custody)

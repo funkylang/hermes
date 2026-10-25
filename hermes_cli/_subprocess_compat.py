@@ -57,13 +57,6 @@ _DIFF_RENDERING_SUBCOMMANDS = frozenset({"diff", "show", "log", "blame"})
 _GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 
 
-def run(cmd, **kwargs) -> NoReturn:
-    # Shim to suppress old updater work until relaunch. Do not start its installer.
-    from hermes_cli._old_updater import stop_for_relaunch
-
-    stop_for_relaunch()
-
-
 def harden_git_argv(args: Sequence[str]) -> list[str]:
     """Copy of subcommand-first git *args* (no leading ``"git"``) with :data:`NO_DRIVER_DIFF_FLAGS`
     inserted right after a diff-rendering subcommand; other subcommands are returned unchanged.

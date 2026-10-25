@@ -507,13 +507,6 @@ _get_disabled_set = functools.partial(_config_name_set, "plugins", "disabled")
 _get_enabled_set = functools.partial(_config_name_set, "plugins", "enabled")
 
 
-def _save_enabled_set(enabled: set) -> None:
-    """Frozen old-updater import: never resurrect a raw plugin-selection write."""
-    from hermes_cli._old_updater import stop_for_relaunch
-
-    stop_for_relaunch()
-
-
 def _plugin_selection_version() -> str:
     from hermes_cli.runtime_state import _digest
     return _digest(get_hermes_home() / "config.yaml") or "missing"

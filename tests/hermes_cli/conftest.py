@@ -56,26 +56,6 @@ def _suppress_concurrent_hermes_gate(request, monkeypatch):
     )
 
 
-@pytest.fixture(autouse=True)
-def _private_repo_checkout_lock(monkeypatch, tmp_path_factory):
-    """``cmd_update`` locks the checkout it runs from: in tests, this repository, whose git
-    common dir every parallel test process (and, from a linked worktree, the live install's
-    ``hermes update``) shares. Give each test its own lock file for THIS repo; lock tests on
-    fixture checkouts are unaffected."""
-    from pathlib import Path
-
-    from hermes_cli import update_lock
-
-    repo = Path(update_lock.__file__).resolve().parents[1]
-    real = update_lock.checkout_lock_path
-    private = tmp_path_factory.mktemp("checkout-lock") / "hermes-update.lock"
-
-    def checkout_lock_path(install_root=None):
-        root = Path(install_root) if install_root else repo
-        return private if root.resolve() == repo else real(install_root)
-
-    monkeypatch.setattr(update_lock, "checkout_lock_path", checkout_lock_path)
-
 
 @pytest.fixture(autouse=True)
 def _source_channels_resolve_locally(request, monkeypatch):
@@ -99,46 +79,6 @@ def _source_channels_resolve_locally(request, monkeypatch):
     monkeypatch.setattr(source_releases, "_resolve_channel", resolve)
 
 
-@pytest.fixture(autouse=True)
-def _discharge_host_update_obligation():
-    """Start and end every ``hermes_cli`` test with NO host update-restart obligation.
-
-    The record is host-scoped on purpose (one multiplexer per host), so it lives in the
-    per-OS-USER host state dir — not in the per-test ``HERMES_HOME``. The root conftest pins
-    that dir per test only when the caller supplied no ``HERMES_GATEWAY_LOCK_DIR`` (#118097
-    keeps the documented override working), so with one set every test in a file shares it and
-    a test that arms the obligation makes the next one read a restart it never owed. Clearing
-    the record — rather than re-pinning the dir — leaves that override rule untouched.
-    """
-
-    def _clear() -> None:
-        try:
-            from hermes_cli.update_host_obligation import clear_host_obligation
-
-            clear_host_obligation()
-        except Exception:
-            # Import/env failure here must never error an unrelated test.
-            pass
-
-    _clear()
-    yield
-    _clear()
-
-
-@pytest.fixture
-def isolated_source_completion(monkeypatch):
-    """Unit-test the completion tail in-process; real transport is tested separately."""
-    from hermes_cli import update_cmd, update_completion
-
-    monkeypatch.setattr("hermes_cli.source_build.build_update_products", lambda *a, **kw: None)
-    monkeypatch.setattr("hermes_cli.venv_sync.publish_launchers", lambda *a: None)
-
-    def complete(request):
-        update_completion._complete_selected(request)
-        return {"exit_code": 0, "receipt": update_completion._read_terminal_receipt(request),
-                "windows_resume": request["windows_resume"]}
-
-    monkeypatch.setattr(update_cmd, "run_completion", complete)
 
 
 @pytest.fixture(autouse=True)

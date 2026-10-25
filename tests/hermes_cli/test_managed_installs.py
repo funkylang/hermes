@@ -4,7 +4,6 @@ from unittest.mock import patch
 import pytest
 
 from hermes_cli.config import get_managed_system, is_managed, recommended_update_command
-from hermes_cli.main import cmd_update
 from tools.skills_hub_official import OptionalSkillSource
 
 

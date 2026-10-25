@@ -220,7 +220,13 @@ def _resolve_worktree_base(repo_root: str, fetch_timeout: float = 5,
     remote-tracking ref is used (the pre-push stale-base gate backstops genuine staleness).
     """
     from hermes_cli._subprocess_compat import noninteractive_git_env
-    from hermes_cli.update_cmd_check import tracking_refspec
+
+    def _tracking_refspec(remote: str, branch: str) -> str:
+        # Reffspec that always writes ``<remote>/<branch>``, whatever ``remote.<remote>.fetch`` says.
+        # Narrow clones (tag-pinned ``--single-branch``, #125112) map only the tag, so a by-name fetch
+        # writes FETCH_HEAD and never the tracking ref resolved here. The ``+`` is load-bearing:
+        # on a depth-1 clone the new tip is not a descendant of the old one.
+        return f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
 
     def _run(args, timeout: float = 20):
         return _git(args, repo_root, timeout=timeout, stdin=subprocess.DEVNULL, env=noninteractive_git_env())
@@ -249,7 +255,7 @@ def _resolve_worktree_base(repo_root: str, fetch_timeout: float = 5,
         if age is not None and age < freshness_window and _ref_exists(ref):
             return ref, f"{ref} (fetched {int(age)}s ago)"
         try:
-            fetched = _run(["fetch", remote, tracking_refspec(remote, branch)], timeout=fetch_timeout)
+            fetched = _run(["fetch", remote, _tracking_refspec(remote, branch)], timeout=fetch_timeout)
             if fetched.returncode == 0:
                 return ref, f"{ref} (fetched)"
             reason = "fetch failed"

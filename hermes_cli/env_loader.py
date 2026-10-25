@@ -487,10 +487,7 @@ def load_hermes_dotenv(
             logger.debug("multiplex: skipping process-global dotenv load for routed "
                          "profile home %s (credentials resolve via the profile scope)", home_path)
         if load_external_secrets:
-            from hermes_cli import _early_recovery
-
-            if not _early_recovery._should_skip_external_secret_sources():
-                hydrate_profile_secret_sources(home_path)
+            hydrate_profile_secret_sources(home_path)
         return []
 
     loaded: list[Path] = []
@@ -528,20 +525,9 @@ def load_hermes_dotenv(
             if os.environ.get(name) != value:
                 os.environ[name] = value
 
-    # External sources are skipped for the updater (dotenv + managed env still load): ``update`` must not
-    # import optional secret-manager libs (Bitwarden → cryptography → _rust.pyd) into the process replacing
-    # that env on Windows, and a fresh retry after a deferred dependency install would otherwise make the
-    # self-lock preflight exit 2 again.
-    from hermes_cli import _early_recovery
-
-    # External secret sources are skipped in two updater situations: 1. ``load_external_secrets=False`` —
-    # the caller is an ``update`` invocation that must not import optional secret-manager libraries
-    # (Bitwarden → cryptography → ``_rust.pyd``) into the process that replaces that same environment on
-    # Windows (#73381, #86735). 2. A fresh ``hermes update`` retry just completed a deferred dependency
-    # install before importing this module. Do not remap native secret-source dependencies in that same
-    # updater process or the self-lock preflight will recreate the marker and exit 2 again. Dotenv and
-    # managed env still load in both cases; only external source resolution is unnecessary for the updater.
-    if load_external_secrets and not _early_recovery._should_skip_external_secret_sources():
+    # Callers that must not import optional secret-manager libraries (e.g. repair/activation
+    # children running under a stripped interpreter) pass ``load_external_secrets=False``.
+    if load_external_secrets:
         _apply_external_secret_sources(home_path)
     _apply_managed_env(load_pass=load_pass)
 
