@@ -854,66 +854,6 @@ class TestListProfiles:
         assert "alpha" in names
         assert "beta" in names
 
-    def test_lazy_skill_count_never_walks_in_the_polled_request(self, profile_env, monkeypatch):
-        """Polled surfaces (``profiles.list`` RPC, ``GET /api/profiles``) must render
-        ``skill_count`` without any skill-tree walk on the request thread; the count arrives
-        from one background refresh per profile per recheck window (#114041). Control: the
-        synchronous ``list_profiles()`` still walks and reports the fresh number."""
-        import threading
-        import tui_gateway.server as srv
-
-        skills = profile_env / ".hermes" / "skills" / "cat"
-        for i in range(3):
-            (skills / f"s{i}").mkdir(parents=True)
-            (skills / f"s{i}" / "SKILL.md").write_text("# s\n", encoding="utf-8")
-        profiles._SKILL_COUNT_CACHE.clear()
-        profiles._SKILL_COUNT_NEXT_CHECK.clear()
-
-        walks: list[str] = []
-        real_walk = profiles._walk_skill_count
-
-        def spy(skills_dir):
-            walks.append(threading.current_thread().name)
-            return real_walk(skills_dir)
-
-        monkeypatch.setattr(profiles, "_walk_skill_count", spy)
-
-        def _rpc():
-            return srv._methods["profiles.list"](1, {"include_sessions": False})["result"]["profiles"]
-
-        first = _rpc()
-        assert walks == [] or set(walks) == {"hermes-skill-count"}
-        assert first[0]["skill_count"] in (0, 3)  # 0 until the refresh lands, never a stall
-        for t in threading.enumerate():
-            if t.name == "hermes-skill-count":
-                t.join(timeout=10)
-        assert walks == ["hermes-skill-count"]
-        assert _rpc()[0]["skill_count"] == 3
-        assert list_profiles(lazy_skill_count=True)[0].skill_count == 3
-        assert walks == ["hermes-skill-count"]  # a second poll inside the window schedules nothing
-
-        # GET /api/profiles (the router's own ``lazy_skill_count=True`` call) and the per-keystroke
-        # ``@<profile>`` completion must be just as walk-free: same spy, still one background walk.
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-        from hermes_cli.web_routers import profiles as profiles_router
-        from tui_gateway import methods_complete
-        app = FastAPI()
-        app.include_router(profiles_router.router)
-        # Cold cache: a synchronous list_profiles() in either caller would walk on the request thread.
-        profiles._SKILL_COUNT_CACHE.clear()
-        resp = TestClient(app).get("/api/profiles")
-        assert resp.status_code == 200
-        assert resp.json()["profiles"][0]["name"] == "default"
-        assert walks == ["hermes-skill-count"]
-        assert any(i["text"] == "@default" for i in methods_complete._profile_mention_items("def"))
-        assert walks == ["hermes-skill-count"]
-
-        # Control: the detail/CLI path counts synchronously on the caller's thread.
-        profiles._SKILL_COUNT_CACHE.clear()
-        assert list_profiles()[0].skill_count == 3
-        assert walks[-1] == threading.current_thread().name
-
     def test_skill_count_survives_subtree_vanishing_mid_walk(self, profile_env, monkeypatch):
         """A skill removed while the tree is being counted (concurrent install/update) must
         degrade the count, not abort profile enumeration with ``FileNotFoundError``."""

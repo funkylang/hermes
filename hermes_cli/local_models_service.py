@@ -1,9 +1,8 @@
-"""Local-models dashboard routes — the desktop's window into the managed llama.cpp runtime.
+"""Local-models service - the backend of the CLI Local Models wizard.
 
-Every payload carries plain-language, pre-formatted facts the UI shows verbatim
-(what will this model do ON THIS MACHINE, how big is the download, what is the
-runtime doing), never raw internals. Long jobs follow the repo's job pattern:
-start-POST -> {job_id} -> GET poll with byte progress.
+hermes model -> "Local models" (model_setup_flows_local.py) drives these handlers
+in-process; they were extracted from the dashboard router when the web stack was removed.
+Job state is process-local; Ctrl+C pauses downloads and bytes persist across runs.
 """
 
 from __future__ import annotations
@@ -29,8 +28,7 @@ from pydantic import BaseModel
 
 from starlette.concurrency import run_in_threadpool
 
-from hermes_cli import config as config_mod, web_deps
-from hermes_cli.web_routers._common import _CONFIG_MUTATION_LOCK, _config_profile_scope
+from hermes_cli import config as config_mod
 from hermes_cli.local_runtime import (
     binaries, bootstrap, catalog, context_policy, estimator, growth, hardware, hf_browse,
     load_progress, presets, supervisor,
@@ -40,6 +38,65 @@ from pm.downloader import Download, DownloadPaused, Source
 
 from hermes_cli.local_runtime.endpoint import _state_endpoint
 from hermes_cli.local_runtime.gguf import split_parts
+from contextlib import contextmanager, nullcontext
+from typing import Any
+
+# -- profile scoping (extracted from web_server_profiles; CLI callers pass None -> current profile) --
+_CONFIG_MUTATION_LOCK = threading.Lock()
+
+
+def _is_current_profile(profile: Optional[str]) -> bool:
+    requested = (profile or "").strip()
+    return not requested or requested.lower() == "current"
+
+
+@contextmanager
+def _hermes_home_scope(path) -> Any:
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    token = set_hermes_home_override(str(path))
+    try:
+        yield
+    finally:
+        reset_hermes_home_override(token)
+
+
+def _resolve_profile_dir(name: str) -> Path:
+    from hermes_cli import profiles as profiles_mod
+    try:
+        profiles_mod.validate_profile_name(name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not profiles_mod.profile_exists(name):
+        raise HTTPException(status_code=404, detail="Profile ' + repr(name) + ' does not exist.")
+    return profiles_mod.get_profile_dir(name)
+
+
+@contextmanager
+def _config_profile_scope(profile: Optional[str]):
+    # Task-local HERMES_HOME + profile secret scope. None/empty/current = process own profile.
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_cli.env_loader import hydrate_profile_secret_sources
+    from tui_gateway.launch_profile_policy import activate_multi_profile_hosting, launch_secret_scope
+
+    process_home = config_mod.get_process_hermes_home()
+    if _is_current_profile(profile):
+        profile_dir, scoped = None, None
+    else:
+        profile_dir = _resolve_profile_dir(profile.strip())
+        scoped = None if profile_dir.resolve() == process_home.resolve() else profile_dir
+    if scoped is not None:
+        activate_multi_profile_hosting()
+        hydrate_profile_secret_sources(scoped)
+        secrets = build_profile_secret_scope(scoped)
+    else:
+        secrets = launch_secret_scope(process_home)
+    with (_hermes_home_scope(profile_dir) if profile_dir is not None else nullcontext()):
+        token = set_secret_scope(secrets, profile_home=str(profile_dir or process_home))
+        try:
+            yield scoped
+        finally:
+            reset_secret_scope(token)
+
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +450,15 @@ def _ensure_server(job: Dict[str, Any], config: dict, model_id: str, *, fail_det
 def _assign_default(job: Dict[str, Any], model_id: str) -> None:
     """Make ``model_id`` the main model via the same machinery as /api/model/set."""
     _step(job, "setting-default", "Making it your default")
-    web_deps.late("_apply_model_assignment_sync", "hermes_cli.web_server_config")("main", "llamacpp", model_id, "", "", "")
+    from hermes_cli.model_switch import persist_model_selection, switch_model
+
+    result = switch_model(
+        raw_input=model_id, current_provider="llamacpp", current_model="",
+        explicit_provider="llamacpp")
+    if not result.success:
+        job["error"] = f"could not set default model: {result.error_message}"
+        return
+    persist_model_selection(result)
 
 
 # ── downloads: ranged parallel streams ───────────────────────

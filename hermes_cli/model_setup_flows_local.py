@@ -1,11 +1,10 @@
-"""``hermes model`` → Local models: the desktop's Local Models setup, in the terminal.
+"""``hermes model`` → Local models: local-model setup in the terminal.
 
-The flow drives the handlers behind the desktop's Local Models pane
-(``hermes_cli/web_routers/local_models.py``) in-process, so both surfaces run one code path:
+The flow drives the handlers of ``hermes_cli/local_models_service.py`` in-process:
 the catalog priced for this machine, quickstart (pinned engine via PM, model download, server
 start, default assignment) and activate for a model already on disk. Progress renders from the
-same job view the desktop polls; Ctrl+C pauses a download, and the next run resumes from the
-bytes already on disk.
+same job view the desktop used to poll; Ctrl+C pauses a download, and the next run resumes from
+the bytes already on disk.
 """
 
 from __future__ import annotations
@@ -122,7 +121,7 @@ def _model_flow_local(config, current_model=""):
     del config, current_model
     from hermes_cli.main_provider_setup import _prompt_provider_choice
     from hermes_cli.setup import prompt_yes_no
-    from hermes_cli.web_routers import local_models as lm
+    import hermes_cli.local_models_service as lm
 
     hw = lm.local_models_hardware()
     status = lm.local_models_status()
