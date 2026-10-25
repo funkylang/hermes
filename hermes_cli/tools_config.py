@@ -451,7 +451,7 @@ def _enable_recently_shipped_toolsets(enabled_toolsets: Set[str], config: dict, 
         if ts_key in enabled_toolsets or ts_key in declined or not _toolset_allowed_for_platform(ts_key, platform):
             continue
         # Only enable where staying on the composite would have enabled it anyway; deliberately narrow
-        # composites (hermes-acp, hermes-webhook) stay narrow.
+        # deliberately narrow composites (hermes-webhook) stay narrow.
         ts_tools = set(resolve_toolset(ts_key, include_registry=False))
         if composite_tools is None:
             composite_tools = set(resolve_toolset(default_ts))

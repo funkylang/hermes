@@ -251,25 +251,27 @@ def test_boot_migrates_legacy_conveniences_to_selected_runtime(tmp_path, monkeyp
                    if legacy_hermes == "venv-python" else
                    f'#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\n'
                    f'exec "{repo}/venv/bin/hermes" "$@"\n')
+    acp_wrapper = ('#!/usr/bin/env bash\n# Hermes Agent — ACP launcher (written by `hermes update`).\n'
+                   f'exec "{out}/hermes" acp "$@"\n')
     (out / "hermes").write_text(old_wrapper, encoding="utf-8")
-    (out / "hermes-acp").write_text(
-        '#!/usr/bin/env bash\n# Hermes Agent — ACP launcher (written by `hermes update`).\n'
-        f'exec "{out}/hermes" acp "$@"\n', encoding="utf-8")
+    # Legacy ACP wrapper: no longer one of our commands, so it must be left alone.
+    (out / "hermes-acp").write_text(acp_wrapper, encoding="utf-8")
     # Mentions this install only in a comment and runs another checkout's venv.
     foreign = f'#!/bin/sh\n# user note about {repo}/venv/bin/hermes\nexec "{tmp_path}/other/venv/bin/hermes" "$@"\n'
     (out / "hermes-agent").write_text(foreign, encoding="utf-8")
 
     result = _launchers.expose_cli()
     assert result["ok"], result
-    assert set(result["written"]) == {"hermes", "hermes-acp"}
-    for name in ("hermes", "hermes-acp"):
-        run = subprocess.run([str(out / name), "quoted argument"], cwd=tmp_path,
-                             capture_output=True, text=True, timeout=30, encoding="utf-8")
-        assert run.returncode == 7, run.stderr
-        receipt = json.loads(run.stdout)
-        assert receipt["value"] == "migrated"
-        assert receipt["argv"] == ["quoted argument"]
-        assert Path(receipt["exe"]).samefile(interpreter)
+    # Only `hermes` is ours and gets migrated; the ACP + foreign-agent wrappers are untouched.
+    assert set(result["written"]) == {"hermes"}
+    run = subprocess.run([str(out / "hermes"), "quoted argument"], cwd=tmp_path,
+                         capture_output=True, text=True, timeout=30, encoding="utf-8")
+    assert run.returncode == 7, run.stderr
+    receipt = json.loads(run.stdout)
+    assert receipt["value"] == "migrated"
+    assert receipt["argv"] == ["quoted argument"]
+    assert Path(receipt["exe"]).samefile(interpreter)
+    assert (out / "hermes-acp").read_text(encoding="utf-8-sig") == acp_wrapper
     assert (out / "hermes-agent").read_text(encoding="utf-8-sig") == foreign
     before = {p: p.stat().st_mtime_ns for p in out.iterdir()}
     assert _launchers.expose_cli()["written"] == []

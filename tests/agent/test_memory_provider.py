@@ -959,11 +959,11 @@ class TestMemoryToolToolsetGate:
     def test_composite_toolset_with_memory_injects(self):
         """Composite toolsets that include memory should inject provider tools."""
         mgr = self._mgr_with_tools("hindsight_recall")
-        tools, names = self._run_memory_injection(["hermes-acp"], mgr)
+        tools, names = self._run_memory_injection(["hermes-cli"], mgr)
         assert "hindsight_recall" in names
         assert any(t["function"]["name"] == "hindsight_recall" for t in tools)
 
-    @pytest.mark.parametrize("enabled_toolsets", [None, ["memory"], ["all"], ["hermes-acp"]])
+    @pytest.mark.parametrize("enabled_toolsets", [None, ["memory"], ["all"], ["hermes-cli"]])
     def test_disabled_memory_toolset_blocks_injection(self, enabled_toolsets):
         """An explicit memory disable wins over default or composite enablement."""
         mgr = self._mgr_with_tools("hindsight_recall")

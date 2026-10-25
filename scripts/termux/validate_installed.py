@@ -111,7 +111,6 @@ def main() -> None:
         launcher = prefix / "bin/hermes"
         run([str(launcher), "--version"], env, home)
         run([str(launcher), "chat", "--help"], env, home)
-        run([str(prefix / "bin/hermes-acp"), "--check"], env, home)
         python = root / "venv/bin/python"
         run([
             str(python), "-c",

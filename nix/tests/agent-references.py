@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory() as temporary:
         print(f"PASS: {name} imports from a clean cwd and receives the shared environment")
 
     # These public interfaces parse --help without starting an agent session.
-    for name in ("hermes", "hermes-acp"):
+    for name in ("hermes",):
         subprocess.run([str(package / "bin" / name), "--help"], cwd=home, env=env,
                        check=True, timeout=60, stdout=subprocess.DEVNULL)
         print(f"PASS: {name} --help")
