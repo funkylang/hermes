@@ -56,33 +56,6 @@ class RetirementFence:
             if admitted:
                 self.release()
 
-    def prepare(self):
-        from hermes_cli.web_server_idle_proof import idle_proof
-
-        with self._lock:
-            self._expire()
-            if self._committed:
-                return {"ok": True, "idle": True, "token": self._token}
-            if self._preparing or self._token is not None or self._active:
-                return {"ok": False, "idle": False}
-            self._preparing = True
-        # No admissions can cross the freeze. Do not hold our lock while reading ledgers:
-        # some callers already hold a session/cron lock when reserving their work.
-        verdict = None
-        try:
-            verdict = idle_proof()["idle"]
-        except Exception:
-            logging.getLogger(__name__).warning("Retirement idle probe unavailable", exc_info=True)
-        finally:
-            with self._lock:
-                self._preparing = False
-                if verdict is True:
-                    self._token = token = secrets.token_urlsafe(32)
-                    self._expires_at = self._now() + 30.0
-        if verdict is not True:
-            return {"ok": False, "idle": verdict}
-        return {"ok": True, "idle": True, "token": token}
-
     def commit(self, token):
         with self._lock:
             self._expire()

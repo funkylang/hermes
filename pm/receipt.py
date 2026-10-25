@@ -102,19 +102,11 @@ def accept_worker_receipt(data: Optional[dict[str, Any]], update_id: Optional[st
 
 
 def _ambient_update_id() -> Optional[str]:
-    """The update correlation id in force in this context, or None.
-
-    Lazy import: hermes_cli.update_receipt imports pm.receipt at embed
-    time, so this direction must stay function-scoped. Never raises."""
+    """The update correlation id in force in this context, or None."""
     worker = _worker_update.get()
     if worker is not None:
         return worker[0]
-    try:
-        from hermes_cli.update_receipt import current_correlation_id
-
-        return current_correlation_id()
-    except Exception:
-        return None
+    return None
 
 
 def _utc_now_iso() -> str:

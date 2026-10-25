@@ -49,7 +49,6 @@ def validate_environment(python: Path, *, env: dict, cwd: Path) -> None:
 
 def repair_dependencies(project_root: Path) -> None:
     """Restore this installation's recorded set; never repair a foreign tree."""
-    from hermes_cli.venv_sync import collect_superseded_generations
     from pm.client import sync_venv
     from pm.paths import repo_root
 
@@ -57,7 +56,6 @@ def repair_dependencies(project_root: Path) -> None:
         raise InstallError("venv", "recovery root does not match this PM installation")
     with contextlib.redirect_stdout(sys.stderr):
         sync_venv(repair=True)
-    collect_superseded_generations(project_root)
 
 
 def refresh_dependencies(project_root: Path) -> str:

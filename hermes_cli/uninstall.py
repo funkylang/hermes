@@ -938,15 +938,52 @@ def _rmtree_if_exists(path: Path) -> bool:
     return True
 
 
+def _is_dashboard_backend_command(command: str) -> bool:
+    """True when a ``ProgramArguments`` cmdline runs a hermes dashboard/serve backend.
+
+    Token-based holder detection (never a substring: ``kanban --preserve-cache``
+    contains "serve"): find the ``hermes(.exe)`` / ``-m hermes_cli.main`` entry token
+    and check the first following positional against the backend subcommands.
+    """
+    import shlex
+
+    try:
+        tokens = shlex.split(command, posix=False)
+    except Exception:
+        tokens = command.split()
+    normalized = [t.strip("\"'").replace("\\", "/") for t in tokens]
+
+    def _is_entry(i: int, token: str) -> bool:
+        low = token.lower().strip("\"'").replace("\\", "/")
+        return (low.endswith("hermes_cli.main") and i > 0 and tokens[i - 1] == "-m") or \
+               (low.rsplit("/", 1)[-1] in ("hermes", "hermes.exe")) or \
+               low.endswith("hermes_cli/main.py")
+
+    entry_idx = next((i for i, t in enumerate(normalized) if _is_entry(i, t)), None)
+    if entry_idx is None:
+        return False
+    value_flags = {"--profile", "-p", "--host", "--port"}
+    i = entry_idx + 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in value_flags or token.split("=", 1)[0] in value_flags:
+            i += 2
+            continue
+        if token.startswith("-"):
+            i += 1
+            continue
+        return token in ("dashboard", "serve")
+    return False
+
+
 def remove_dashboard_launchd_jobs() -> "list[Path]":
     """macOS: boot out and delete every launchd job whose ``ProgramArguments`` runs a
     ``hermes dashboard`` / ``hermes serve`` backend, returning the removed plist paths.
 
     The gateway uninstall only reaches the gateway label, so a dashboard/serve
     LaunchAgent survives a full uninstall and launchd keeps respawning its backend.
-    Mirrors the enumeration ``hermes_cli.main_dashboard`` uses to find those jobs
-    (``_launchd_plist_dirs`` + ``_parse_dashboard_runtime``): read each plist, match the
-    arguments, ``launchctl bootout`` the job's domains (launchd takes the process down;
+    Read each plist, match the arguments with ``_is_dashboard_backend_command``,
+    ``launchctl bootout`` the job's domains (launchd takes the process down;
     booting out an already-unloaded job is fine and never checked), then delete the
     plist — a stale, not-loaded plist is still Hermes-created and still goes. A missing,
     unreadable, or malformed plist is skipped, never fatal. macOS only (empty list
@@ -957,11 +994,14 @@ def remove_dashboard_launchd_jobs() -> "list[Path]":
     import shlex
     from xml.parsers.expat import ExpatError
 
-    from hermes_cli.main_dashboard import _launchd_plist_dirs, _parse_dashboard_runtime
-
     uid = os.getuid()  # windows-footgun: ok — darwin-only branch
     removed: "list[Path]" = []
-    for kind, plist_dir in _launchd_plist_dirs():
+    plist_dirs = [
+        ("agent", Path.home() / "Library" / "LaunchAgents"),
+        ("agent", Path("/Library/LaunchAgents")),
+        ("daemon", Path("/Library/LaunchDaemons")),
+    ]
+    for kind, plist_dir in plist_dirs:
         try:
             plists = sorted(plist_dir.glob("*.plist"))
         except OSError:
@@ -981,7 +1021,7 @@ def remove_dashboard_launchd_jobs() -> "list[Path]":
             args = data.get("ProgramArguments")
             if not label or not isinstance(args, list) or not args:
                 continue
-            if _parse_dashboard_runtime(shlex.join([str(a) for a in args])) is None:
+            if not _is_dashboard_backend_command(shlex.join([str(a) for a in args])):
                 continue
             domains = ("system",) if kind == "daemon" else (f"gui/{uid}", f"user/{uid}")
             for domain in domains:

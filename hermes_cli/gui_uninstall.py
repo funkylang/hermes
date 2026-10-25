@@ -3,6 +3,7 @@ app, and the desktop's own ``userData`` — never agent source, venv, config, se
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -67,14 +68,13 @@ def packaged_gui_app_paths() -> "list[Path]":
             [Path(program_files) / "Hermes"] if program_files else [])
     # Linux: an AppImage lives wherever the user put it and deb/rpm files belong to the package manager
     # (see the hint in ``uninstall_gui``), so only the desktop entry + hicolor icons are cleaned here.
-    from hermes_cli.linux_desktop_entry import LEGACY_DESKTOP_ENTRY_NAME, desktop_entry_path
     data_base = _env_dir("XDG_DATA_HOME", home / ".local" / "share")
+    applications = data_base / "applications"
     icons = data_base / "icons" / "hicolor"
-    # "scalable" plus every fixed-size dir the installer may have written (panel sizes + older native copies).
-    # The legacy entry is a hidden alias of the app-id entry since #124492 — remove it with the real one.
-    return [desktop_entry_path(),
-            data_base / "applications" / LEGACY_DESKTOP_ENTRY_NAME,
-            data_base / "applications" / "Hermes.desktop"] + [
+    # The legacy entry names are hidden aliases of the app-id entry — remove them with the real one.
+    return [applications / "com.nousresearch.hermes.desktop",
+            applications / "hermes.desktop",
+            applications / "Hermes.desktop"] + [
         icons / size / "apps" / "hermes.png"
         for size in ("scalable", "24x24", "32x32", "48x48", "256x256", "512x512", "1024x1024")]
 
@@ -161,13 +161,17 @@ def uninstall_gui(hermes_home: "Path | None" = None, *, remove_userdata: bool = 
         # The desktop entry was removed above but the menu caches still list it; reindex so Hermes
         # disappears from the launcher.
         try:
-            from hermes_cli.linux_desktop_entry import desktop_entry_path, refresh_desktop_databases
-            entry = desktop_entry_path()
-            if entry in removed:
-                for tool in refresh_desktop_databases(entry.parent):
-                    log_success(f"Refreshed the application menu cache ({tool})")
-        except Exception as e:
-            log_warn(f"Could not refresh the application menu cache: {e}")
+            update_db = shutil.which("update-desktop-database")
+            applications_dir = _env_dir(
+                "XDG_DATA_HOME", Path.home() / ".local" / "share") / "applications"
+            if update_db and any(e in removed for e in (
+                    applications_dir / "com.nousresearch.hermes.desktop",
+                    applications_dir / "hermes.desktop",
+                    applications_dir / "Hermes.desktop")):
+                subprocess.run([update_db, str(applications_dir)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         log_info("If you installed the desktop via a .deb / .rpm package, remove it with your package manager "
                  "(e.g. 'sudo apt remove hermes' or 'sudo dnf remove hermes'). AppImage builds are a single "
                  "file you can delete from wherever you saved it.")

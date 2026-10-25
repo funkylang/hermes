@@ -250,7 +250,7 @@ def _install_names(names: list[str], target: str | None = None, *, verify: bool 
                 else:
                     ensure(name, explicit=True, verify=verify, progress=progress, _operation=operation)
                     if name == "python":
-                        from hermes_cli.venv_sync import publish_launchers
+                        from hermes_cli._launchers import publish_launchers
 
                         publish_launchers(repo_root(), create=False)
                     progress.finish()
@@ -779,12 +779,15 @@ def cmd_status(args) -> int:
 
 
 def cmd_repair(args) -> int:
-    from hermes_cli._early_recovery import recover_if_needed
     from pm.paths import repo_root
+    from pm.recovery import repair_dependencies
 
-    if not recover_if_needed(repo_root(), explicit=True):
+    try:
+        repair_dependencies(repo_root())
+    except Exception as exc:
+        print(f"repair failed: {exc}", file=sys.stderr)
         return 1
-    print("Restart Hermes to use the repaired dependency environment.")
+    print("Dependency environment repaired.")
     return 0
 
 

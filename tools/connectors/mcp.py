@@ -19,6 +19,11 @@ from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
 
+# Process-global lock serialising this process's config read-modify-write cycles
+# (MCP enable against other concurrent tool-side writes).
+_CONFIG_MUTATION_LOCK = threading.RLock()
+
+
 # One wait for every authorization URL of a call, not one per target: the flows are started
 # together, and a provider that is slow to publish its URL must not delay the others.
 PREPARE_WAIT_SECONDS = 30.0
@@ -188,13 +193,12 @@ class _CatalogBackend:
         return tools
 
     def enable(self, name: str) -> None:
-        """Flip ``enabled`` under the scope and lock the dashboard's toggle route uses
-        (``PUT /api/mcp/servers/{name}/enabled``): the two read-modify-write paths run in one
-        process, so an unserialised write here drops whichever landed first."""
+        """Flip ``enabled`` under the config-mutation lock so concurrent read-modify-write
+        paths in this process (another tool call, a hot-reload watcher) cannot drop each other's
+        writes."""
         from hermes_cli.config import load_config, save_config
-        from hermes_cli.web_routers._common import config_write_scope
 
-        with config_write_scope(None):
+        with _CONFIG_MUTATION_LOCK:
             config = load_config()
             servers = config.get("mcp_servers")
             if not isinstance(servers, dict) or not isinstance(servers.get(name), dict):

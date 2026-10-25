@@ -15,13 +15,6 @@ try:
 except ModuleNotFoundError:
     pass  # partial `hermes update` — only skips the Windows UTF-8 stdio setup
 
-# The `hermes-agent` console script lands here without hermes_cli.main: repair a `hermes update` killed
-# while git wrote the new tree before importing anything else from the checkout.
-from hermes_cli import _early_recovery
-
-if _early_recovery.restore_interrupted_pull():
-    _early_recovery.relaunch_after_restore()
-
 import argparse  # noqa: E402
 from typing import Callable, List, Optional  # noqa: E402
 
