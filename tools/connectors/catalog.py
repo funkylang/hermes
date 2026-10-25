@@ -57,14 +57,42 @@ def target_scope(home: Path):
     profile does. The install writes its tree, config and ``.env`` there. The home override is
     bound for the launch profile too: the calling thread may carry another profile's override, and
     an unbound launch scope would leave it in place."""
-    from tui_gateway import server
-    from tui_gateway.launch_profile_policy import launch_profile_runtime_scope
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_cli.config import get_hermes_home
+    from hermes_cli.launch_profile_policy import launch_profile_runtime_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tools.terminal_scope import install_profile_terminal_scope, reset_terminal_scope
 
-    launch = home.resolve() == Path(server._hermes_home).resolve()
-    scope = (launch_profile_runtime_scope(server._hermes_home) if launch
-             else server._session_profile_runtime_scope({"profile_home": str(home)}))
-    with scope:
+    home = home.resolve()
+    if home == Path(get_hermes_home()).resolve():
+        # The process's own profile: the shared launch-profile binder covers it.
+        with launch_profile_runtime_scope(home):
+            yield
+        return
+    # A foreign profile: bind its own scope exactly as a served session body would.
+    from hermes_cli.env_loader import hydrate_profile_secret_sources
+    home_token = secret_token = terminal_token = None
+    try:
+        home_token = set_hermes_home_override(str(home))
+        hydrate_profile_secret_sources(home)
+        secret_token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+        terminal_token = install_profile_terminal_scope(home, env_overlay=None)
+    except Exception:
+        # A raise mid-bind must undo whatever was bound before propagating.
+        if terminal_token is not None:
+            reset_terminal_scope(terminal_token)
+        if secret_token is not None:
+            reset_secret_scope(secret_token)
+        if home_token is not None:
+            reset_hermes_home_override(home_token)
+        raise
+    try:
         yield
+    finally:
+        if terminal_token is not None:
+            reset_terminal_scope(terminal_token)
+        reset_secret_scope(secret_token)
+        reset_hermes_home_override(home_token)
 
 
 def _named_home(name: str) -> Path:

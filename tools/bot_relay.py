@@ -559,7 +559,7 @@ def _delivery_child_session_env_names() -> "tuple[str, ...]":
     Synced with the session binding surface as vars are added; deliberately NOT a
     ``HERMES_SESSION_*`` prefix match, which would also strip non-identity knobs
     (e.g. ``HERMES_SESSION_STALL_TIMEOUT``)."""
-    from gateway.session_context import _VAR_MAP
+    from agent.session_context import _VAR_MAP
 
     return tuple(_VAR_MAP)
 

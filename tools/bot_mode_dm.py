@@ -463,7 +463,7 @@ def _run_local_turn(argv: list[str], dm_file: str, *, env: Optional[dict[str, st
     # silence marker is a delivery decision (same rule as the gateway and the live
     # Bot Chat completion): the turn stays in the target's transcript, the sender
     # never sees the marker as prose.
-    from gateway.response_filters import is_intentional_silence_response
+    from agent.response_filters import is_intentional_silence_response
     reply = proc.stdout or ""
     if proc.returncode == 0 and is_intentional_silence_response(reply):
         reply = ""

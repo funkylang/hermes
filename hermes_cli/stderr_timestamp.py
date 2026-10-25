@@ -100,7 +100,7 @@ def _is_hermes_gateway_run_argv(command: Sequence[str]) -> bool:
     supervisor``; an arbitrary launchd child must not be marked as gateway-supervised (#87005).
     """
     try:
-        from gateway.status import looks_like_gateway_command_line
+        from hermes_cli.runtime_status import looks_like_gateway_command_line
     except Exception:
         return False
     return bool(looks_like_gateway_command_line(" ".join(str(part) for part in command)))

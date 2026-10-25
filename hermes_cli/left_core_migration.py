@@ -390,7 +390,7 @@ def migrate_all_homes(*, say: Callable[[str], None] = print) -> list[str]:
 def _gateway_serves(home: Path) -> bool:
     """A live gateway serves *home*: it loaded its platforms before this agent-start install."""
     try:
-        from gateway.status import resolve_gateway_liveness
+        from hermes_cli.runtime_status import resolve_gateway_liveness
         return resolve_gateway_liveness(profile_dir=home, use_cache=False).running
     except Exception:
         return False

@@ -110,7 +110,7 @@ def _drain(root: Path) -> None:
             # A failure notice queued before the target profile opted out is settled as
             # suppressed at drain time; the policy is the owner's, read from its own config.
             from cron.scheduler_delivery import BOT_CHAT_POLICY_PLATFORM
-            from gateway.warning_notifications import warning_notifications_enabled
+            from agent.warning_notifications import warning_notifications_enabled
             from hermes_cli.config_effective import load_user_config_effective
             if (record.get("for_failure")
                     and not warning_notifications_enabled(BOT_CHAT_POLICY_PLATFORM, load_user_config_effective(home / "config.yaml"))):

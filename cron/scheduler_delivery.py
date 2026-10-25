@@ -809,7 +809,7 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *, deferred: Opt
         home = (Path(deferred["home"]) if deferred is not None else
                 get_profile_dir(profile) if profile else source_home).resolve()
         for_failure = for_failure or bool((deferred or {}).get("for_failure"))
-        from gateway.warning_notifications import warning_notifications_enabled
+        from agent.warning_notifications import warning_notifications_enabled
         from hermes_cli.config_effective import load_user_config_effective
         suppress_notification = for_failure and not warning_notifications_enabled(
             BOT_CHAT_POLICY_PLATFORM, load_user_config_effective(home / "config.yaml"))
@@ -2079,7 +2079,7 @@ def _deliver_result(
     for target in targets:
         # A failure notice for a platform that hides warning notifications is a suppressed
         # disposition, not a send; requested (non-failure) results are never gated.
-        from gateway.warning_notifications import warning_notifications_enabled
+        from agent.warning_notifications import warning_notifications_enabled
         if (for_failure and target["platform"] != BOT_CHAT_PLATFORM
                 and not warning_notifications_enabled(target["platform"], user_cfg)):
             suppressed_targets += 1

@@ -262,7 +262,7 @@ def record_multiplex_decision(decision: MultiplexDecision) -> None:
     """Persist a guard refusal into ``gateway_state.json`` so `hermes gateway status` can show why this
     gateway serves one profile while the default says multiplex; any other verdict clears the field."""
     try:
-        from gateway.status import write_runtime_status
+        from hermes_cli.runtime_status import write_runtime_status
         write_runtime_status(multiplex_standalone_reason=decision.reason if decision.source == "guard" else None)
     except Exception:
         logger.debug("could not record the multiplex decision", exc_info=True)
@@ -326,7 +326,7 @@ def recorded_standalone_warning_lines() -> list[str]:
     """Same box, rebuilt from the live gateway's ``gateway_state.json`` for processes that did not
     make the decision (``hermes update``'s summary, ``hermes gateway status``)."""
     try:
-        from gateway.status import read_runtime_status, runtime_status_pid_is_live
+        from hermes_cli.runtime_status import read_runtime_status, runtime_status_pid_is_live
         record = read_runtime_status() or {}
         if record.get("gateway_state") in (None, "stopped", "startup_failed"):
             return []

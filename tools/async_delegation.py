@@ -144,7 +144,7 @@ def _capture_routing_origin() -> Dict[str, Any]:
     has no contextvars) so a restart-replayed completion can rebuild a SessionSource.
     Best-effort: empty values are omitted."""
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         return {k: v for k in _ROUTING_KEYS if (v := get_session_env(f"HERMES_SESSION_{k.upper()}", ""))}
     except Exception:  # noqa: BLE001 - routing origin is additive, never fatal
         return {}
@@ -153,7 +153,7 @@ def _capture_routing_origin() -> Dict[str, Any]:
 def _persist_dispatch(record: Dict[str, Any]) -> None:
     now = time.time()
     try:
-        from gateway.status import get_process_start_time
+        from hermes_cli.runtime_status import get_process_start_time
         owner_started_at = get_process_start_time(os.getpid())
     except Exception:
         owner_started_at = None
@@ -247,7 +247,7 @@ def _owner_liveness() -> Optional[Callable[[Any, Any], bool]]:
     """``alive(owner_pid, owner_started_at)`` over the shared drift-tolerant start-time comparator,
     or None when the liveness probes cannot be imported."""
     try:
-        from gateway.status import _pid_exists, get_process_start_time, start_time_fingerprints_match
+        from hermes_cli.runtime_status import _pid_exists, get_process_start_time, start_time_fingerprints_match
     except Exception:
         return None
 
@@ -690,7 +690,7 @@ def _current_origin_session_id() -> str:
     request-scoped ``HERMES_SESSION_CHAT_ID`` (raw X-Hermes-Session-Id on api_server) survives
     child construction; on push platforms chat_id is a chat, not a session => ``""``."""
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         is_api = get_session_env("HERMES_SESSION_PLATFORM", "") == "api_server"
         return (get_session_env("HERMES_SESSION_CHAT_ID", "") or "") if is_api else ""
     except Exception:

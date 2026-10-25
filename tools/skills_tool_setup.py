@@ -120,7 +120,7 @@ def _capture_required_environment_variables(
 def _is_gateway_surface() -> bool:
     if env_var_enabled("HERMES_GATEWAY_SESSION"):
         return True
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     return bool(get_session_env("HERMES_SESSION_PLATFORM"))
 
 

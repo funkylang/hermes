@@ -3498,7 +3498,7 @@ def _redirect_platform_display_key(key: str) -> tuple[str, Optional[str]]:
     if len(segs) != 3 or segs[0] != "platforms":
         return key, note
     try:
-        from gateway.display_config import OVERRIDEABLE_KEYS as _display_keys
+        from hermes_cli.display_config import OVERRIDEABLE_KEYS as _display_keys
     except Exception:
         return key, note
     if segs[2] not in _display_keys:

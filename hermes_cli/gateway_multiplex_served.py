@@ -26,7 +26,7 @@ def live_default_gateway_pid() -> Optional[int]:
     off the record's ``updated_at``: an idle gateway never advances it.
     """
     from hermes_constants import get_default_hermes_root
-    from gateway.status import live_gateway_pid_for_home
+    from hermes_cli.runtime_status import live_gateway_pid_for_home
     return live_gateway_pid_for_home(get_default_hermes_root())
 
 
@@ -35,7 +35,7 @@ def recorded_served_profiles(default_root: Optional[Path] = None) -> Optional[li
     from before the multiplexer recorded it, or a stopped/absent gateway). Callers fall back to config
     derivation only on None: an empty list is an authoritative "serves nobody else"."""
     from hermes_constants import get_default_hermes_root
-    from gateway.status import read_runtime_status
+    from hermes_cli.runtime_status import read_runtime_status
     if live_default_gateway_pid() is None:
         return None
     runtime = read_runtime_status((default_root or get_default_hermes_root()) / "gateway_state.json")
@@ -53,7 +53,7 @@ def served_profile_unserved_platforms(profile: str) -> dict[str, str]:
     (unpaired WhatsApp or Relay shared ingress; ``gateway.run_adapters`` stamps
     ``<profile>:<platform>`` as ``disabled`` with a reason and remedy)."""
     from hermes_constants import get_default_hermes_root
-    from gateway.status import read_runtime_status
+    from hermes_cli.runtime_status import read_runtime_status
     if not profile or live_default_gateway_pid() is None:
         return {}
     runtime = read_runtime_status(get_default_hermes_root() / "gateway_state.json") or {}
@@ -74,7 +74,7 @@ def served_profile_ingress_urls(profile: Optional[str] = None) -> dict[str, dict
     serves on its shared listener (``<profile>:<platform>`` entries carrying ``ingress_url``). This is
     what the user pastes into the vendor console (Twilio, LINE, Teams, ...). ``profile`` narrows the map."""
     from hermes_constants import get_default_hermes_root
-    from gateway.status import read_runtime_status, shared_listener_mirror_platforms
+    from hermes_cli.runtime_status import read_runtime_status, shared_listener_mirror_platforms
     if live_default_gateway_pid() is None:
         return {}
     runtime = read_runtime_status(get_default_hermes_root() / "gateway_state.json") or {}

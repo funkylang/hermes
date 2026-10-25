@@ -24,7 +24,7 @@ ONESHOT_HIDDEN_TOOLS = frozenset({"skill_manage"})
 def is_single_query_session() -> bool:
     """The finite ``-q`` marker, read through the session env so gateway-bound sessions never see it."""
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
     except Exception:
         import os
         get_session_env = os.environ.get

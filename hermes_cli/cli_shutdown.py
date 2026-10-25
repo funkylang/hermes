@@ -26,7 +26,7 @@ def _cli():
 
 def _sync_process_session_id(session_id: str) -> None:
     """Keep process-local session-id consumers aligned after CLI switches."""
-    from gateway.session_context import set_current_session_id
+    from agent.session_context import set_current_session_id
 
     set_current_session_id(session_id)
 

@@ -174,7 +174,7 @@ def _warn_if_gateway_running(auto_yes: bool) -> None:
     Gating on ``get_running_pid()`` made this destructive-action warning silently vanish for exactly
     those profiles — the liveness ladder answers for the served case too.
     """
-    from gateway.status import (
+    from hermes_cli.runtime_status import (
         profile_platforms_from_multiplexer, read_runtime_status, resolve_gateway_liveness)
     liveness = resolve_gateway_liveness(use_cache=False)
     platforms: dict = {}

@@ -241,7 +241,7 @@ def _buzz_terminal_context_active() -> bool:
     if os.environ.get("BUZZ_MANAGED_AGENT"):
         return True
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
 
         return get_session_env("HERMES_SESSION_PLATFORM", "").strip().lower() == "buzz"
     except Exception:

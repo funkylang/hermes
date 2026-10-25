@@ -73,7 +73,7 @@ class StatusOutputMixin:
 
     def _emit_status_kind(self, kind: str, message: str, *, origin: str) -> None:
         """Print to the CLI (``_vprint(force=True)``) and forward to ``status_callback(kind, message)``. Never raises."""
-        from gateway.warning_notifications import is_warning_status
+        from agent.warning_notifications import is_warning_status
         try:
             if not is_warning_status(kind, message) or self._warning_presentation_enabled():
                 self._vprint(f"{self.log_prefix}{message}", force=True)
@@ -82,7 +82,7 @@ class StatusOutputMixin:
         self._call_callback("status_callback", kind, message, origin=origin)
 
     def _warning_presentation_enabled(self) -> bool:
-        from gateway.warning_notifications import warning_notifications_enabled
+        from agent.warning_notifications import warning_notifications_enabled
         try:
             return warning_notifications_enabled(
                 getattr(self, "_notification_platform", getattr(self, "platform", "cli")),
@@ -94,7 +94,7 @@ class StatusOutputMixin:
 
     def _emit_diagnostic_status(self, message: str) -> None:
         """A diagnostic on the lifecycle rail, without changing legacy formatting."""
-        from gateway.warning_notifications import DiagnosticText
+        from agent.warning_notifications import DiagnosticText
         self._emit_status(DiagnosticText(message))
 
     def _emit_status(self, message: str) -> None:
@@ -183,7 +183,7 @@ class StatusOutputMixin:
         self._call_callback("thinking_callback", text, origin="_emit_wait_notice")
 
     def _emit_diagnostic_wait(self, text: str) -> None:
-        from gateway.warning_notifications import DiagnosticText
+        from agent.warning_notifications import DiagnosticText
         self._emit_wait_notice(DiagnosticText(text))
 
     # ── Buffered retry/fallback status: shown only when every retry/fallback is exhausted, dropped on
@@ -204,7 +204,7 @@ class StatusOutputMixin:
         self._buffer_retry_message("status", message)
 
     def _buffer_diagnostic_status(self, message: str) -> None:
-        from gateway.warning_notifications import DiagnosticText
+        from agent.warning_notifications import DiagnosticText
         self._buffer_status(DiagnosticText(message))
 
     def _buffer_vprint(self, message: str) -> None:

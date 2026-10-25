@@ -74,7 +74,7 @@ def owns_cron_tick_for(home: Optional[Union[Path, str]] = None) -> bool:
     not that its ticker visits the profile whose store is being ticked right now.
     """
     try:
-        from gateway import status as gateway_status
+        from hermes_cli import runtime_status as gateway_status
 
         if not gateway_status.owns_gateway_runtime_lock():
             return False
@@ -92,7 +92,7 @@ def record_serves_profile(record: Any, home: Optional[Union[Path, str]] = None) 
     """
     if not isinstance(record, dict):
         return False
-    from gateway.status import (
+    from hermes_cli.runtime_status import (
         _get_process_hermes_home, _profile_label_for_home, _same_hermes_home)
 
     try:
@@ -119,7 +119,7 @@ def live_gateway_ticking(home: Optional[Union[Path, str]] = None) -> Optional[di
     set does not name ``home``.
     """
     try:
-        from gateway import status as gateway_status
+        from hermes_cli import runtime_status as gateway_status
 
         if gateway_status.owns_gateway_runtime_lock():
             return None
@@ -150,7 +150,7 @@ def _claim_owner_is_dead(claim: Dict[str, Any]) -> bool:
         import socket
         if parts[0] != socket.gethostname():
             return False
-        from gateway.status import _pid_exists
+        from hermes_cli.runtime_status import _pid_exists
         return not _pid_exists(int(parts[1]))
     except Exception:
         return False

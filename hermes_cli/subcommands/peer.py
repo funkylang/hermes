@@ -381,7 +381,7 @@ def _peer_dm(args, message: str, peer_name: str, profile: str | None, base: str,
     # Bot Chat completion, the Desktop bot_relay.deliver RPC and the one-shot
     # local `hermes chat -Q` transport (tools/bot_mode_dm.py) — this is the
     # 4th Bot Mode delivery door and was missing the same check.
-    from gateway.response_filters import is_intentional_silence_response
+    from agent.response_filters import is_intentional_silence_response
     if is_intentional_silence_response(reply):
         reply = ""
     payload = {"peer": peer_name, "profile": profile,

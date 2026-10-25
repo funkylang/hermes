@@ -826,7 +826,7 @@ def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10
             if pid == os.getpid():
                 return "live"
             try:
-                from gateway.status import _pid_exists
+                from hermes_cli.runtime_status import _pid_exists
                 return "live" if _pid_exists(pid) else "dead"
             except Exception:
                 return "live"

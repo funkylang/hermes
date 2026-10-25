@@ -345,7 +345,7 @@ def _pid_liveness(pid: Any, process_start_time: Any = None, *, lenient: bool = F
     is_self = pid_int == os.getpid()  # trivially exists; the (pid, start) identity check still applies
     if not is_self:
         try:
-            from gateway.status import _pid_exists
+            from hermes_cli.runtime_status import _pid_exists
             if not _pid_exists(pid_int):
                 return False
         except Exception:

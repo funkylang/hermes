@@ -191,7 +191,7 @@ def _resolve_skill_commands_platform() -> Optional[str]:
     that was populated for a different platform's ``skills.platform_disabled`` view (#14536).
     """
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         resolved_platform = os.getenv("HERMES_PLATFORM") or get_session_env("HERMES_SESSION_PLATFORM")
     except Exception:
         resolved_platform = os.getenv("HERMES_PLATFORM")

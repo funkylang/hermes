@@ -567,7 +567,7 @@ class S6ServiceManager:
         pid = self._supervised_pid(name)
         if pid is not None:
             try:
-                from gateway.status import write_planned_stop_marker
+                from hermes_cli.runtime_status import write_planned_stop_marker
                 write_planned_stop_marker(pid)
             except Exception:
                 pass

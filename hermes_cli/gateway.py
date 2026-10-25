@@ -32,7 +32,7 @@ if os.name == "posix":
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 from gateway.config import coerce_systemd_watchdog_seconds, load_gateway_config  # noqa: F401 — resolved lazily by siblings through the facade
-from gateway.status import terminate_pid
+from hermes_cli.runtime_status import terminate_pid
 from gateway.restart import (  # noqa: F401 — resolved lazily by siblings through the facade
     DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT,
     EXTERNAL_GATEWAY_SUPERVISOR_ENV,
@@ -286,7 +286,7 @@ def _wait_for_pid_exit(pid: int, timeout: float, *, on_progress=None) -> bool:
     if pid <= 0:
         return True
     # ``os.kill(pid, 0)`` hard-kills on Windows (TerminateProcess); use _pid_exists instead.
-    from gateway.status import _pid_exists
+    from hermes_cli.runtime_status import _pid_exists
     deadline = time.monotonic() + max(timeout, 0.0)
     while True:
         if not _pid_exists(pid):
@@ -506,7 +506,7 @@ def _escalate_wedged_gateway(pid: int, *, term_grace: float = 5.0, kill_wait: fl
 
     See #86684.
     """
-    from gateway.status import get_process_start_time
+    from hermes_cli.runtime_status import get_process_start_time
     expected_start_time = get_process_start_time(pid)
     try:
         terminate_pid(pid, force=False)
@@ -572,7 +572,7 @@ def _scan_gateway_pids(
     pids: list[int] = []
     # Strict matcher shared with gateway.status: requires a real ``gateway run`` argv, so
     # ``gateway status``/``dashboard`` siblings and ``python -m tui_gateway`` don't match.
-    from gateway.status import (
+    from hermes_cli.runtime_status import (
         looks_like_gateway_command_line,
         looks_like_gateway_runtime_command_line,
         profile_flag_value,
@@ -753,7 +753,7 @@ def find_gateway_pids(exclude_pids: set | None = None, all_profiles: bool = Fals
     pids: list[int] = []
     if not all_profiles:
         try:
-            from gateway.status import get_running_pid
+            from hermes_cli.runtime_status import get_running_pid
             _append_unique_pid(pids, get_running_pid(), _exclude)
         except Exception:
             pass
@@ -773,7 +773,7 @@ def find_profile_gateway_processes(exclude_pids: set | None = None, *, strict: b
     _exclude = set(exclude_pids or set())
     processes: list[ProfileGatewayProcess] = []
     try:
-        from gateway.status import get_running_pid, get_running_pid_identity_strict
+        from hermes_cli.runtime_status import get_running_pid, get_running_pid_identity_strict
         from hermes_cli.profiles import list_profiles
     except Exception:
         if strict:
@@ -947,7 +947,7 @@ def _capture_gateway_argv(pid: int) -> list[str] | None:
         return None
     # Never respawn an unrelated process the scan happened to report.
     try:
-        from gateway.status import looks_like_gateway_command_line
+        from hermes_cli.runtime_status import looks_like_gateway_command_line
         if not looks_like_gateway_command_line(" ".join(argv)):
             return None
     except Exception:
@@ -1296,7 +1296,7 @@ def _systemd_main_pid(system: bool = False) -> int | None:
 
 def _read_gateway_runtime_status() -> dict | None:
     try:
-        from gateway.status import read_runtime_status
+        from hermes_cli.runtime_status import read_runtime_status
         state = read_runtime_status()
     except Exception:
         return None
@@ -1329,7 +1329,7 @@ def _wait_for_systemd_service_restart(
         active_state = props.get("ActiveState", "")
         sub_state = props.get("SubState", "")
         try:
-            from gateway.status import get_running_pid
+            from hermes_cli.runtime_status import get_running_pid
             new_pid = get_running_pid()
         except Exception:
             new_pid = None
@@ -1436,7 +1436,7 @@ def _recover_pending_systemd_restart(system: bool = False, previous_pid: int | N
         return False
 
     try:
-        from gateway.status import read_runtime_status
+        from hermes_cli.runtime_status import read_runtime_status
     except Exception:
         return False
 
@@ -1705,7 +1705,7 @@ def _gateway_list() -> None:
         if prof.gateway_running:
             pid = None
             try:
-                from gateway.status import get_running_pid
+                from hermes_cli.runtime_status import get_running_pid
                 pid = get_running_pid(prof.path / "gateway.pid", cleanup_stale=False)
             except Exception:
                 pass
@@ -1733,7 +1733,7 @@ def kill_gateway_processes(force: bool = False, exclude_pids: set | None = None,
                 # anything that no longer looks like a gateway — refuse those.
                 if _capture_gateway_argv(pid) is None:
                     continue
-                from gateway.status import get_process_start_time
+                from hermes_cli.runtime_status import get_process_start_time
                 expected_start_time = get_process_start_time(pid)
             terminate_pid(pid, force=force, expected_start_time=expected_start_time)
             killed += 1
@@ -1817,7 +1817,7 @@ def _reap_unsupervised_gateway_orphans(
         if _windows_scheduled_task_supervises(_task_name):
             return False
 
-    from gateway.status import _pid_exists, get_process_start_time, write_planned_stop_marker
+    from hermes_cli.runtime_status import _pid_exists, get_process_start_time, write_planned_stop_marker
     own = _reaper_exclusion_pids(extra_exclude)
     try:
         # On Windows also drop Task Scheduler-owned candidates (the pidfile-less gap).
@@ -1902,7 +1902,7 @@ def _reaper_exclusion_pids(extra_exclude: set | None) -> set[int]:
     # TerminateProcess, no drain). For a KILL exclusion list a stale PID at worst spares one process;
     # a false negative kills a live gateway. The probe still supplies the runtime-status fallback PID.
     try:
-        from gateway.status import _pid_from_record, _read_gateway_lock_record, _read_pid_record, get_running_pid
+        from hermes_cli.runtime_status import _pid_from_record, _read_gateway_lock_record, _read_pid_record, get_running_pid
         recorded_pids = {_pid_from_record(rec) for rec in (_read_pid_record(), _read_gateway_lock_record())}
         recorded_pids.add(get_running_pid(cleanup_stale=False))
         for recorded in recorded_pids:
@@ -1965,7 +1965,7 @@ def _force_kill_survivors(survivors, *, kill=None) -> None:
 def _mark_planned_stop(pid: int | None = None) -> None:
     """Best-effort planned-stop marker for ``pid`` (default: the recorded gateway PID)."""
     try:
-        from gateway.status import get_running_pid, write_planned_stop_marker
+        from hermes_cli.runtime_status import get_running_pid, write_planned_stop_marker
         if pid is None:
             pid = get_running_pid(cleanup_stale=False)
         if pid is not None:
@@ -1984,7 +1984,7 @@ def stop_profile_gateway() -> bool:
     sweep for any remaining orphans so each restart produces at most one live gateway (#75936).
     """
     try:
-        from gateway.status import get_running_pid, remove_pid_file
+        from hermes_cli.runtime_status import get_running_pid, remove_pid_file
     except ImportError:
         return False
 
@@ -1996,7 +1996,7 @@ def stop_profile_gateway() -> bool:
         # Windows maps SIGTERM to TerminateProcess. The marker watcher is the
         # gateway's graceful-stop IPC, so wait for it before force-killing a
         # wedged process.
-        from gateway.status import get_process_start_time
+        from hermes_cli.runtime_status import get_process_start_time
         from hermes_cli.gateway_windows import (
             _drain_gateway_pid,
             _force_terminate_known_gateway_pids,
@@ -2019,7 +2019,7 @@ def stop_profile_gateway() -> bool:
             return False
 
     # ``_pid_exists``, NOT ``os.kill(pid, 0)`` (TerminateProcess on Windows).
-    from gateway.status import _pid_exists
+    from hermes_cli.runtime_status import _pid_exists
     for _ in range(20):
         if not _pid_exists(pid):
             break
@@ -3808,7 +3808,7 @@ def systemd_restart(system: bool = False):
     # HERMES_HOME sync happens in refresh's systemd_unit_is_current gate; its os.environ mutation
     # persists for the get_running_pid / drain-timeout reads below.
     refresh_systemd_unit_if_needed(system=system)
-    from gateway.status import get_running_pid
+    from hermes_cli.runtime_status import get_running_pid
     pid = get_running_pid() or _systemd_main_pid(system=system)
     if pid is not None and probe_gateway_loop_liveness(pid) == GATEWAY_LOOP_WEDGED:
         # Event loop provably dead: SIGUSR1 can't drain it, so bounded SIGTERM → SIGKILL and let systemd relaunch.
@@ -4047,7 +4047,7 @@ _resolved_launchd_domain: str | None = None
 def _wait_for_gateway_exit(timeout: float = 10.0, force_after: float | None = 5.0) -> bool:
     """Wait up to ``timeout`` s for the gateway (by gateway.pid, not launchd labels, so multiple
     HERMES_HOMEs work) to exit; SIGKILL it after ``force_after`` s of graceful waiting."""
-    from gateway.status import get_process_start_time, get_running_pid
+    from hermes_cli.runtime_status import get_process_start_time, get_running_pid
     deadline = time.monotonic() + timeout
     force_deadline = (time.monotonic() + force_after) if force_after is not None else None
     force_sent = False
@@ -4177,7 +4177,7 @@ def _served_by_another_host_gateway(profile_name: str | None = None):
     if gateway is None:
         return None
     try:
-        from gateway.status import _get_process_hermes_home, _same_hermes_home
+        from hermes_cli.runtime_status import _get_process_hermes_home, _same_hermes_home
         if _same_hermes_home(gateway.home, _get_process_hermes_home()):
             return None
     except Exception:
@@ -4451,7 +4451,7 @@ def _guard_existing_gateway_process_conflict(replace: bool = False) -> None:
     if replace or _running_under_gateway_supervisor():
         return
     try:
-        from gateway.status import get_running_pid
+        from hermes_cli.runtime_status import get_running_pid
         pid = get_running_pid()
     except Exception:
         logger.debug("Existing-gateway process probe failed", exc_info=True)
@@ -4460,7 +4460,7 @@ def _guard_existing_gateway_process_conflict(replace: bool = False) -> None:
         # get_running_pid() filters by the current profile's HERMES_HOME; warn if the PID file
         # belongs to another profile (user switched profiles while the old gateway still runs).
         try:
-            from gateway.status import _read_pid_record, _pid_record_belongs_to_current_profile
+            from hermes_cli.runtime_status import _read_pid_record, _pid_record_belongs_to_current_profile
             stale = _read_pid_record()
             if stale is not None and not _pid_record_belongs_to_current_profile(stale):
                 logger.warning(
@@ -4578,7 +4578,7 @@ def _respawn_storm_backoff() -> None:
     DEFAULT_CONFIG ``gateway.respawn_storm``; HERMES_GATEWAY_MAX_STARTS / HERMES_GATEWAY_START_WINDOW_S
     override; max_starts <= 0 disables. Never blocks startup."""
     try:
-        from gateway.status import record_start_and_check_storm
+        from hermes_cli.runtime_status import record_start_and_check_storm
         _max_starts = 5
         _win = 120.0
         try:
@@ -4760,7 +4760,7 @@ _WATCHDOG_EXIT_REASONS = {
 def _runtime_health_lines() -> list[str]:
     """Summarize the latest persisted gateway runtime health state."""
     try:
-        from gateway.status import (
+        from hermes_cli.runtime_status import (
             read_runtime_status, runtime_status_heartbeat_age_s, runtime_status_is_stale, runtime_status_pid_is_live)
     except Exception:
         return []
@@ -4803,7 +4803,7 @@ def _runtime_health_lines() -> list[str]:
         lines.append(f"⚠ Gateway exited degraded: {_WATCHDOG_EXIT_REASONS.get(exit_reason, exit_reason)}")
     elif gateway_state == "draining":
         action = "restart" if state.get("restart_requested") else "shutdown"
-        from gateway.status import parse_active_agents
+        from hermes_cli.runtime_status import parse_active_agents
         count = parse_active_agents(state.get("active_agents"))
         lines.append(f"⏳ Gateway draining for {action} ({count} active agent(s))")
         work = state.get("active_work")
@@ -5315,7 +5315,7 @@ def _host_multiplexer_for_all_verb():
 
 def _host_multiplexer_is_ours(owner) -> bool:
     try:
-        from gateway.status import _get_process_hermes_home, _same_hermes_home
+        from hermes_cli.runtime_status import _get_process_hermes_home, _same_hermes_home
         return bool(_same_hermes_home(owner.home, _get_process_hermes_home()))
     except Exception:
         return False
@@ -5609,7 +5609,7 @@ def _cmd_restart(args):
     # A gateway that declares an external supervisor (custom launchd agent / unit running
     # `gateway run --external-supervisor`) restarts by exiting back to it: the stop + foreground
     # run below would stamp this CLI's PID as the gateway and wedge every respawn (#110637).
-    from gateway.status import get_running_pid
+    from hermes_cli.runtime_status import get_running_pid
     from hermes_cli.gateway_supervised_restart import (
         gateway_declares_external_supervisor, restart_externally_supervised_gateway,
     )

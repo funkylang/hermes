@@ -27,7 +27,7 @@ def main() -> None:
     hermes_home = Path(tempfile.mkdtemp(prefix="hermes-otel-smoke-"))
     os.environ["HERMES_HOME"] = str(hermes_home)
 
-    from gateway.status import write_runtime_status
+    from hermes_cli.runtime_status import write_runtime_status
     from agent.monitoring.gateway_health_export import start_gateway_health_export
     from agent.monitoring import emitter
 

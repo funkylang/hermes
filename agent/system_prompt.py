@@ -466,7 +466,7 @@ def _cron_delivery_hint(agent: Any) -> str:
     never reached scheduled jobs at all. The scheduler publishes the primary auto-deliver target
     into the session ContextVar before the agent runs (same seam ``send_message`` routes by).
     """
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     deliver_key = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM", "").lower().strip()
     if not deliver_key or deliver_key == "cron":
         return ""

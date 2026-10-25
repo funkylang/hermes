@@ -360,7 +360,7 @@ def _not_configured_error(platform_name, platform, entry):
     # gateway started from the default root (the reporter's shell had HERMES_HOME=<root>/profiles/<p>)
     # never reads this profile's .env at all.
     try:
-        from gateway.status import read_runtime_status, runtime_status_pid_is_live
+        from hermes_cli.runtime_status import read_runtime_status, runtime_status_pid_is_live
         from hermes_constants import get_default_hermes_root, hermes_home_key
         root = get_default_hermes_root()
         gateways = [(home, read_runtime_status())]
@@ -422,7 +422,7 @@ def _mirror_sent_message(platform_name, chat_id, mirror_text, thread_id):
     """Best-effort mirror of the sent message into the target's gateway session."""
     try:
         from gateway.mirror import mirror_to_session
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         return bool(mirror_to_session(
             platform_name, chat_id, mirror_text, thread_id=thread_id,
             source_label=get_session_env("HERMES_SESSION_PLATFORM", "cli"),
@@ -460,7 +460,7 @@ def _describe_media_for_mirror(media_files):
 
 def _maybe_skip_cron_duplicate_send(platform_name: str, chat_id: str, thread_id: str | None):
     """Skip redundant cron send_message calls when the scheduler will auto-deliver there."""
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     auto_platform = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM", "").strip().lower()
     auto_chat_id = get_session_env("HERMES_CRON_AUTO_DELIVER_CHAT_ID", "").strip()
     if not (auto_platform and auto_chat_id and auto_platform == platform_name and auto_chat_id == str(chat_id)

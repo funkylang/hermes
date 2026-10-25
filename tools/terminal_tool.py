@@ -107,7 +107,7 @@ def set_approval_callback(cb):
 def _current_session_key() -> str:
     """Active gateway/WebUI session key, or "" outside sessions (ContextVar with
     the ``get_session_env`` os.environ fallback for CLI/cron/tests)."""
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
 
     return get_session_env("HERMES_SESSION_KEY", "")
 
@@ -115,7 +115,7 @@ def _current_session_key() -> str:
 def _current_session_profile() -> str:
     """Active session's Hermes profile name, or "" (same lookup discipline as
     :func:`_current_session_key`)."""
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
 
     return get_session_env("HERMES_SESSION_PROFILE", "")
 

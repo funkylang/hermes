@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from gateway.session_context import declare_stateless_channel
+from agent.session_context import declare_stateless_channel
 from hermes_cli.fallback_config import get_fallback_chain
 
 _ALL_TOOLSETS = {"all", "*"}

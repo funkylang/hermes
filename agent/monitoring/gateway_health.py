@@ -131,7 +131,7 @@ def _coerce_pid(raw: Any) -> Optional[int]:
 def _gateway_status(name: str, fallback: Callable[[], Any], /, **kwargs: Any) -> Any:
     """Prefer ``gateway.status.<name>`` (the runtime-status contract); fall back to the local approximation."""
     try:
-        import gateway.status as status
+        import hermes_cli.runtime_status as status
         return getattr(status, name)(**kwargs)
     except Exception:
         return fallback()

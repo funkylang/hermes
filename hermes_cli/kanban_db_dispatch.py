@@ -323,7 +323,7 @@ def _pid_alive(pid: Optional[int]) -> bool:
     """
     if not pid or pid <= 0:
         return False
-    from gateway.status import _pid_exists
+    from hermes_cli.runtime_status import _pid_exists
     if not _pid_exists(int(pid)):
         return False
     if sys.platform == "linux":
@@ -371,7 +371,7 @@ def _process_fingerprint(pid: int) -> Optional[str]:
     ``gateway.drain_control.current_instantiation_epoch`` (``boot_id`` + PID-1 start) changes on every
     reboot / container recreate, so the composed value never survives one. ``None`` when unreadable."""
     from gateway.drain_control import current_instantiation_epoch
-    from gateway.status import get_process_start_time
+    from hermes_cli.runtime_status import get_process_start_time
     start = get_process_start_time(int(pid))
     if start is None:
         return None
@@ -404,7 +404,7 @@ def _pid_recycled(pid: Optional[int], started_at) -> bool:
         return True
     if isinstance(started_at, str) and "|" in started_at:
         return _process_fingerprint(int(pid)) != started_at
-    from gateway.status import _start_times_agree, get_process_start_time
+    from hermes_cli.runtime_status import _start_times_agree, get_process_start_time
     current = get_process_start_time(int(pid))
     if current is None:
         return True
@@ -2662,7 +2662,7 @@ def _worker_profile_scope(hermes_home: str, *, bind_home: bool = True):
     from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
     from hermes_constants import get_process_hermes_home, reset_hermes_home_override, set_hermes_home_override
     from tools.terminal_scope import install_profile_terminal_scope, reset_terminal_scope
-    from tui_gateway.launch_profile_policy import launch_secret_scope, launch_terminal_env
+    from hermes_cli.launch_profile_policy import launch_secret_scope, launch_terminal_env
 
     home = Path(hermes_home)
     is_launch_home = str(home.resolve()) == str(Path(get_process_hermes_home()).resolve())
@@ -2870,7 +2870,7 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         )
     # The dispatcher is detached from every conversation; its worker must never
     # inherit routing mirrored by a previous gateway turn.
-    from gateway.session_context import _VAR_MAP
+    from agent.session_context import _VAR_MAP
     for key in _VAR_MAP:
         env.pop(key, None)
 

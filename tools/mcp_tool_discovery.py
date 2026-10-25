@@ -118,7 +118,7 @@ def _owner_secret_mapping(home: Path) -> Dict[str, str]:
         if key not in env_loader._APPLIED_HOMES:
             _hydrate_retry_after[key] = time.monotonic() + _HYDRATE_RETRY_INTERVAL_SEC
     if _is_process_home(home):
-        from tui_gateway.launch_profile_policy import launch_secret_scope
+        from hermes_cli.launch_profile_policy import launch_secret_scope
         return launch_secret_scope(home)
     return build_profile_secret_scope(home)
 

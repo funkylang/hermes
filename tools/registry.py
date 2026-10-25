@@ -268,7 +268,7 @@ def check_fn_cache_scope() -> Optional[str]:
     processes keep the process-wide cache; a multiplex gateway installs a Hermes-home override
     per profile turn, so the canonical profile key is the boundary."""
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         if all(str(get_session_env(k, "") or "").strip() for k in _BROWSER_IDENTITY_KEYS):
             # api_server binds a server-derived principal + transport family on EVERY request, so
             # identity-present != controller-attached; only bypass when the extension-control

@@ -365,7 +365,7 @@ class CLIInitMixin:
                 except Exception:
                     print(t("cli.session_store.unavailable_plain", reason=failure.gloss, action=failure.action))
             # Same automatic diagnostic the gateway gates for its home channel (run_notifications).
-            from gateway.warning_notifications import render_notification
+            from agent.warning_notifications import render_notification
             render_notification(_present_store_warning, platform="cli")
         _run_state_db_auto_maintenance(self._session_db)
         _run_checkpoint_auto_maintenance()

@@ -103,7 +103,7 @@ def _apply_async_support(proc_session, result_data, notify_on_complete, watch_pa
     poll. Otherwise stamp gateway routing. Returns (notify, watch_patterns)."""
     if not (notify_on_complete or watch_patterns):
         return notify_on_complete, watch_patterns
-    from gateway.session_context import async_delivery_supported, get_session_env
+    from agent.session_context import async_delivery_supported, get_session_env
 
     if async_delivery_supported():
         _stamp_gateway_routing(proc_session, get_session_env)
@@ -264,7 +264,7 @@ def yield_to_background_handler(
 
 def _stamp_routing_if_gateway(process_registry, session, session_key) -> None:
     """Route the adopted session's completion like a normal notify_on_complete spawn."""
-    from gateway.session_context import async_delivery_supported, get_session_env
+    from agent.session_context import async_delivery_supported, get_session_env
     if not async_delivery_supported():
         session.notify_on_complete = False
         return

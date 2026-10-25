@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional
 
-from gateway.status_inline_source import (
+from hermes_cli.status_inline_source import (
     command_line_runs_inline_source,
     inline_bootstrap_argv,
     inline_source_flag_index,

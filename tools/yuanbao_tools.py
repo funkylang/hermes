@@ -69,7 +69,7 @@ def _adapter():
 
 def _session_env(name: str) -> str:
     with suppress(Exception):
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         return get_session_env(name, "")
     return ""
 

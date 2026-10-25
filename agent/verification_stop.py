@@ -43,7 +43,7 @@ def _session_is_messaging_surface() -> bool:
     """Whether this turn is delivered over a human messaging channel. An
     unreachable gateway package means no messaging channel (verify-on-stop stays on)."""
     try:
-        from gateway.session_context import session_is_messaging_surface
+        from agent.session_context import session_is_messaging_surface
 
         return session_is_messaging_surface()
     except Exception:

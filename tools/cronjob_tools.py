@@ -543,7 +543,7 @@ def _try_dispatch_background_run(
 
     # Finite sessions cannot route a detached result back after the turn ends (delegate_task's gate).
     try:
-        from gateway.session_context import async_delivery_supported
+        from agent.session_context import async_delivery_supported
         if not async_delivery_supported():
             return None
     except Exception:
@@ -576,7 +576,7 @@ def _try_dispatch_background_run(
 
     origin_ui_session_id = ""
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         origin_ui_session_id = get_session_env("HERMES_UI_SESSION_ID", "") or ""
     except Exception:
         pass
@@ -1153,7 +1153,7 @@ def check_cronjob_requirements() -> bool:
     scheduler is internal; no crontab needed). Flags must be explicitly truthy via
     ``env_var_enabled``. An external cron worker has the presence vars stripped from its env, so
     the cron session marker keeps ``cron.allow_agent_scheduling`` meaningful there."""
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     from utils import env_var_enabled, is_truthy_value
     return (
         env_var_enabled("HERMES_INTERACTIVE")

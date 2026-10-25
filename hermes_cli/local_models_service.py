@@ -76,7 +76,7 @@ def _config_profile_scope(profile: Optional[str]):
     # Task-local HERMES_HOME + profile secret scope. None/empty/current = process own profile.
     from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
     from hermes_cli.env_loader import hydrate_profile_secret_sources
-    from tui_gateway.launch_profile_policy import activate_multi_profile_hosting, launch_secret_scope
+    from hermes_cli.launch_profile_policy import activate_multi_profile_hosting, launch_secret_scope
 
     process_home = config_mod.get_process_hermes_home()
     if _is_current_profile(profile):

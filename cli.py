@@ -992,7 +992,7 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
 
             notice = default_downgrade_notice()
             if notice:
-                from gateway.warning_notifications import render_notification
+                from agent.warning_notifications import render_notification
                 render_notification(lambda: self._console_print(f"[yellow]⚠ {notice}[/yellow]"), platform="cli")
         except Exception:
             logger.debug("browser backend notice failed", exc_info=True)

@@ -667,7 +667,7 @@ def pid_exists_stdlib(pid: int) -> bool:
 def _process_start_time(pid: int) -> int | None:
     """The repository's stable process-start fingerprint, if available."""
     try:
-        from gateway.status import get_process_start_time
+        from hermes_cli.runtime_status import get_process_start_time
 
         return get_process_start_time(pid)
     except Exception:

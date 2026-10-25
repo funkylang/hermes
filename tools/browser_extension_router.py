@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _bound_identity() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """(session_id, principal_id, transport_family) from the session context."""
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
 
     return tuple(  # type: ignore[return-value]
         get_session_env(key, "") or None

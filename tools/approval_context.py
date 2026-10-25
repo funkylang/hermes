@@ -104,7 +104,7 @@ def get_current_session_key(default: str = "default") -> str:
     """Return the active session key: approval contextvar → session_context → os.environ."""
     if session_key := _approval_session_key.get():
         return session_key
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     return get_session_env("HERMES_SESSION_KEY", default)
 
 
@@ -113,7 +113,7 @@ def _session_env(name: str) -> str:
     unrelated gateway/API/TUI turns in the same process; process env is the
     fallback for CLI tests and older entrypoints."""
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         return get_session_env(name, "") or ""
     except Exception:
         return os.getenv(name, "") or ""

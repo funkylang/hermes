@@ -81,7 +81,7 @@ def _capture_origin() -> tuple[str, str, Any, Any, bool]:
     _origin_ui_session_id = ""
     _origin_session_history_delivery = False
     with _quiet(None):
-        from gateway.session_context import get_session_env, session_history_delivery_supported
+        from agent.session_context import get_session_env, session_history_delivery_supported
         _origin_ui_session_id = get_session_env("HERMES_UI_SESSION_ID", "")
         _origin_session_history_delivery = session_history_delivery_supported()
     return (_origin_wake_sid, _origin_ui_session_id, *_capture_gateway_steer_authority(_origin_ui_session_id), _origin_session_history_delivery)
@@ -245,7 +245,7 @@ def _resolve_async_wake_sid(origin_wake_sid: str, origin_session_history_deliver
 
     API completion only persists a row; this does not authorize a model wake. The
     continuation must read that row, not an authoritative caller-owned snapshot."""
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
 
     # Finite chat owns no later turn to consume a detached result. Reuse its
     # approval/lifecycle marker without disabling terminal notify completions:
@@ -258,7 +258,7 @@ def _resolve_async_wake_sid(origin_wake_sid: str, origin_session_history_deliver
         # ends. This includes stateless HTTP requests (#10760) and one-shot Kanban workers (#63169). Fall
         # back to SYNCHRONOUS execution so the result returns in this same turn instead of handing out a
         # handle with no durable consumer. Mirrors the pool-at-capacity inline fallback below.
-        from gateway.session_context import async_delivery_supported
+        from agent.session_context import async_delivery_supported
         if async_delivery_supported():
             return ""
     except Exception:
@@ -289,7 +289,7 @@ def _resolve_async_session_key(parent_agent: Any, origin_ui_session_id: str) -> 
     session_key = get_current_session_key(default="")
     agent_session_id = str(getattr(parent_agent, "session_id", "") or "")
     with _quiet(None):
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         source = get_session_env("HERMES_SESSION_SOURCE", "")
         # Refresh from the task-local source when available, else retain the
         # immutable value captured before child construction.

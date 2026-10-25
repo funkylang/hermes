@@ -163,7 +163,7 @@ def _detect_gateway_code_skew() -> tuple[str, str] | None:
     """Boot-vs-disk revision skew for THIS process, or None. Test seam over
     ``gateway.code_skew.detect_code_skew``; a broken import must never take delivery down."""
     try:
-        from gateway.code_skew import detect_code_skew
+        from hermes_cli.code_skew import detect_code_skew
 
         return detect_code_skew()
     except Exception:
@@ -173,7 +173,7 @@ def _detect_gateway_code_skew() -> tuple[str, str] | None:
 def _current_gateway_code_sha() -> str | None:
     """Full revision currently on disk; kept separate from display-shortened skew labels."""
     try:
-        from gateway.code_skew import current_code_sha
+        from hermes_cli.code_skew import current_code_sha
 
         return current_code_sha()
     except Exception:
@@ -552,7 +552,7 @@ def _is_cron_silence_response(text: str) -> bool:
     (#51438, #46917). Whitespace-trimmed and case-insensitive. A token buried mid-sentence is treated as
     real content and delivered.
     """
-    from gateway.response_filters import is_autonomous_silence_response
+    from agent.response_filters import is_autonomous_silence_response
 
     return is_autonomous_silence_response(text)
 
@@ -2349,7 +2349,7 @@ class _CronRunScope:
     """
 
     def __init__(self, job: dict, job_id: str, execution_id: Optional[str]):
-        from gateway.session_context import set_session_vars, _VAR_MAP
+        from agent.session_context import set_session_vars, _VAR_MAP
         from tools.terminal_tool import record_session_cwd
 
         self._var_map = _VAR_MAP
@@ -2395,7 +2395,7 @@ class _CronRunScope:
         self._non_dispatcher_token = enter_non_dispatcher_owned_context()
 
     def exit(self) -> None:
-        from gateway.session_context import clear_session_vars
+        from agent.session_context import clear_session_vars
         from tools.terminal_tool import clear_session_cwd
 
         clear_session_cwd(self.task_id)
@@ -2413,7 +2413,7 @@ def _reload_dotenv_and_publish_delivery_target(job: dict) -> None:
     # Reset the secret-source cache FIRST or a Bitwarden/BSM-backed secret is never re-resolved
     # (only the placeholder reloads -> 401s).
     from hermes_cli.env_loader import load_hermes_dotenv, reset_secret_source_cache
-    from gateway.session_context import _VAR_MAP
+    from agent.session_context import _VAR_MAP
 
     reset_secret_source_cache(_get_hermes_home())
     load_hermes_dotenv(hermes_home=_get_hermes_home())

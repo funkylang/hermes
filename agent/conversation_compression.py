@@ -1610,7 +1610,7 @@ def _mark_compression_blocked_transient(agent: Any, compressor: Any) -> None:
 def _rebind_session_context(session_id: str) -> None:
     """Point the worker thread's session ContextVar and log context at ``session_id``."""
     try:
-        from gateway.session_context import set_current_session_id
+        from agent.session_context import set_current_session_id
         set_current_session_id(session_id)
     except Exception:
         os.environ["HERMES_SESSION_ID"] = session_id
@@ -2175,7 +2175,7 @@ def replay_compression_warning(agent: Any) -> None:
     msg = getattr(agent, "_compression_warning", None)
     if msg and agent.status_callback:
         # Replayed as a classified diagnostic so every sink applies its own policy snapshot.
-        from gateway.warning_notifications import DiagnosticText
+        from agent.warning_notifications import DiagnosticText
         with contextlib.suppress(Exception):
             agent.status_callback("lifecycle", DiagnosticText(msg))
 

@@ -227,7 +227,7 @@ def _inject_session_context_env(env: dict) -> None:
     context is engaged ContextVars are authoritative — a bound value (incl. "") wins
     and an _UNSET var is STRIPPED, not inherited. An unengaged CLI keeps the mirror."""
     try:
-        from gateway.session_context import _UNSET, _VAR_MAP, session_context_engaged
+        from agent.session_context import _UNSET, _VAR_MAP, session_context_engaged
     except Exception:
         return
     _engaged = session_context_engaged()
@@ -871,7 +871,7 @@ def _leader_is_ours(pgid, expected_start) -> bool:
         return False
     if expected_start is None:
         return True
-    from gateway.status import get_process_start_time, start_time_fingerprints_match
+    from hermes_cli.runtime_status import get_process_start_time, start_time_fingerprints_match
     try:
         current = get_process_start_time(pgid)
     except Exception:  # noqa: BLE001 — the guard must never break signalling
@@ -957,7 +957,7 @@ def _kill_known_pids(proc, descendants) -> None:
 def _kill_process_windows(proc) -> None:
     """Identity-checked terminate (start time guards against PID reuse), else kill."""
     try:
-        from gateway.status import get_process_start_time, terminate_pid
+        from hermes_cli.runtime_status import get_process_start_time, terminate_pid
         terminate_pid(proc.pid, force=True, expected_start_time=get_process_start_time(proc.pid))
     except Exception:
         proc.kill()
@@ -1079,7 +1079,7 @@ class LocalEnvironment(BaseEnvironment):
                 # detect PID/PGID recycling before signalling the group (#43044). The
                 # psutil fallback in get_process_start_time captures a baseline on every
                 # platform, macOS included.
-                from gateway.status import get_process_start_time
+                from hermes_cli.runtime_status import get_process_start_time
                 proc._hermes_pgid_start = get_process_start_time(proc.pid)
         if stdin_data is not None:
             _pipe_stdin(proc, stdin_data)

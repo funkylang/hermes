@@ -316,7 +316,7 @@ def _is_supervised_gateway_process() -> bool:
         return False
     try:
         from gateway.restart import is_supervised_gateway_launch
-        from gateway.status import get_running_pid
+        from hermes_cli.runtime_status import get_running_pid
 
         return is_supervised_gateway_launch() and get_running_pid(cleanup_stale=False) == os.getpid()
     except Exception as exc:
@@ -976,14 +976,14 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
             return False
         # ``os.kill(pid, 0)`` is NOT a no-op on Windows (bpo-14484) — use the
         # cross-platform existence check.
-        from gateway.status import _pid_exists
+        from hermes_cli.runtime_status import _pid_exists
         return _pid_exists(pid)
 
     @staticmethod
     def _safe_host_start_time(pid: Optional[int]) -> Optional[int]:
         """Kernel start ticks for a host PID, or None when unavailable."""
         try:
-            from gateway.status import get_process_start_time
+            from hermes_cli.runtime_status import get_process_start_time
             return get_process_start_time(pid) if pid else None
         except Exception:
             return None
@@ -1105,7 +1105,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
 
     @staticmethod
     def _new_session(command, task_id, owner_task_id, session_key, cwd, **extra) -> ProcessSession:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
 
         return ProcessSession(
             id=f"proc_{uuid.uuid4().hex[:12]}", command=command, task_id=task_id,

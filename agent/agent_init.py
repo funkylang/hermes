@@ -1021,7 +1021,7 @@ def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_time
             print(f"🤖 AI Agent initialized with model: {agent.model}")
             if base_url:
                 print(f"🔗 Using custom base URL: {base_url}")
-            from gateway.warning_notifications import warning_notifications_enabled
+            from agent.warning_notifications import warning_notifications_enabled
             _print_key_banner(client_kwargs.get("api_key", "none"), "API key",
                               warn_missing=warning_notifications_enabled(agent.platform))
     except Exception as e:
@@ -1171,7 +1171,7 @@ def _publish_session_id(session_id: str) -> None:
     delegated construction publish a child ID process-wide.
     """
     try:
-        from gateway.session_context import set_current_session_id
+        from agent.session_context import set_current_session_id
         set_current_session_id(session_id)
     except Exception:
         try:
@@ -1605,7 +1605,7 @@ def _warn_invalid_config_int(
     _ra().logger.warning(
         "Invalid %s: %r — %s. Falling back to %s.", what, value, requirement, fallback,
     )
-    from gateway.warning_notifications import warning_notifications_enabled
+    from agent.warning_notifications import warning_notifications_enabled
     try:
         if not warning_notifications_enabled(
             getattr(agent, "_notification_platform", getattr(agent, "platform", "cli")),

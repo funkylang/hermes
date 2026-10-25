@@ -255,7 +255,7 @@ def _live_gateway_pid(home: Path) -> Optional[int]:
     so "this profile is being served" reads as a live PID. Use :func:`_own_gateway_pid` for the
     question this command acts on.
     """
-    from gateway.status import live_gateway_pid_for_home
+    from hermes_cli.runtime_status import live_gateway_pid_for_home
     with contextlib.suppress(Exception):
         return live_gateway_pid_for_home(home)
     return None
@@ -283,7 +283,7 @@ def _own_gateway_pid(home: Path, owner) -> Optional[int]:
     if pid is None or owner is None or pid != owner.pid:
         return pid
     with contextlib.suppress(Exception):
-        from gateway.status import _same_hermes_home
+        from hermes_cli.runtime_status import _same_hermes_home
         return pid if _same_hermes_home(Path(owner.home), Path(home)) else None
     return None
 
@@ -859,7 +859,7 @@ def _write_manifest(default_home: Path, data: dict) -> None:
 
 def _reconcile_standalone_runtime(default_home: Path, secondary_names: set[str]) -> None:
     """Remove only status owned by multiplexing, without re-stamping gateway identity."""
-    from gateway.status import read_runtime_status
+    from hermes_cli.runtime_status import read_runtime_status
     from utils import atomic_json_write
 
     path = default_home / "gateway_state.json"

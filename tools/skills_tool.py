@@ -163,7 +163,7 @@ def _is_skill_disabled(*names: str, platform: str = None) -> bool:
         resolved_platform = platform or os.getenv("HERMES_PLATFORM")
         if not resolved_platform:
             with suppress(Exception):
-                from gateway.session_context import get_session_env
+                from agent.session_context import get_session_env
                 resolved_platform = get_session_env("HERMES_SESSION_PLATFORM") or ""
         platform_disabled = None
         if resolved_platform:

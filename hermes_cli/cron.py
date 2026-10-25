@@ -55,7 +55,7 @@ def _builtin_gateway_liveness() -> Optional[bool]:
         # scanning (find_gateway_pids transiently misses the gateway right after a restart, and
         # inside the gateway it must never say "not running"). A crashing probe is "unknown".
         with contextlib.suppress(Exception):
-            from gateway.status import is_gateway_runtime_lock_active
+            from hermes_cli.runtime_status import is_gateway_runtime_lock_active
             if is_gateway_runtime_lock_active():
                 return True
         from hermes_cli.gateway import find_gateway_pids, named_profile_served_by_running_multiplexer
@@ -551,7 +551,7 @@ def cron_status():
                 # Same false-alarm class the cronjob tool fixed (#95947): the pid scan can transiently miss
                 # a live gateway (just after a restart) while the runtime lock — held for exactly the
                 # gateway's lifetime — proves the ticker's process is alive.
-                from gateway.status import get_running_pid, is_gateway_runtime_lock_active
+                from hermes_cli.runtime_status import get_running_pid, is_gateway_runtime_lock_active
                 gateway_alive_via_lock = is_gateway_runtime_lock_active()
                 lock_pid = get_running_pid() if gateway_alive_via_lock else None
                 pids = [lock_pid] if lock_pid else pids
@@ -864,7 +864,7 @@ def _job_action(action: str, job_id: str, success_verb: str) -> int:
             # gateway/desktop session env (HERMES_SESSION_KEY); declare the channel stateless so
             # ``async_delivery_supported()`` gates it off and the run executes synchronously to completion
             # instead. See #86721.
-            from gateway.session_context import _SESSION_ASYNC_DELIVERY
+            from agent.session_context import _SESSION_ASYNC_DELIVERY
             _stateless_token = _SESSION_ASYNC_DELIVERY.set(False)
     try:
         result = _cron_api(action=action, job_id=job_id)

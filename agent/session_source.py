@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from gateway.session_context import get_session_env
+from agent.session_context import get_session_env
 
 # Sources that label the human conversation an interactive UI transport hosts. A finite ``hermes chat -q`` /
 # one-shot child spawned from such a session inherits HERMES_SESSION_SOURCE (the terminal tool bridges the
