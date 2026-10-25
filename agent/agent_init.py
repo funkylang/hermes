@@ -545,9 +545,10 @@ _CONTROL_STATE: Dict[str, Any] = {
     # batch — no interrupt, no new user turn (role alternation preserved).
     "_pending_steer": None,
     "_pending_steer_lock": threading.Lock,
-    # Active-turn redirect: keep the valid turn prefix, cancel only the in-flight request,
-    # rebuild the tail with the correction. Drained at a role-safe boundary.
-    "_pending_redirect": None,
+    # Interrupt/steer coordination lock: serialises ``interrupt()`` / ``halt()`` /
+    # ``clear_interrupt()`` writes to the interrupt state and the model-request-active
+    # bracket so a hard stop cannot race an in-flight toggle. (The old active-turn
+    # redirect text slot it once also protected was retired with the unified steering path.)
     "_pending_redirect_lock": threading.Lock,
     # Concurrent-tool worker tids: `_set_interrupt` on `_execution_thread_id` alone doesn't
     # reach ThreadPoolExecutor workers, so interrupt()/clear_interrupt() fan out to these.

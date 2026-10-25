@@ -433,67 +433,8 @@ class TestActiveTurnRedirectCheckpoint:
 
 
 class TestEmptyAssistantSanitizerConvergence:
-    """#88955 (revised): a no-visible-text redirect once persisted an EMPTY assistant
-    placeholder that the pre-call sanitizer re-healed on every later call (wire copy
-    only, so the loop never converged). The fix: placeholders carry non-empty content
-    ("The user is giving me some input."), which is not repairable — so the wire shape is
-    stable from the first replay onward."""
-
-    def test_redirect_placeholder_is_non_empty_and_sanitizer_stable(self):
-        """The steering placeholder row is appended by handle_stream_event as a plain
-        assistant row whose content is one of REDIRECT_PLACEHOLDER_TEXTS. That shape —
-        non-empty content, no sidecar — is what makes #88955 hold: the pre-call
-        sanitizer's empty-assistant repair cannot rewrite it on replay."""
-        from agent.agent_runtime_helpers import repair_empty_non_final_messages
-        from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXTS
-
-        for variant in REDIRECT_PLACEHOLDER_TEXTS:
-            # The exact row shape the unified mechanism appends at the steering boundary.
-            placeholder = {"role": "assistant", "content": variant}
-            correction = {"role": "user", "content": "Use Postgres instead."}
-            messages = [{"role": "user", "content": "start"}, placeholder, correction]
-
-            # Non-empty content that survives the variants set.
-            assert placeholder["content"] in REDIRECT_PLACEHOLDER_TEXTS, \
-                f"Placeholder content {placeholder['content']!r} not in expected variants"
-            # The correction is plain user text — no context to replay.
-            assert correction["role"] == "user"
-            assert correction["content"] == "Use Postgres instead."
-            assert "api_content" not in correction
-
-            # The sanitizer must leave the placeholder exactly as written (its repair path
-            # only fires on empty assistant rows).
-            healed = repair_empty_non_final_messages([dict(m) for m in messages])
-            healed_placeholder = healed[-2]
-            assert healed_placeholder["content"] == placeholder["content"], \
-                f"Sanitizer modified placeholder content: {healed_placeholder['content']!r}"
-            assert (
-                healed_placeholder["content"] != _INTERRUPTED_SANITIZER_REPAIR_PLACEHOLDER
-            )
-
-    def test_stored_redirect_placeholder_variant_survives_steering_consumption(self):
-        """Replay-parity (unified steering): handle_stream_event stores the chosen variant
-        on agent._redirect_placeholder_text at detection time; that single value drives
-        both the live display box and the persisted wire row. The steering-wait
-        consumption path (_apply_active_turn_redirect) must therefore NOT clear or
-        rewrite it, or the display/wire/replay copies would drift apart."""
-        from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXTS, _apply_active_turn_redirect
-
-        for variant in REDIRECT_PLACEHOLDER_TEXTS:
-            agent = _bare_agent()
-            agent._current_streamed_assistant_text = ""
-            agent._redirect_placeholder_text = variant
-            agent._steering_wait_completed = True  # Smart-steer path (unified delivery)
-            messages = [{"role": "user", "content": "start"}]
-
-            _apply_active_turn_redirect(agent, messages, "Change course.")
-
-            # The stored variant is intact for the display fallback and replay.
-            assert agent._redirect_placeholder_text == variant, (
-                f"Expected {variant!r} preserved, got {agent._redirect_placeholder_text!r}"
-            )
-            # And it still matches what the persisted row would carry.
-            assert variant in REDIRECT_PLACEHOLDER_TEXTS
+    """The pre-call sanitizer's empty-assistant repair must not disable the generic net for a
+    genuinely empty non-final assistant row (control test below)."""
 
     def test_empty_non_final_sanitizer_still_repairs_unmarked_empty_assistant(self):
         """Control: a genuinely empty non-final assistant with no provider-replay
@@ -665,12 +606,10 @@ class TestSteerClearedOnInterrupt:
         agent._tool_worker_threads_lock = None
 
         agent.steer("will be dropped")
-        agent._pending_redirect = "also drop this"
         assert agent._pending_steer == "will be dropped"
 
         agent.clear_interrupt(hard_cancel=True)
         assert agent._pending_steer is None
-        assert agent._pending_redirect is None
 
     def test_soft_clear_preserves_pending_steer(self):
         """A soft clear (redirect rebuild, error recovery, turn-boundary
@@ -687,17 +626,13 @@ class TestSteerClearedOnInterrupt:
         agent._tool_worker_threads_lock = None
 
         agent.steer("must survive the rebuild")
-        agent._pending_redirect = "correction"
 
         agent.clear_interrupt(preserve_redirect=True)
         assert agent._pending_steer == "must survive the rebuild"
-        # preserve_redirect semantics unchanged: the correction survives too.
-        assert agent._pending_redirect == "correction"
 
         # A plain soft clear (no flags) preserves the steer as well.
         agent.clear_interrupt()
         assert agent._pending_steer == "must survive the rebuild"
-        assert agent._pending_redirect is None
 
 
 class TestSteerSurvivesRedirectRebuild:

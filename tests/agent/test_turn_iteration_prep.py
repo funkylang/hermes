@@ -64,8 +64,8 @@ def test_back_to_back_restart_refunds_are_bounded(flag):
     assert [v.action for v in verdicts] == ["continue"] * MAX_RETRIES + ["break"]
     assert agent.iteration_budget.refunds == MAX_RETRIES
     assert verdicts[-1]._turn_exit_reason.endswith("restart_limit_exceeded")
-    # The correction that tripped the redirect cap is handed back as the next user turn.
-    assert agent.steered == (["last correction"] if flag == "restart_with_redirected_messages" else [])
+    # The redirect text slot is retired: nothing is handed back when the restart cap trips.
+    assert agent.steered == []
 
 
 def _interrupted_agent(tool_interrupt_reason):

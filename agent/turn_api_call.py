@@ -146,49 +146,18 @@ def perform_api_call(
         with _bracket:
             if _model_request_active is not None:
                 _model_request_active.clear()
-            # Smart-mode tool-phase deferral (queued in redirect() while tools ran / args
-            # streamed) leaves the in-flight response valid for its tools: let it fall through
-            # so begin_iteration applies the correction after the batch. Any OTHER pending
-            # redirect — upstream aborts and completed steering-waits (graceful newline stop) —
-            # means this response is stale and must be discarded and rebuilt.
-            from agent.interrupt_control import InterruptControlMixin
-
-            _smart_deferred = (
-                getattr(agent, "_executing_tools", False)
-                or getattr(agent, "_streaming_phase", "")
-                == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS
-            ) and getattr(agent, "_smart_steer_active", False)
-            _redirect_crossed_response = (
-                bool(agent._pending_redirect) if _redirect_lock is not None
-                else agent._has_pending_redirect()
-            ) and not _smart_deferred
-    if _redirect_crossed_response or getattr(agent, "_steering_wait_completed", False):
-        # If steering wait completed, preserve the reasoning text for the next iteration
-        if getattr(agent, "_steering_wait_completed", False):
-            logger.info("Steering wait completed - preserving reasoning for next API call")
-
-            # Stream-boundary signal for the CLI: close the open boxes and draw the
-            # redirect notice (consumes _steering_wait_ui_announce) so the continuation
-            # starts in fresh boxes — same channel as tool-round boundaries.
-            if getattr(agent, "stream_delta_callback", None):
-                agent._call_quietly(agent.stream_delta_callback, None)
+    if getattr(agent, "_steering_wait_completed", False):
+        # Steering wait completed at a newline boundary: handle_stream_event already appended the
+        # wire rows there, so discard this stale partial response, clear the wait markers and
+        # rebuild from the transcript (rows included). The None callback closes the open boxes
+        # so the continuation starts in fresh ones — same channel as tool-round boundaries.
+        logger.info("Steering wait completed - preserving reasoning for next API call")
+        if getattr(agent, "stream_delta_callback", None):
+            agent._call_quietly(agent.stream_delta_callback, None)
 
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
-
-        _steer_boundary_only = not (
-            bool(agent._pending_redirect) if _redirect_lock is not None
-            else agent._has_pending_redirect()
-        )
-        if _steer_boundary_only:
-            # Unified steering path: handle_stream_event already appended the wire rows at
-            # the boundary newline, so nothing is queued here. Discard this stale partial
-            # response, clear the wait markers, rebuild from the transcript (rows included).
-            agent._clear_steering_wait_markers()
-            _retry.restart_with_redirected_messages = True
-        elif agent.clear_interrupt(preserve_redirect=True):
-            _retry.restart_with_redirected_messages = True
-        else:
-            interrupted = True
+        agent._clear_steering_wait_markers()
+        _retry.restart_with_redirected_messages = True
         return _verdict("break")
     return _verdict("fallthrough")
 
@@ -208,18 +177,11 @@ def handle_api_interrupt(
     agent: Any, *, _retry: Any, thinking_spinner: Any, messages: Any, conversation_history: Any,
     api_start_time: Any, interrupted: Any, final_response: Any,
 ) -> ApiInterruptVerdict:
-    """``InterruptedError`` during the provider call: a pending redirect keeps its correction
-    queued for the outer-loop rebuild; otherwise keep any streamed partial text so the next
+    """``InterruptedError`` during the provider call: keep any streamed partial text so the next
     turn has a record of the half-finished reply."""
     from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 
     thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
-    # redirect() cancelled only this request: keep the correction queued, clear the
-    # cancellation bit, let the outer loop rebuild. Never materialize incomplete
-    # signed/encrypted reasoning items.
-    if agent._has_pending_redirect() and agent.clear_interrupt(preserve_redirect=True):
-        _retry.restart_with_redirected_messages = True
-        return ApiInterruptVerdict("break", thinking_spinner, interrupted, final_response)
     api_elapsed = time.time() - api_start_time
     agent._vprint(f"{agent.log_prefix}⚡ Interrupted during API call.", force=True)
     interrupted = True

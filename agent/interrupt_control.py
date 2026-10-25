@@ -160,11 +160,6 @@ class InterruptControlMixin:
         """Clear steering wait flags (called after reasoning is consumed)."""
         self._steer_completion_wait_active = False
         self._steering_wait_completed = False
-        # The steer has been consumed for message generation; clear the redirect so the
-        # response-cross check (_redirect_crossed_response) cannot re-trigger a duplicate
-        # restart through the same path and resend the identical prompt.
-        with _ic_lock(self, "_pending_redirect_lock"):
-            self._pending_redirect = None
 
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
@@ -229,7 +224,6 @@ class InterruptControlMixin:
             _fence_cancel_before_commit(
                 _fence(), when_in_flight=False, failure_log="Compression hard-cancel fence admission failed"
             )
-            self._pending_redirect = None
 
         # Codex watches a private interrupt event rather than Hermes' per-thread flag.
         _request_interrupt = _ic_codex_method(self, "request_interrupt")
@@ -285,7 +279,6 @@ class InterruptControlMixin:
             logger.info(
                 "Halt control word: turn stopped and model request aborted; running external tools preserved"
             )
-            self._pending_redirect = None
 
         # Codex app-server watches its own interrupt event.
         _request_interrupt = _ic_codex_method(self, "request_interrupt")
@@ -323,13 +316,14 @@ class InterruptControlMixin:
         drains — the pre-API inject, the post-batch append, or the finalizer's leftover handoff —
         instead of silently vanishing after the surface was told it was delivered."""
         with _ic_lock(self, "_pending_redirect_lock"):
-            if preserve_redirect and not _ic_slot(self, "_pending_redirect_lock", "_pending_redirect"):
+            if preserve_redirect:
+                # The old active-turn redirect text slot is retired: a pending correction is never
+                # queued there anymore, so a preserve request always declines — exactly as it did
+                # while the (always-empty) slot was consulted. Callers fall through to the abort path.
                 return False
             self._interrupt_requested = False
             self._interrupt_message = self._tool_interrupt_reason = None
             getattr(self, "_hard_interrupt_requested", threading.Event()).clear()
-            if not preserve_redirect:
-                self._pending_redirect = None
         self._interrupt_thread_signal_pending = False
         if self._execution_thread_id is not None:
             _set_interrupt(False, self._execution_thread_id)
@@ -367,11 +361,10 @@ class InterruptControlMixin:
 
         # Phase-aware behavior:
         - busy_input_mode "smart" + reasoning phase: wait for a newline boundary in the reasoning
-          (graceful stop via chat_completion_helpers), correction delivered through _pending_redirect
-        - busy_input_mode "smart" + tool execution / args streaming: no interrupt; correction rides
-          _pending_redirect until the batch completes, injected after the last tool result
-        - all other phases/modes: upstream immediate-abort of the model request
-        Smart-mode steers concatenate plainly (no decoration) in _pending_redirect.
+          (graceful stop via chat_completion_helpers); handle_stream_event delivers the wire rows.
+        - busy_input_mode "smart" + tool execution / args streaming: no interrupt; delivery runs
+          through the CLI user_input accumulator, drained after the batch as a user message.
+        - all other phases/modes: upstream immediate-abort of the model request.
         """
 
         if not text or not text.strip():
@@ -389,18 +382,15 @@ class InterruptControlMixin:
                 logger.debug("Codex app-server turn/steer failed", exc_info=True)
                 return False
 
-        # smart mode + tool execution / args streaming: defer steering until batch completes. The
-        # correction rides _pending_redirect with a consumption marker; begin_iteration injects it
-        # after the last tool result so it is wire-delivered as input for the next reasoning phase.
-        # Multiple steers concatenate plainly (no decoration) in smart mode.
+        # smart mode + tool execution / args streaming: defer steering until the batch completes.
+        # Delivery runs through the CLI user_input accumulator, drained in _finalize_tool_batch as a
+        # user message after the batch. Multiple steers accumulate there plainly (no decoration).
         if busy_input_mode == "smart" and (
             getattr(self, "_executing_tools", False)
             or self._get_streaming_phase() == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS
         ):
-            # Text entered here is NOT queued in _pending_redirect: doing so races the
-            # completing response in turn_api_call.py and gets the just-streamed tool
-            # calls discarded. Delivery runs through the CLI user_input accumulator,
-            # drained in _finalize_tool_batch as a user message after the batch.
+            # Text entered here is NOT queued on the agent: doing so races the completing response
+            # in turn_api_call.py and gets the just-streamed tool calls discarded.
             return True
 
         # Never kill a tool to deliver guidance; the steer drain puts it on the final tool result.
@@ -446,18 +436,6 @@ class InterruptControlMixin:
             # (already in ACTIVE_CLI.user_input) and let handle_stream_event close at the next
             # newline boundary regardless of phase.
             return True
-
-    def _has_pending_redirect(self) -> bool:
-        """Return whether an active-turn redirect is waiting to be applied."""
-        with _ic_lock(self, "_pending_redirect_lock"):
-            return bool(_ic_slot(self, "_pending_redirect_lock", "_pending_redirect"))
-
-    def _drain_pending_redirect(self) -> Optional[str]:
-        """Return and clear pending active-turn correction text."""
-        with _ic_lock(self, "_pending_redirect_lock"):
-            text = _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
-            self._pending_redirect = None
-        return text
 
     def _drain_pending_steer(self) -> Optional[str]:
         """Return the pending steer text (if any) and clear the slot; None when nothing is pending."""

@@ -288,36 +288,25 @@ class CLIStreamMixin:
         ChatConsole().print(self._format_submitted_user_message_preview(text))
 
     def _print_pending_redirection(self) -> None:
-        """If steering/redirect text is pending, draw it as a user input box.
+        """If steer text is pending, draw it as a user input box.
 
         Called at stream-box open sites (reasoning header / response header) so the user's
         mid-turn message appears on screen in wire order, before the new stream draws.
         Only invoked in "smart" busy-input mode (guards at the call sites).
 
-        Data sources, in priority order:
-          1. _pending_redirect — a mid-turn correction; additionally draws the
-             injected-assistant box before the user row.
-          2. _pending_steer — a steer.
-        Both are delivered with the same plain user-row logic below.
+        Data source: ``_pending_steer`` — a steer queued via ``agent.steer()`` (the /steer
+        command and gateway steer mode), drained and delivered here as a plain user row.
         """
         agent = getattr(self, "agent", None)
         if agent is None or not hasattr(agent, "_drain_pending_steer"):
             return
 
-        # Redirect corrections are consumed early by begin_iteration (wire delivery); it stashes
-        # the text there for this one-shot echo. Steer text we still drain + deliver ourselves.
-        _echo_text = getattr(agent, "_steer_echo_text", None)
-        _is_redirect = bool(_echo_text)
-        if _is_redirect:
-            agent._steer_echo_text = None
-        if not _echo_text:
-            _echo_text = agent._drain_pending_steer()
+        # Drain the queued steer and echo it; deliver it to the prompt messages below.
+        _echo_text = agent._drain_pending_steer()
         if not _echo_text:
             return
         try:
             from cli import ChatConsole, _accent_hex, _cprint
-            if _is_redirect:
-                self._print_injected_assistant_box(agent)
             # Blank line above + second divider below mirror the normal submit
             # path (cli_tui_runtime_mixin.py:112-113, cli_chat_turn_mixin.py:97).
             _cprint("")
@@ -332,18 +321,15 @@ class CLIStreamMixin:
         # steer marker): our display path owns this steering, and after a tool result the tail
         # is role-alternation-safe. If the tail isn't a tool message we can't guarantee that,
         # so hand it back for the agent's pre-API drain to place.
-        # Steer text is delivered to messages HERE; redirected text was already delivered by
-        # begin_iteration (stashed above only for this echo) — never append it twice.
-        if not _is_redirect:
-            try:
-                from agent.agent_runtime_helpers import _requeue_pending_steer
-                messages = getattr(agent, "_messages", None)
-                if isinstance(messages, list) and len(messages) >= 1 and messages[-1].get("role") != "user":
-                    messages.append({"role": "user", "content": _echo_text})
-                else:
-                    _requeue_pending_steer(agent, _echo_text)
-            except Exception:
-                logging.debug("steering user-row delivery failed", exc_info=True)
+        try:
+            from agent.agent_runtime_helpers import _requeue_pending_steer
+            messages = getattr(agent, "_messages", None)
+            if isinstance(messages, list) and len(messages) >= 1 and messages[-1].get("role") != "user":
+                messages.append({"role": "user", "content": _echo_text})
+            else:
+                _requeue_pending_steer(agent, _echo_text)
+        except Exception:
+            logging.debug("steering user-row delivery failed", exc_info=True)
 
     def _stream_reasoning_delta(self, text: str) -> None:
         """Stream reasoning tokens into a dim box above the response.
@@ -586,64 +572,6 @@ class CLIStreamMixin:
                 self._invalidate()
             except Exception:
                 pass
-
-    def _print_injected_assistant_box(self, agent) -> None:
-        """At a steering-redirect stream boundary, draw the redirect notice in a Hermes box.
-
-        Reuses the standard completed-response-box look (header + colored body + footer via
-        _cprint), so it matches real response boxes rather than a bespoke Panel. Runs between
-        ``_flush_stream()`` and ``_reset_stream_state()``, matching on-screen wire order.
-        """
-        if agent is None or not getattr(agent, "_steering_wait_ui_announce", False):
-            return
-        agent._steering_wait_ui_announce = False
-        try:
-            from cli import _ACCENT, _RST, _cprint
-            from datetime import datetime
-            # Deferred: keeps the import graph acyclic at module load time.
-            from agent.conversation_loop import REDIRECT_PLACEHOLDER_TEXT
-            # Label + body color straight from the active skin (fallbacks mirror the defaults).
-            try:
-                from hermes_cli.skin_engine import get_active_skin
-                _skin = get_active_skin()
-                label = _skin.get_branding("response_label", "☤ Hermes")
-                _text_hex = _skin.get_color("banner_text", "#FFF8DC")
-            except Exception:
-                label = "☤ Hermes"
-                _text_hex = "#FFF8DC"
-            # True-color ANSI for the body so it matches streamed response text.
-            try:
-                _r, _g, _b = (int(_text_hex[i:i + 2], 16) for i in (1, 3, 5))
-                body_ansi = f"\033[38;2;{_r};{_g};{_b}m"
-            except (ValueError, IndexError):
-                body_ansi = ""
-            if self.show_timestamps:
-                label = f"{label}{datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
-            w = self._scrollback_box_width()
-            inner = max(w - 2, 1)
-            fill = w - 2 - self._status_bar_display_width(label)
-            # Header (leading \n mirrors the streaming header so spacing is identical).
-            _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
-            # Body: wrap placeholder text to the inner width.
-            # Replay-parity: read the variant stored on the agent when this steering was
-            # detected (set in chat_completion_helpers) so display matches what is replayed.
-            _text = str(getattr(agent, "_redirect_placeholder_text", None) or REDIRECT_PLACEHOLDER_TEXT or "")
-            _line_width, _line, cur_w = [], "", 0
-            for ch in _text:
-                from prompt_toolkit.utils import get_cwidth as _cw
-                _wch = _cw(ch)
-                if cur_w + _wch > inner and _line:
-                    _line_width.append(_line); _line, cur_w = "", 0
-                _line += ch; cur_w += _wch
-            if _line:
-                _line_width.append(_line)
-            for _l in _line_width or [""]:
-                _cprint(f"{body_ansi}{_l}{_RST}" if body_ansi else f"{_l}")
-            # Footer.
-            _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
-        except Exception:
-            # A broken notification must never break the turn.
-            logging.debug("steering placeholder box render failed", exc_info=True)
 
     def _flush_stream(self) -> None:
         """Emit any remaining partial line from the stream buffer and close the box."""

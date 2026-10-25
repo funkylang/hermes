@@ -39,34 +39,6 @@ from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
 from hermes_cli.cli_render import _cprint, _terminal_columns as _line_terminal_columns
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from agent.turn_retry_state import TurnRetryState
-# Placeholder assistant line appended by a mid-turn redirect: keeps role alternation
-# on replay and tells the model (and the CLI) that user input is arriving right after.
-# Variants are randomly chosen per steering so the model never pattern-locks onto one
-# fixed phrase (replay-parity: the variant is stored on agent._redirect_placeholder_text
-# and used verbatim for both the live display box and the persisted message).
-REDIRECT_PLACEHOLDER_TEXTS = (
-    # Old variants (replaced by *...* style, random pick):
-    # "The user is giving me some input.",
-    # "I must stop now and listen to the user.",
-    # "I hear the user speaking.",
-    # "Maybe I should listen to the user.",
-    # "Let me wait for additional user input.",
-    "*listening*",
-    "*here*",
-    "*reading...*",
-    "*noting this*",
-    "*pauses to read*",
-)
-
-
-def _random_redirect_placeholder() -> str:
-    """Pick a random steering placeholder variant; keeps display and replay on the same text."""
-    import random as _random  # local: conversation_loop is imported very early, avoid a heavy dep chain
-    return _random.choice(REDIRECT_PLACEHOLDER_TEXTS)
-
-
-# Legacy single-variant constant, kept for back-compat (old persisted messages match it).
-REDIRECT_PLACEHOLDER_TEXT = REDIRECT_PLACEHOLDER_TEXTS[0]
 # Phase helpers of the turn loop, bound at import so a source-tree swap cannot load a
 # skewed phase mid-turn.
 from agent.turn_api_call import handle_api_interrupt, nous_rate_limit_guard, perform_api_call
