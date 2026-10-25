@@ -68,29 +68,6 @@ def cmd_memory(args):
         memory_command(args)
 
 
-# (args attribute, acp flag) — forwarded in this order.
-_ACP_FLAGS = (
-    ("acp_version", "--version"),
-    ("check", "--check"),
-    ("setup", "--setup"),
-    ("setup_browser", "--setup-browser"),
-    ("assume_yes", "--yes"))
-
-
-def cmd_acp(args):
-    """Launch Hermes Agent as an ACP server."""
-    try:
-        from acp_adapter.entry import main as acp_main
-        acp_main([flag for attr, flag in _ACP_FLAGS if getattr(args, attr, False)])
-    except ImportError as e:
-        print("The ACP server can't start: its protocol packages are missing from this install.", file=sys.stderr)
-        print("From the Hermes environment, run: "
-              f"{install_hint('acp')}", file=sys.stderr)
-        print("Then restart Hermes.", file=sys.stderr)
-        print(f"Details: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
 def cmd_tools(args):
     from hermes_cli.main import _require_tty
     action = getattr(args, "tools_action", None)

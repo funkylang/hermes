@@ -35,7 +35,7 @@ from typing import Callable
 
 import pytest
 
-from tests.e2e.core.parity import _drive_acp, _drive_cli, _drive_cron, _drive_gateway, _drive_rpc
+from tests.e2e.core.parity import _drive_cli, _drive_cron, _drive_gateway, _drive_rpc
 from tests.e2e.core.parity._helpers import (
     FINAL_ANSWER,
     DriveResult,
@@ -72,7 +72,6 @@ DRIVERS: dict[str, Driver] = {
     "serve (Desktop WS)": _drive_rpc.drive_serve,
     "gateway (fake adapter)": _drive_gateway.drive_gateway,
     "api_server": _drive_gateway.drive_api_server,
-    "acp (stdio)": _drive_acp.drive_acp,
     "cron (run-now)": _drive_cron.drive_cron,
 }
 

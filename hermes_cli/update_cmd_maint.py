@@ -618,13 +618,6 @@ def _ensure_fhs_path_guard() -> None:
         print("    (reload your shell or run 'source ~/.bashrc' to pick it up)")
 
 
-def _ensure_acp_launcher() -> None:
-    """Historical export; launcher policy belongs to the launcher owner."""
-    from hermes_cli import _launchers
-    from hermes_cli.update_cmd import _m
-    _launchers.expose_cli(_m().PROJECT_ROOT)
-
-
 _BACKUP_MODE_ALIASES = {
     "off": "off", "false": "off", "none": "off", "disabled": "off",
     "full": "full", "zip": "full", "true": "full",
