@@ -90,7 +90,7 @@ def _run_first_time_quick_setup(config: dict, hermes_home, is_existing: bool):
     everything else gets defaults."""
     from hermes_cli.setup import (
         _apply_default_agent_settings, _info, print_header, print_info, _print_setup_summary, print_success,
-        print_warning, prompt_choice, save_config, setup_gateway, setup_terminal_backend
+        print_warning, prompt_choice, save_config, setup_terminal_backend
     )
     # Step 1: Nous Portal — OAuth login + model selection (provider set to "nous" by the save).
     print_header("Nous Portal", gap=True)
@@ -115,24 +115,9 @@ def _run_first_time_quick_setup(config: dict, hermes_home, is_existing: bool):
     _apply_default_agent_settings(config)
     save_config(config)
 
-    # Step 4: Offer messaging gateway setup
-    print()
-    gateway_choice = prompt_choice("Connect a messaging platform? (Telegram, Discord, etc.)", [
-        "Set up messaging now (recommended)", "Skip — set up later with 'hermes setup gateway'",
-    ], 0)
-    if gateway_choice == 0:
-        setup_gateway(config)
-        save_config(config)
-    else:
-        # Messaging skipped — still install/start the gateway service so cron jobs run and
-        # platforms come alive as soon as tokens are added later (e.g. via `hermes import`).
-        from hermes_cli.gateway import ensure_gateway_service
-        ensure_gateway_service(context="setup")
     print()
     print_success("Setup complete! You're ready to go.")
     _info(None, "  Configure all settings:    hermes setup")
-    if gateway_choice != 0:
-        print_info("  Connect Telegram/Discord:  hermes setup gateway")
     _print_macos_fda_tip()
     print()
     _print_setup_summary(config, hermes_home)
@@ -272,9 +257,9 @@ def _run_blank_slate_setup(config: dict, hermes_home, is_existing: bool):
 
 
 def _blank_slate_walkthrough(config: dict, hermes_home):
-    """Opt-in walkthrough for Blank Slate: skills, tools, plugins, MCP, gateway."""
+    """Opt-in walkthrough for Blank Slate: skills, tools, plugins, MCP."""
     from hermes_cli.setup import (
-        _info, print_header, print_info, print_success, print_warning, prompt_yes_no, save_config, setup_gateway,
+        _info, print_header, print_info, print_success, print_warning, prompt_yes_no, save_config,
     )
     # Bundled skills — default to NONE, offer to seed all
     print_header("Bundled Skills", gap=True)
@@ -324,10 +309,6 @@ def _blank_slate_walkthrough(config: dict, hermes_home):
         print_header(header, gap=True)
         print_info(yes_msg if prompt_yes_no(question, default=False) else no_msg)
 
-    # Optional messaging gateway
-    print()
-    if prompt_yes_no("Connect a messaging platform (Telegram, Discord, …)?", default=False):
-        setup_gateway(config)
     save_config(config)
     _blank_slate_done(config, hermes_home, "  Enable more tools:   hermes tools")
 

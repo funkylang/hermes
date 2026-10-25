@@ -340,7 +340,6 @@ from typing import Optional
 
 
 from hermes_cli.subcommands.cron import build_cron_parser
-from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.setup import build_setup_parser
@@ -796,6 +795,7 @@ from hermes_cli.main_platform_setup import (
     cmd_whatsapp_cloud,
 )
 from hermes_cli.process_identity import is_desktop_owned_backend as _is_desktop_owned_backend
+from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.main_provider_setup import (
     _GENERIC_API_KEY_PROVIDERS,
     _aux_config_menu,
@@ -808,12 +808,7 @@ from hermes_cli.main_provider_setup import (
     _prompt_provider_choice,
     _remove_custom_provider,
 )
-from hermes_cli.main_tui_launch import (
-    _launch_tui,
-    _pin_kanban_board_env,
-    _resolve_use_tui,
-    _sync_bundled_skills_quietly,
-)
+from hermes_cli.kanban_db import _pin_kanban_board_env  # noqa: F401
 
 
 def _is_termux_startup_environment(env: dict[str, str] | None = None) -> bool:
@@ -1645,10 +1640,9 @@ def cmd_chat(args):
     _apply_user_config_bypass(args)
     _guard_noninteractive_user_config(args)
     from hermes_cli.stream_json import stream_json_requested
-    # Structured stdout is a non-interactive protocol: it overrides HERMES_TUI/display.interface too.
-    use_tui = False if stream_json_requested(args) else _resolve_use_tui(args)
-
-    _resolve_chat_session_args(args, use_tui)
+    # Structured stdout is a non-interactive protocol: validates args and forces quiet mode.
+    stream_json_requested(args)
+    _resolve_chat_session_args(args, False)
 
     _warn_retired_xai_models()
 
@@ -1696,16 +1690,6 @@ def cmd_chat(args):
     _confirm_startup_expensive_model_override(args)
 
     passthrough = {k: getattr(args, k, d) for k, d in _CHAT_PASSTHROUGH}
-    if use_tui:
-        _launch_tui(
-            passthrough.pop("resume"),
-            tui_dev=getattr(args, "tui_dev", False),
-            native_mode=getattr(args, "tui_native", False) or None,
-            model=getattr(args, "model", None),
-            accept_hooks=getattr(args, "accept_hooks", False),
-            **passthrough,
-        )
-
     _read_query_file(args)
 
     safe_mode = getattr(args, "safe_mode", False)
@@ -1744,15 +1728,6 @@ def cmd_chat(args):
         if emit_partial_update_hint(e):
             sys.exit(1)
         raise
-
-
-def cmd_gateway(args):
-    """Gateway management commands."""
-    _sync_bundled_skills_quietly()
-
-    from hermes_cli.gateway import gateway_command
-
-    gateway_command(args)
 
 
 def cmd_proxy(args):
@@ -1799,7 +1774,6 @@ cmd_dump = _forward_command("cmd_dump", "hermes_cli.dump", "run_dump", doc='Dump
 cmd_debug = _forward_command("cmd_debug", "hermes_cli.debug", "run_debug", doc='Debug tools (share report, etc.).')
 cmd_skin = _forward_command("cmd_skin", "hermes_cli.skin_cmd", "skin_command", doc='Skin management (list / use / set).')
 cmd_import = _forward_command("cmd_import", "hermes_cli.backup", "run_import", forward_return=True, doc='Restore a Hermes backup from a zip file.')
-cmd_gateway_enroll = _forward_command("cmd_gateway_enroll", "hermes_cli.gateway_enroll", "cmd_gateway_enroll", doc='Enroll a self-hosted gateway with a relay connector.')
 cmd_prompt_size = _forward_command("cmd_prompt_size", "hermes_cli.prompt_size", "cmd_prompt_size", doc='Show a byte/char breakdown of the system prompt + tool schemas.')
 cmd_pairing = _forward_command("cmd_pairing", "hermes_cli.pairing", "pairing_command")
 cmd_plugins = _forward_command("cmd_plugins", "hermes_cli.plugins_cmd", "plugins_command")
@@ -2324,25 +2298,13 @@ def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
 _AGENT_COMMANDS = {None, "chat", "rl"}
 _AGENT_SUBCOMMANDS = {
     "cron": ("cron_command", {"run", "tick"}),
-    "gateway": ("gateway_command", {"run"}),
     "mcp": ("mcp_action", {"serve"}),
 }
 
 
 def _is_tui_chat_launch(args) -> bool:
-    if getattr(args, "tui", False) or os.environ.get("HERMES_TUI") == "1":
-        return True
-    # The chat path decides TUI-vs-classic via _resolve_use_tui (--cli/--tui
-    # flags, TTY gate, HERMES_TUI env, display.interface config). Bare
-    # `hermes`/`hermes chat` with a TUI display config was previously missed
-    # here, so the wrapper pre-warmed its own MCP discovery while the TUI
-    # gateway (spawned moments later) ran a second one — an idle stdio MCP
-    # server copy held dead for the whole session. Only chat commands can
-    # launch the TUI; other commands (mcp serve, gateway, acp, cron) keep
-    # their own discovery behavior untouched.
-    if getattr(args, "command", None) not in {None, "chat"}:
-        return False
-    return _resolve_use_tui(args)
+    """Always False — the TUI launch path was removed with tui_gateway."""
+    return False
 
 
 def _agent_subcommand_selected(args) -> bool:
@@ -2661,38 +2623,8 @@ def _try_termux_fast_cli_launch() -> bool:
 
 
 def _try_termux_fast_tui_launch() -> bool:
-    """Launch obvious Termux TUI invocations before building every subparser.
-
-    `hermes --tui` is the hot path on phones and the TUI immediately execs
-    Node, so the full parser's command-module imports are pure waste there.
-    """
-    if not _is_termux_startup_environment():
-        return False
-
-    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
-        return False
-
-    wants_tui = _wants_tui_early(sys.argv[1:])
-    if not wants_tui:
-        return False
-
-    first = _first_positional_argv()
-    if first not in {None, "chat"}:
-        return False
-
-    parser = _light_chat_parser()
-    args = parser.parse_args(_coalesce_session_name_args(sys.argv[1:]))
-
-    # Preserve top-level behaviours whose semantics are not "launch chat/TUI".
-    if getattr(args, "version", False) or getattr(args, "oneshot", None):
-        return False
-    if getattr(args, "command", None) not in {None, "chat"}:
-        return False
-    if not _resolve_use_tui(args):
-        return False
-
-    cmd_chat(args)
-    return True
+    """Always False — the TUI launch path (and tui_gateway) was removed."""
+    return False
 
 
 def _advertise_agent_env() -> None:
@@ -2782,9 +2714,7 @@ def _build_cli_parser():
     build_egress_parser(subparsers)
     build_migrate_parser(subparsers)
     build_codex_runtime_parser(subparsers)
-    build_gateway_parser(
-        subparsers, cmd_gateway=cmd_gateway, cmd_proxy=cmd_proxy, cmd_gateway_enroll=cmd_gateway_enroll
-    )
+    build_gateway_parser(subparsers, cmd_proxy=cmd_proxy)
 
     # LSP is optional — a registration failure must not break the CLI.
     try:

@@ -62,7 +62,7 @@ def detect_service_manager() -> ServiceManagerKind:
     """
     # Deferred so importing this module (Protocol type, validate_profile_name) doesn't drag in
     # the whole gateway dependency graph.
-    from hermes_cli.gateway import is_macos, is_windows, supports_systemd_services
+    from hermes_cli.platform_compat import is_macos, is_windows, supports_systemd_services
     # Gate on _s6_running() alone, NOT is_container(): the latter only detects Docker/Podman/lxc
     # and is False on Fly's Firecracker microVMs even though s6-overlay is PID 1 there — that
     # made the s6 dispatch inert on Fly, so `hermes gateway start` spawned a foreground gateway
@@ -202,10 +202,11 @@ class WindowsServiceManager(_HostServiceManager):
         )
 
     def is_running(self, name: str) -> bool:
-        from hermes_cli.gateway import find_gateway_pids
-        if not self._backend_module().is_installed():
+        # No messaging daemon exists anymore; service liveness is the backend module's concern.
+        try:
+            return self._backend_module().is_running() if hasattr(self._backend_module(), 'is_running') else False
+        except Exception:
             return False
-        return bool(find_gateway_pids())
 
 
 def get_service_manager() -> ServiceManager:

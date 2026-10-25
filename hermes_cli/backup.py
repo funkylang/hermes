@@ -1004,45 +1004,7 @@ def run_import(args) -> Optional[int]:
             print("Note: The hermes-agent codebase was not included in the backup.")
             print("  If this is a fresh install, run: hermes update")
 
-        if restored_profiles:
-            gw_profiles = [n for n, _ in restored_profiles]
-            print("\nTo re-enable gateway services for profiles:")
-            for pname in gw_profiles:
-                print(f"  hermes -p {pname} gateway install")
 
-        # Bring the restored install to life: the backup may contain bot
-        # tokens and registered cron jobs, but they're inert without a
-        # gateway process. Install/start the service automatically (a
-        # platform-less gateway is a supported mode, so this is safe even
-        # for backups with no messaging config). Best-effort and prompt-free;
-        # failures print a manual fallback and never fail the import.
-        native_default = _get_platform_default_hermes_home()
-        default_has_install = any(
-            (native_default / marker).exists()
-            for marker in ("config.yaml", ".env", "state.db")
-        )
-        # A restore into a sandbox or profile home must not silently install
-        # a second gateway pointed at it — on the default service name that
-        # would shadow or hijack the machine's primary install. Only revive
-        # the service automatically when the restore landed in the default
-        # home, or when no other install exists on this machine.
-        if hermes_root != native_default and default_has_install:
-            print(
-                "\nRestored into a non-default home; leaving the gateway service "
-                "alone to avoid clashing with the install at "
-                f"{native_default}."
-            )
-            print("To start a gateway for this home, run:  hermes gateway install")
-        else:
-            try:
-                from hermes_cli.gateway import ensure_gateway_service, _is_service_running
-
-                if not _is_service_running():
-                    print()
-                    ensure_gateway_service(context="import")
-            except Exception:
-                print("\nStart the gateway to activate cron jobs and messaging:")
-                print("  hermes gateway install")
 
         if errors:
             print(f"Import incomplete: {len(errors)} file(s) were not restored (see Warnings above). "

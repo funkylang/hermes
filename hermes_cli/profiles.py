@@ -829,11 +829,8 @@ def _served_by_running_multiplexer(profile_name: str) -> bool:
 
     Single shared lookup with the named-profile start guard and cron liveness (#97120).
     """
-    try:
-        from hermes_cli.gateway import named_profile_served_by_running_multiplexer
-        return named_profile_served_by_running_multiplexer(profile_name)
-    except Exception:
-        return False
+    # No messaging daemon exists anymore: a profile is never served by a multiplexer.
+    return False
 
 
 # In-process skill-count cache. Counting walks every skill's sub-tree (~4 fs calls per
@@ -1530,8 +1527,7 @@ def _finish_profile_layout(profile_dir: Path, *, no_skills: bool, clone_all: boo
 
 
 def _notify_multiplexer(canon: str) -> None:
-    from hermes_cli.gateway_multiplex_served import notify_multiplexer_profiles_changed
-    notify_multiplexer_profiles_changed(canon)
+    """No-op since the multiplexer daemon was removed."""
 
 
 def _purge_identity(canon: str) -> bool:
@@ -1546,11 +1542,8 @@ def _purge_identity(canon: str) -> bool:
 def _live_default_multiplexer() -> bool:
     """True when a live default gateway has recorded a served-profile set: every dir under
     profiles/ is then served by it, so a profile-identity change must be unrouted first."""
-    try:
-        from hermes_cli.gateway_multiplex_served import recorded_served_profiles
-        return recorded_served_profiles() is not None
-    except Exception:
-        return False
+    # No messaging daemon exists anymore: no multiplexer records served profiles.
+    return False
 
 
 def seed_profile_skills(profile_dir: Path, quiet: bool = False) -> Optional[dict]:
@@ -1958,89 +1951,15 @@ def _s6_runtime_manager():
 
 
 def _maybe_register_gateway_service(profile_name: str) -> None:
-    """Register a profile's gateway with s6 inside the container. Best-effort: profile
-    creation must not fail over a supervision-tree hiccup; `gateway start` re-registers.
-
-    Port selection: each supervised profile gateway loads its own ``HERMES_HOME`` and binds the port
-    resolved by ``gateway/config.py`` from that profile's environment — ``API_SERVER_PORT`` (or
-    ``platforms.api_server.extra.port`` in the profile's ``config.yaml``), defaulting to 8642. There is no
-    ``[gateway] port`` key and no Python-side allocator (PR #30136 review item I5 retired the
-    SHA-256-derived range [9200, 9800) as dead code), so two profiles that both leave the port at its
-    default will both try to bind 8642 — give each profile a distinct ``API_SERVER_PORT`` in its ``.env``.
-    """
-    mgr = _s6_runtime_manager()
-    if mgr is None:
-        return
-    try:
-        mgr.register_profile_gateway(profile_name, start_now=False)
-    except ValueError:
-        pass  # already registered (e.g. the container-boot reconciler brought up a stale slot)
-    except Exception as exc:
-        print(f"⚠ Could not register s6 gateway service: {exc}")
+    """No-op since the s6 messaging-gateway daemon was removed."""
 
 
 def _maybe_unregister_gateway_service(profile_name: str) -> None:
-    """Tear down a profile's s6 gateway service inside the container; host no-op, idempotent."""
-    mgr = _s6_runtime_manager()
-    if mgr is None:
-        return
-    try:
-        mgr.unregister_profile_gateway(profile_name)
-    except Exception as exc:
-        print(f"⚠ Could not unregister s6 gateway service: {exc}")
+    """No-op since the s6 messaging-gateway daemon was removed."""
 
 
 def _cleanup_gateway_service(name: str, profile_dir: Path) -> bool:
-    """Disable and remove systemd/launchd service for a profile; True when a unit was removed."""
-    import platform as _platform
-
-    # The service name follows get_hermes_home(): bind the override (the seam a multiplexed
-    # dashboard/tui-gateway process reads) and mirror the env for identity-file readers, so a
-    # DELETE from a multi-profile dashboard names THIS profile's unit, never the host's bare one.
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-    old_home = os.environ.get("HERMES_HOME")
-    home_token = set_hermes_home_override(str(profile_dir))
-    try:
-        os.environ["HERMES_HOME"] = str(profile_dir)
-        from hermes_cli.gateway import get_service_name, get_launchd_plist_path, user_systemd_unit_dir
-
-        def _run(*cmd: str) -> None:
-            subprocess.run(list(cmd), capture_output=True, check=False, timeout=10)
-
-        from hermes_cli.profiles_service_cleanup import remove_system_systemd_unit, remove_windows_task
-
-        system = _platform.system()
-        removed = False
-        if system == "Linux":
-            svc_name = get_service_name()
-            svc_file = user_systemd_unit_dir() / f"{svc_name}.service"
-            if svc_file.exists():
-                _run("systemctl", "--user", "disable", svc_name)
-                _run("systemctl", "--user", "stop", svc_name)
-                svc_file.unlink(missing_ok=True)
-                _run("systemctl", "--user", "daemon-reload")
-                print(f"✓ Service {svc_name} removed")
-                removed = True
-            # `gateway install --system` writes the same name under /etc; a survivor there
-            # restarts the removed profile at boot exactly like the user unit at login.
-            removed = remove_system_systemd_unit() or removed
-        elif system == "Darwin":
-            plist_path = get_launchd_plist_path()
-            if plist_path.exists():
-                _run("launchctl", "unload", str(plist_path))
-                plist_path.unlink(missing_ok=True)
-                print("✓ Launchd service removed")
-                removed = True
-        elif system == "Windows":
-            removed = remove_windows_task()
-        return removed
-    except Exception as e:
-        print(f"⚠ Service cleanup: {e}")
-    finally:
-        reset_hermes_home_override(home_token)
-        os.environ.pop("HERMES_HOME", None)
-        if old_home is not None:
-            os.environ["HERMES_HOME"] = old_home
+    """No-op since the messaging-gateway daemon was removed; no service units exist."""
     return False
 
 
