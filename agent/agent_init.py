@@ -541,10 +541,6 @@ _CONTROL_STATE: Dict[str, Any] = {
     "_client_lock": threading.RLock,
     "_model_request_active": threading.Event,
     "_supports_active_turn_redirect": True,
-    # /steer: the drain hook appends the note to the last tool result after the current
-    # batch — no interrupt, no new user turn (role alternation preserved).
-    "_pending_steer": None,
-    "_pending_steer_lock": threading.Lock,
     # Interrupt/steer coordination lock: serialises ``interrupt()`` / ``halt()`` /
     # ``clear_interrupt()`` writes to the interrupt state and the model-request-active
     # bracket so a hard stop cannot race an in-flight toggle. (The old active-turn

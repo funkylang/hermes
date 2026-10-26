@@ -21,7 +21,7 @@ from agent.message_sanitization import (
 )
 from agent.message_metadata import (
     TOOL_CALL_UIDS, merge_tool_call_uids, per_occurrence_tool_call_uids, record_absorbed_message)
-from agent.prompt_builder import STEER_DISPLAY_KIND, steer_user_row
+from agent.prompt_builder import STEER_DISPLAY_KIND
 from agent.tool_dispatch_helpers import _trajectory_normalize_msg, make_tool_result_message
 from agent.think_scrubber import THINK_TAG_NAMES
 from agent.trajectory import convert_scratchpad_to_think
@@ -3767,64 +3767,6 @@ def extract_api_error_context(error: Exception) -> Dict[str, Any]:
     return context
 
 
-def _requeue_pending_steer(agent, steer_text: str) -> None:
-    """Put drained steer text back so the caller's fallback delivers it as a next-turn user message."""
-    # Under the lock the slot is read directly: an initialized agent always has both attributes, so a
-    # missing ``_pending_steer`` there is a real bug and must fail loud. The lock-less branch only
-    # exists for test stubs built via ``object.__new__`` that skipped ``__init__``.
-    _lock = getattr(agent, "_pending_steer_lock", None)
-    if _lock is not None:
-        with _lock:
-            if agent._pending_steer:
-                agent._pending_steer = agent._pending_steer + "\n" + steer_text
-            else:
-                agent._pending_steer = steer_text
-    else:
-        existing = getattr(agent, "_pending_steer", None)
-        agent._pending_steer = (existing + "\n" + steer_text) if existing else steer_text
-
-
-def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: int) -> None:
-    """Persist any pending /steer text as a standalone user message.
-
-    Called at the end of a tool-call batch, before the next API call.
-
-    The steer is emitted as a NEW ``role:"user"`` message appended after the
-    last tool result (marker text included), so:
-
-    - the model still sees the self-describing out-of-band marker (same text,
-      same provenance semantics);
-    - message-role alternation stays legal — ``assistant(tool_calls) → tool →
-      user`` is the documented "user jumped in mid-run" pattern that
-      ``repair_message_sequence`` deliberately keeps;
-    - the appended dict carries no ``_DB_PERSISTED_MARKER`` yet, so the next
-      ``_flush_messages_to_session_db`` writes it to the session store — the
-      steer text finally becomes part of the durable transcript instead of
-      being smeared onto an already-persisted tool row that append-only
-      persistence never rewrites (replayed histories then diverge from the
-      live request bytes and break the provider prompt cache).
-    """
-    if num_tool_msgs <= 0 or not messages:
-        return
-    steer_text = agent._drain_pending_steer()
-    if not steer_text:
-        return
-    # Skip non-tool messages in the tail in case something else is appended at the boundary.
-    tail = range(len(messages) - 1, max(len(messages) - num_tool_msgs - 1, -1), -1)
-    target = next((messages[j] for j in tail if isinstance(messages[j], dict) and messages[j].get("role") == "tool"), None)
-    if target is None:
-        # No tool result in this batch (e.g. all skipped by interrupt);
-        # requeue so the fallback path delivers it as a normal next-turn
-        # user message (which persists like any other user turn).
-        _requeue_pending_steer(agent, steer_text)
-        return
-    messages.append(steer_user_row(steer_text))
-    _ra().logger.info(
-        "Delivered /steer to agent after tool batch (%d chars) as new user message: %s", len(steer_text),
-        steer_text[:120] + ("..." if len(steer_text) > 120 else ""),
-    )
-
-
 def _shutdown_socket(sock: Any) -> None:
     """``shutdown(SHUT_RDWR)`` WITHOUT closing the FD. ``close()`` from a non-owner thread is
     unsafe: the SSL BIO caches the raw FD, the kernel recycles it, and a flushed TLS record lands
@@ -3863,6 +3805,6 @@ __all__ = [
     "plan_cache_sections_for_destination", "anthropic_prompt_cache_policy", "create_openai_client",
     "switch_model", "invoke_tool", "repair_tool_call", "sanitize_api_messages",
     "looks_like_codex_intermediate_ack", "copy_reasoning_content_for_api",
-    "extract_api_error_context", "apply_pending_steer_to_tool_results", "_iter_pool_sockets",
+    "extract_api_error_context", "_iter_pool_sockets",
     "force_close_tcp_sockets",
 ]
