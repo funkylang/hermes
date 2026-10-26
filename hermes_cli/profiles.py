@@ -1937,19 +1937,6 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     return profile_dir
 
 
-def _s6_runtime_manager():
-    """The s6 service manager inside the container, else None. Silent on host: a failing/
-    absent detector must never print a confusing s6 warning to non-container users."""
-    try:
-        from hermes_cli.service_manager import detect_service_manager, get_service_manager
-        if detect_service_manager() != "s6":
-            return None
-        mgr = get_service_manager()
-    except Exception:
-        return None
-    return mgr if mgr.supports_runtime_registration() else None
-
-
 def _maybe_register_gateway_service(profile_name: str) -> None:
     """No-op since the s6 messaging-gateway daemon was removed."""
 

@@ -98,21 +98,6 @@ def _redact(value: str) -> str:
     return mask_secret(value)
 
 
-def _gateway_status() -> str:
-    """Return a short gateway status string."""
-    try:
-        from hermes_cli.gateway import get_gateway_runtime_snapshot
-        snapshot = get_gateway_runtime_snapshot()
-        if snapshot.running:
-            mode = "manual" if snapshot.has_process_service_mismatch else snapshot.manager
-            # A supervised gateway may have no scannable PID (s6 `python -c` launcher, #125390).
-            pid = f", pid {snapshot.gateway_pids[0]}" if snapshot.gateway_pids else ""
-            return f"running ({mode}{pid})"
-        return f"stopped ({snapshot.manager})"
-    except Exception:
-        return "unknown" if sys.platform.startswith(("linux", "darwin")) else "N/A"
-
-
 def _count_skills(hermes_home: Path) -> int:
     """Count installed skills."""
     skills_dir = hermes_home / "skills"
@@ -132,16 +117,6 @@ def _cron_summary(hermes_home: Path) -> str:
         return f"{active} active / {len(jobs)} total"
     except Exception:
         return "(error reading)"
-
-
-_PLATFORM_ENV_VARS = {
-    "telegram": "TELEGRAM_BOT_TOKEN", "discord": "DISCORD_BOT_TOKEN", "slack": "SLACK_BOT_TOKEN",
-    "whatsapp": "WHATSAPP_ENABLED", "signal": "SIGNAL_HTTP_URL", "email": "EMAIL_ADDRESS",
-    "sms": "TWILIO_ACCOUNT_SID", "matrix": "MATRIX_HOMESERVER_URL", "mattermost": "MATTERMOST_URL",
-    "dingtalk": "DINGTALK_CLIENT_ID", "feishu": "FEISHU_APP_ID",
-    "wecom": "WECOM_BOT_ID", "wecom_callback": "WECOM_CALLBACK_CORP_ID", "weixin": "WEIXIN_ACCOUNT_ID",
-    "qqbot": "QQ_APP_ID",
-}
 
 
 def _get_model_and_provider(config: dict) -> tuple[str, str]:
@@ -315,7 +290,6 @@ def run_dump(args):
     except Exception:
         profile = "(default)"
     toolsets = config.get("toolsets", ["hermes-cli"])
-    platforms = [name for name, env in _PLATFORM_ENV_VARS.items() if os.getenv(env)]
     lines = [
         "--- hermes dump ---",
         f"version:          {_version_line(project_root)}",
@@ -332,8 +306,6 @@ def run_dump(args):
         f"  toolsets:           {', '.join(toolsets) if toolsets else '(default)'}",
         f"  mcp_servers:        {len(config.get('mcp', {}).get('servers', {}))}",
         f"  memory_provider:    {config.get('memory', {}).get('provider', '') or 'built-in'}",
-        f"  gateway:            {_gateway_status()}",
-        f"  platforms:          {', '.join(platforms) if platforms else 'none'}",
         f"  cron_jobs:          {_cron_summary(hermes_home)}",
         f"  skills:             {_count_skills(hermes_home)}",
     ]
