@@ -25,7 +25,6 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     "suppress_warning_notifications": False,
     "long_running_notifications": True,
     "busy_ack_detail": True,
-    "busy_steer_ack_enabled": True,  # busy_input_mode=steer echo; the text still lands in the run
     # Delete tool-progress / "⏳ Working" bubbles after a SUCCESSFUL final response where deletion is
     # supported (Telegram); failed runs keep them as breadcrumbs.
     "cleanup_progress": False,

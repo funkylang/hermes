@@ -451,28 +451,6 @@ class CLILoopsMixin:
         else:
             self._queue_enqueue(payload)
 
-    def _cmd_steer(self, cmd_original: str):
-        # Inject a message after the next tool call without interrupting: while the
-        # agent runs, push into its pending_steer slot (drained by _execute_tool_calls_*
-        # into the next tool result); otherwise fall back to /queue semantics.
-        from cli import _cprint, _slash_args
-        payload = _slash_args(cmd_original)
-        if not payload:
-            _cprint(f"  {t('cli.steer.usage')}")
-        elif self._agent_running and self.agent is not None and hasattr(self.agent, "steer"):
-            try:
-                accepted = self.agent.steer(payload)
-            except Exception as exc:
-                _cprint(f"  {t('cli.steer.failed', error=exc)}")
-            else:
-                if accepted:
-                    _cprint(f"  {t('cli.steer.queued', preview=_preview(payload))}")
-                else:
-                    _cprint(f"  {t('cli.steer.rejected_empty')}")
-        else:
-            self._pending_input.put(payload)
-            _cprint(f"  {t('cli.steer.no_agent_queued', preview=_preview(payload))}")
-
     # ────────────────────────────────────────────────────────────────
     # Session-bound managers: /goal (Ralph-style loop), /heartbeat, /loop
     # ────────────────────────────────────────────────────────────────

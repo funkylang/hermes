@@ -287,50 +287,6 @@ class CLIStreamMixin:
         text = str(user_input or "")
         ChatConsole().print(self._format_submitted_user_message_preview(text))
 
-    def _print_pending_redirection(self) -> None:
-        """If steer text is pending, draw it as a user input box.
-
-        Called at stream-box open sites (reasoning header / response header) so the user's
-        mid-turn message appears on screen in wire order, before the new stream draws.
-        Only invoked in "smart" busy-input mode (guards at the call sites).
-
-        Data source: ``_pending_steer`` — a steer queued via ``agent.steer()`` (the /steer
-        command and gateway steer mode), drained and delivered here as a plain user row.
-        """
-        agent = getattr(self, "agent", None)
-        if agent is None or not hasattr(agent, "_drain_pending_steer"):
-            return
-
-        # Drain the queued steer and echo it; deliver it to the prompt messages below.
-        _echo_text = agent._drain_pending_steer()
-        if not _echo_text:
-            return
-        try:
-            from cli import ChatConsole, _accent_hex, _cprint
-            # Blank line above + second divider below mirror the normal submit
-            # path (cli_tui_runtime_mixin.py:112-113, cli_chat_turn_mixin.py:97).
-            _cprint("")
-            self._print_user_message_preview(_echo_text)
-            ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
-        except Exception:
-            # A broken echo must never break the turn.
-            logging.debug("steering user-echo render failed", exc_info=True)
-
-        # We drained the slot, so the agent's own pre-API drain will never see this text.
-        # Deliver it to the prompt messages ourselves as a PLAIN user row (not the out-of-band
-        # steer marker): our display path owns this steering, and after a tool result the tail
-        # is role-alternation-safe. If the tail isn't a tool message we can't guarantee that,
-        # so hand it back for the agent's pre-API drain to place.
-        try:
-            from agent.agent_runtime_helpers import _requeue_pending_steer
-            messages = getattr(agent, "_messages", None)
-            if isinstance(messages, list) and len(messages) >= 1 and messages[-1].get("role") != "user":
-                messages.append({"role": "user", "content": _echo_text})
-            else:
-                _requeue_pending_steer(agent, _echo_text)
-        except Exception:
-            logging.debug("steering user-row delivery failed", exc_info=True)
-
     def _stream_reasoning_delta(self, text: str) -> None:
         """Stream reasoning tokens into a dim box above the response.
 
@@ -511,8 +467,6 @@ class CLIStreamMixin:
             text = text.lstrip("\n")
             if not text:
                 return
-            if self.busy_input_mode == "smart":
-                self._print_pending_redirection()
             self._stream_box_opened = True
             self._stream_box_live = True  # header drawn; cleared at the footer
             try:

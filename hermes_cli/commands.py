@@ -130,8 +130,6 @@ COMMAND_REGISTRY: list[CommandDef] = [
                aliases=("q",), args_hint="[<prompt>|list|edit N <prompt>|rm N|move A B|clear]",
                subcommands=("list", "edit", "rm", "move", "clear", "add"),
                busy_policy="dispatch", busy_handler="queue"),
-    CommandDef("steer", "Inject a message after the next tool call without interrupting", "Session",
-               aliases=("s",), args_hint="<prompt>", busy_policy="dispatch", busy_handler="steer"),
     CommandDef("goal", "Set a standing goal Hermes works on across turns until achieved", "Session",
                args_hint="[text | -- <text> | draft <text> | show | gate add <cmd> | pause | resume | clear | status | wait <pid> | unwait]",
                argument_mode="mixed", busy_policy="dispatch", busy_handler="goal"),

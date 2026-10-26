@@ -70,10 +70,8 @@ def _unregister_subagent(subagent_id: str, *, agent: Any = None) -> None:
             _recent_subagents.pop(next(iter(_recent_subagents)), None)
 
 def _close_subagent_steering(subagent_id: str, agent: Any) -> Optional[str]:
-    """Atomically close steer acceptance and drain its final durable artifact. ``steer_subagent`` holds the same
-    registry lock through ``agent.steer``, so either acceptance wins and this drain sees its exact text, or closure
-    wins and the caller is rejected. Exact agent identity prevents a finishing child with a recycled public id from
-    closing its replacement."""
+    """Atomically close steer acceptance and drain its final durable artifact."""
+    # Removed - no longer needed since steer was removed
     with _active_subagents_lock:
         record = _active_subagents.get(subagent_id)
         if record is None or record.get("agent") is not agent:
@@ -90,9 +88,7 @@ def _close_subagent_steering(subagent_id: str, agent: Any) -> Optional[str]:
         return pending if isinstance(pending, str) and pending.strip() else None
 
 def interrupt_subagent(subagent_id: str) -> bool:
-    """Request that one running subagent stop at its next iteration boundary
-    (cooperative: the flag propagates to in-flight tools and recurses into
-    grandchildren via AIAgent.interrupt()). True iff a matching subagent was found."""
+    """Request that one running subagent stop at its next iteration boundary."""
     with _active_subagents_lock:
         record = _active_subagents.get(subagent_id)
     agent = record.get("agent") if record else None
@@ -103,69 +99,6 @@ def interrupt_subagent(subagent_id: str) -> bool:
     except Exception as exc:
         logger.debug("interrupt_subagent(%s) failed: %s", subagent_id, exc)
         return False
-
-def _subagent_transport_matches(record, transport) -> bool:
-    """Authority follows the owning session's LIVE transport slot, read at check time.
-
-    ``owner_transport`` on the record is only the capture-time marker that a gateway session
-    commissioned the child (``None`` = no RPC authority ever). The slot is authoritative because
-    every reattach path (prompt.submit, queued drain, resume, activate, viewer failover) already
-    mutates it; a per-record copy needed a matching registry sync at each of those sites and two
-    were missed (#106663). Records whose owner is not a session dict keep the exact-object rule."""
-    from tui_gateway.transport import FanoutTransport
-
-    if record.get("owner_transport") is None:
-        return False
-    owner = record.get("owner_session_record")
-    bound = owner.get("transport") if isinstance(owner, dict) else record.get("owner_transport")
-    return bound is transport or (isinstance(bound, FanoutTransport) and bound.contains(transport))
-
-
-def steer_subagent(
-    subagent_id: str, text: str, *, owner_session_id: Optional[str] = None, owner_transport: Any = None,
-    owner_session_record: Any = None,
-) -> bool:
-    """Queue steering text into a running subagent without stopping it.
-
-    AIAgent.steer() appends the text to the child's last tool result at its next iteration boundary — the current tool
-    call is never cut. True iff the text was QUEUED while the child still accepted work; False for unknown/closed id,
-    ownership mismatch, no live agent, or empty text. ``owner_session_id=None`` keeps the in-process helper contract;
-    gateway callers must pass exact authority. Acceptance and completion are linearized by the registry lock: if
-    acceptance wins but no delivery boundary remains, the text lands in the entry as ``missed_steer``.
-    """
-    if not text or not text.strip():
-        return False
-    with _active_subagents_lock:
-        record = _active_subagents.get(subagent_id)
-        if not record or not record.get("accepting_steer", False):
-            return False
-        if owner_session_id is not None and (
-            record.get("owner_session_id") != owner_session_id
-            or owner_transport is None
-            or not _subagent_transport_matches(record, owner_transport)
-            or owner_session_record is None
-            or record.get("owner_session_record") is not owner_session_record
-        ):
-            return False
-        agent = record.get("agent")
-        if agent is None:
-            return False
-        try:
-            return bool(agent.steer(text))
-        except Exception as exc:
-            logger.debug("steer_subagent(%s) failed: %s", subagent_id, exc)
-            return False
-
-def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[Any, Any]:
-    """Exact request transport + live session generation, if any — an in-process
-    bridge, not a serializable capability. Non-gateway hosts get ``(None, None)``."""
-    if not owner_session_id:
-        return None, None
-    try:
-        from tui_gateway.server import _current_session_steer_authority
-        return _current_session_steer_authority(owner_session_id)
-    except Exception:
-        return None, None
 
 # Registry record fields never exposed to the TUI/RPC snapshot.
 _PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer"})
@@ -195,7 +128,7 @@ def _is_descendant_of(child_agent: Any, parent_agent: Any, max_hops: int = 8) ->
 
 # Model-facing control actions accepted by delegate_task(action=...).
 # "spawn" (or omitted) keeps the historical spawn semantics.
-_CONTROL_ACTIONS = frozenset({"list", "steer", "stop"})
+_CONTROL_ACTIONS = frozenset({"list", "stop"})
 
 def _resolve_session_lineage(session_id: Optional[str], parent_agent: Any) -> str:
     """Tip of a session id's compression lineage via the parent's live SessionDB (best-effort; input unchanged when
@@ -264,10 +197,10 @@ def _list_payload(parent_agent: Any) -> Dict[str, Any]:
 def _handle_control_action(action: str, subagent_id: Optional[str], message: Optional[str], parent_agent: Any) -> str:
     """Synchronous control plane for delegate_task: list/steer/stop. Runs in-turn (never backgrounded) over the same
     registry the TUI overlay drives, scoped so a conversation can only control its own spawn tree."""
+    # list / stop need a resolvable, owned target (stop needs subagent_id).
     if action == "list":
         return json.dumps(_list_payload(parent_agent), ensure_ascii=False)
-
-    # steer / stop need a resolvable, owned target.
+    
     sid = (subagent_id or "").strip()
     if not sid:
         return tool_error(f"action='{action}' requires subagent_id (from the spawn dispatch response or action='list').")
@@ -279,13 +212,11 @@ def _handle_control_action(action: str, subagent_id: Optional[str], message: Opt
             "may have already finished (its result arrives as a normal "
             "completion message). Use action='list' to see live children."
         )
-    if action == "steer" and not (message or "").strip():
-        return tool_error("action='steer' requires a non-empty 'message' describing the course correction.")
     outcome = _CONTROL_OUTCOMES.get(action)
     if outcome is None:
-        return tool_error(f"Unknown action '{action}'. Use spawn, list, steer, or stop.")
+        return tool_error(f"Unknown action '{action}'. Use spawn, list, or stop.")
     status, note, failure = outcome
-    ok = interrupt_subagent(sid) if action == "stop" else steer_subagent(sid, message.strip())
+    ok = interrupt_subagent(sid) if action == "stop" else False
     if ok:
         return json.dumps({"action": action, "subagent_id": sid, "status": status, "note": note}, ensure_ascii=False)
     return tool_error(failure.format(sid=sid))
@@ -298,13 +229,5 @@ _CONTROL_OUTCOMES = {
         "partial result still re-enters the conversation as a completion message — do not wait or poll.",
         "Could not interrupt '{sid}' — it likely finished in the last "
         "moment. Its result arrives as a normal completion message.",
-    ),
-    "steer": (
-        "queued",
-        "Steering text queued. The subagent sees it appended to its next tool result — the current tool call is "
-        "never cut. If the child finishes before a delivery boundary remains, the text is reported back as "
-        "missed_steer in its completion entry.", "Subagent '{sid}' is no longer accepting steering (finishing or "
-        "already finished). Its result arrives as a normal completion "
-        "message; re-delegate a follow-up task if more work is needed.",
     ),
 }

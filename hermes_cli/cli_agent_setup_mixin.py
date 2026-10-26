@@ -732,10 +732,8 @@ class CLIAgentSetupMixin:
             except Exception:
                 pass
             self._active_agent_route_signature = _route_signature(effective_model, runtime)
-            # Smart-steering wire format is a CLI-only capability (single client at one keyboard;
-            # the gateway serves many clients per agent, so it never sets this). The live /busy
-            # handler flips the flag on mode changes.
-            self.agent._smart_steer_active = self.busy_input_mode == "smart"
+            # Smart-steering is the only mode; always active for CLI sessions
+            self.agent._smart_steer_active = True
 
             # Force-create DB row on /title intent, then apply title.
             if self._pending_title and self._session_db:

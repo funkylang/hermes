@@ -128,38 +128,11 @@ class InterruptControlMixin:
         default = InterruptControlMixin.STREAMING_PHASE_INACTIVE
         return getattr(self, "_streaming_phase", default)
 
-    def _check_steering_wait_completion(self, reasoning_text: str) -> bool:
-        """Check if steering wait should complete (newline detected in streamed text).
-
-        Called from stream loop during reasoning/content streaming; returns True when we
-        should stop the stream gracefully. Reads accumulated_text — the single source of
-        truth for everything streamed through the display funnel since its last reset.
-        """
-        if not getattr(self, "_steer_completion_wait_active", False):
-            return False
-
-        # Check if accumulated text has a newline (natural completion point)
-        full_text = getattr(self, "accumulated_text", "") or ""
-        if "\n" in full_text:
-            logger.debug("Steering wait completed: newline detected")
-            self._steer_completion_wait_active = False
-            self._steering_wait_completed = True
-            return True
-
-        # Timeout safety check (30 seconds)
-        deadline = getattr(self, "_steer_completion_deadline", 0)
-        if deadline and time.time() > deadline:
-            logger.debug("Steering wait completed: timeout reached")
-            self._steer_completion_wait_active = False
-            self._steering_wait_completed = True
-            return True
-
-        return False
-
     def _clear_steering_wait_markers(self) -> None:
         """Clear steering wait flags (called after reasoning is consumed)."""
         self._steer_completion_wait_active = False
         self._steering_wait_completed = False
+
 
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
@@ -329,117 +302,6 @@ class InterruptControlMixin:
             _set_interrupt(False, self._execution_thread_id)
         _ic_signal_tool_workers(self, False)
         if hard_cancel:
-            # Hard stop only (see docstring). The comment that used to run unconditionally here
-            # claimed a hard interrupt supersedes the steer — but nothing gated this wipe on
-            # hard_cancel, so a soft clear dropped a live user message with no trace.
-            with _ic_lock(self, "_pending_steer_lock"):
-                self._pending_steer = None
+            pass  # Hard stop only
         return True
 
-    def steer(self, text: str) -> bool:
-        """Queue user text for delivery as its own user row after the current tool batch finishes (no
-        interrupt); multiple calls concatenate with newlines. Returns False for empty text."""
-        if not text or not text.strip():
-            return False
-        cleaned = text.strip()
-        # Standalone "stop" mid-turn is the emergency brake, not model-facing text: abort the
-        # active turn (model request closed) without touching running external tools.
-        from agent.control_words import is_standalone_stop_control_word
-
-        if is_standalone_stop_control_word(cleaned):
-            return self.halt()
-        with _ic_lock(self, "_pending_steer_lock"):
-            existing = _ic_slot(self, "_pending_steer_lock", "_pending_steer")
-            self._pending_steer = (existing + "\n" + cleaned) if existing else cleaned
-        return True
-
-    def redirect(self, text: str, busy_input_mode: Optional[str] = None) -> bool:
-        """Redirect the active turn without converting it into a new task: during a model request only that
-        request is cancelled (completed messages kept, partial reasoning becomes assistant context, the
-        correction is appended as a real user message, the loop retries); during tool execution it degrades
-        to ``steer()``; Codex app-server uses native ``turn/steer``. False when no live turn / empty text.
-
-        # Phase-aware behavior:
-        - busy_input_mode "smart" + reasoning phase: wait for a newline boundary in the reasoning
-          (graceful stop via chat_completion_helpers); handle_stream_event delivers the wire rows.
-        - busy_input_mode "smart" + tool execution / args streaming: no interrupt; delivery runs
-          through the CLI user_input accumulator, drained after the batch as a user message.
-        - all other phases/modes: upstream immediate-abort of the model request.
-        """
-
-        if not text or not text.strip():
-            return False
-        cleaned = text.strip()
-
-        _native_steer = _ic_codex_method(self, "request_steer")
-        if _native_steer is not None:
-            with _ic_lock(self, "_pending_redirect_lock"):
-                if self._interrupt_requested:
-                    return False
-            try:
-                return bool(_native_steer(cleaned))
-            except Exception:
-                logger.debug("Codex app-server turn/steer failed", exc_info=True)
-                return False
-
-        # smart mode + tool execution / args streaming: defer steering until the batch completes.
-        # Delivery runs through the CLI user_input accumulator, drained in _finalize_tool_batch as a
-        # user message after the batch. Multiple steers accumulate there plainly (no decoration).
-        if busy_input_mode == "smart" and (
-            getattr(self, "_executing_tools", False)
-            or self._get_streaming_phase() == InterruptControlMixin.STREAMING_PHASE_TOOL_ARGS
-        ):
-            # Text entered here is NOT queued on the agent: doing so races the completing response
-            # in turn_api_call.py and gets the just-streamed tool calls discarded.
-            return True
-
-        # Never kill a tool to deliver guidance; the steer drain puts it on the final tool result.
-        # A foreground terminal command would park that delivery until it exits (a 5-minute
-        # `sleep` poller, a build), so ask the tool workers to YIELD: terminal hands the live
-        # process to the background registry and returns; tools that don't yield are unaffected.
-        if getattr(self, "_executing_tools", False):
-            accepted = self.steer(cleaned)
-            if accepted:
-                tracker = getattr(self, "_tool_worker_threads", None)
-                tracker_lock = getattr(self, "_tool_worker_threads_lock", None)
-                if tracker is not None and tracker_lock is not None:
-                    with tracker_lock:
-                        worker_tids = list(tracker)
-                    for tid in worker_tids:
-                        _request_yield(tid)
-            return accepted
-
-        # smart mode + reasoning phase: don't abort. The steering text is already accumulating
-        # in ACTIVE_CLI.user_input (unconditional at submit time) and handle_stream_event owns
-        # its delivery — it appends the wire rows at the next reasoning newline. This path only
-        # arms the stream loop so it stops gracefully at that same boundary.
-        if busy_input_mode == "smart" and self._get_streaming_phase() == InterruptControlMixin.STREAMING_PHASE_REASONING:
-            with _ic_lock(self, "_pending_redirect_lock"):
-                if self._interrupt_requested:
-                    return False
-                # Set steering completion wait flag (don't set _interrupt_requested or abort)
-                self._steer_completion_wait_active = True
-                self._steer_completion_deadline = time.time() + 30.0
-
-                logger.info("Steering completion wait activated during reasoning phase (smart mode)")
-
-            return True
-        else:
-            # REMARKED 2026-10-22: legacy abort-based redirect retired — our unified mechanism
-            # (user_input accumulation + handle_stream_event + do_close_current_stream) owns
-            # steering delivery and stream closure for ALL phases; _interrupt_requested must
-            # only be set by hard interrupts (stop, ctrl-c), never by redirects.
-            #
-            # if busy_input_mode != "smart" or not in REASONING phase, steering was previously
-            # aborted via _interrupt_requested — this raced handle_stream_event and closed the
-            # stream before our wire rows could be appended. Now we just accept the steer text
-            # (already in ACTIVE_CLI.user_input) and let handle_stream_event close at the next
-            # newline boundary regardless of phase.
-            return True
-
-    def _drain_pending_steer(self) -> Optional[str]:
-        """Return the pending steer text (if any) and clear the slot; None when nothing is pending."""
-        with _ic_lock(self, "_pending_steer_lock"):
-            text = _ic_slot(self, "_pending_steer_lock", "_pending_steer")
-            self._pending_steer = None
-        return text

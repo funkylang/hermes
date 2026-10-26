@@ -827,10 +827,6 @@ DEFAULT_CONFIG = {
         # Skip tool-call-only assistant entries in the recap so it isn't dominated by `[2 tool
         # calls: ...]` lines; False shows them inline.
         "resume_skip_tool_only": True,
-        "busy_input_mode": "smart",  # smart (default) | interrupt | queue | steer
-        # steer mode: false hides only the "Steered into current run" bubble; steering itself still
-        # happens.
-        "busy_steer_ack_enabled": True,
         # Classic CLI multiline beyond Alt+Enter: Ctrl+J newline, trailing backslash+Enter
         # continues, Shift+Enter reported distinctly. False restores the c-j submit fallback for
         # POSIX PTYs whose plain Enter arrives as LF.

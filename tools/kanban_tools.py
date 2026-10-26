@@ -622,8 +622,8 @@ def inject_new_comments_from_env(agent: Any) -> bool:
     # this process must neither receive them nor advance the shared watermark (#112817).
     tid = os.environ.get("HERMES_KANBAN_TASK") if _is_dispatcher_owned_worker() else None
     now = time.monotonic()
-    if (not tid or agent is None or not hasattr(agent, "steer")
-            or (now - _comment_poll_last_attempt) < _COMMENT_POLL_MIN_INTERVAL_SECONDS):
+    # Steering removed; comment polling disabled for now
+    if not tid or (now - _comment_poll_last_attempt) < _COMMENT_POLL_MIN_INTERVAL_SECONDS:
         return False
     _comment_poll_last_attempt = now
     seen = _comment_watermark.get(tid)
@@ -651,7 +651,9 @@ def inject_new_comments_from_env(agent: Any) -> bool:
             + " on your kanban task from the operator (delivered mid-run). "
             + "Take it into account for the work you're doing right now:\n" + "\n".join(lines))
     try:
-        return bool(agent.steer(note))
+        # Removed: steer() no longer exists; mid-run comment injection disabled
+        logger.debug("comment-inject: steering removed, notes will be picked up on next turn")
+        return False
     except Exception:
         logger.debug("comment-inject: steer failed", exc_info=True)
         return False

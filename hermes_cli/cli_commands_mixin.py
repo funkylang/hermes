@@ -1950,20 +1950,12 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                             scope=_scope_outcome(explicit_global, saved))))
 
     def _handle_busy_command(self, cmd: str):
-        """Handle /busy [status|smart|queue|steer|interrupt] — what Enter does while Hermes is working."""
+        """Handle /busy — status only (smart mode is the only mode)."""
         arg = _command_arg(cmd, lower=True)
         usage = _dim_line(_t("busy.usage"))
-        if not arg or arg == "status":
-            mode = self.busy_input_mode if self.busy_input_mode in _BUSY_MODES else "smart"
-            return _cp(_accent_line(_t("busy.status", mode=self.busy_input_mode)),
-                       _dim_line(_t("busy.enter_while_busy", behavior=_t(f"busy.short_{mode}"))), usage)
-        if arg not in _BUSY_MODES:
-            return _cp(_dim_line(_t("shared.unknown_argument", arg=arg)), usage)
-        self.busy_input_mode = arg
-        # Keep the agent's smart-steer capability flag in sync with the live mode change.
-        if getattr(self, "agent", None) is not None:
-            self.agent._smart_steer_active = arg == "smart"
-        _persist_display_choice("display.busy_input_mode", arg, _t("busy.label"), _t(f"busy.long_{arg}"))
+        # Smart mode is always active; just show status
+        return _cp(_accent_line(_t("busy.status", mode="smart")),
+                   _dim_line(_t("busy.enter_while_busy", behavior=_t("busy.short_smart"))), usage)
 
     def _handle_indicator_command(self, cmd: str):
         """Handle /indicator [status|kaomoji|emoji|unicode|ascii] — pick the TUI busy-indicator style.

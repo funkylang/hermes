@@ -334,10 +334,6 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     """
     # Clear the streaming buffer (its content was consumed for display + wire rows by HSE)
     agent._current_streamed_assistant_text = ""
-
-    # Clear steering wait markers (reasoning has been consumed, steering is done)
-    if hasattr(agent, "_clear_steering_wait_markers"):
-        agent._clear_steering_wait_markers()
     agent._steering_wait_reasoning = ""
 
 

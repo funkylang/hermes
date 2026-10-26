@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from tools import file_state
 from tools.delegate_tool_progress import _quiet, _safe_progress
 from tools.delegate_tool_registry import (
-    _capture_gateway_steer_authority, _close_subagent_steering, _register_subagent, _unregister_subagent,
+    _close_subagent_steering, _register_subagent, _unregister_subagent,
 )
 from tools.delegate_tool_results import (
     _extract_output_tail, _looks_like_error_output, _stringify_tool_content, _summarize_tool_arguments,
@@ -235,14 +235,9 @@ def _budget_warning_text(idle_seconds: float, child_timeout: float) -> str:
     )
 
 def _warn_child_budget(child: Any, idle_seconds: float, child_timeout: float) -> None:
-    """Queue the one-line warning through the child's steer path (delivered at its next iteration boundary)."""
-    steer = getattr(child, "steer", None)
-    if not callable(steer):
-        return
-    try:
-        steer(_budget_warning_text(idle_seconds, child_timeout))
-    except Exception as exc:
-        logger.debug("budget warning steer failed: %s", exc)
+    """The steer channel that used to deliver this warning has been removed, so the budget warning is no
+    longer sent. Kept as a no-op so the heartbeat call sites and timing logic stay intact."""
+    return
 
 def _child_activity_fingerprint(child: Any) -> tuple:
     """``(completed calls, current tool, activity clock)`` — the progress signals the heartbeat's stale verdict
@@ -356,8 +351,6 @@ def _register_child(
         with _quiet(None):
             from agent.session_context import get_session_env
             owner_session_id = get_session_env("HERMES_UI_SESSION_ID", "") or None
-    if owner_session_id and (owner_transport is None or owner_session_record is None):
-        owner_transport, owner_session_record = _capture_gateway_steer_authority(owner_session_id)
     _raw_depth = getattr(child, "_delegate_depth", 1)
     _register_subagent({
         "subagent_id": _subagent_id,

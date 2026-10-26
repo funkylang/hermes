@@ -19,7 +19,6 @@ from tools.delegate_tool_child_run import _attach_child, _detach_child, _fabrica
 from tools.delegate_tool_progress import (
     SUBAGENT_FAILURE_STATUSES, _print_completion_line, _quiet, describe_subagent_failure, format_batch_tag,
 )
-from tools.delegate_tool_registry import _capture_gateway_steer_authority
 from tools.delegate_tool_results import _finalize_child_results
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
@@ -84,7 +83,9 @@ def _capture_origin() -> tuple[str, str, Any, Any, bool]:
         from agent.session_context import get_session_env, session_history_delivery_supported
         _origin_ui_session_id = get_session_env("HERMES_UI_SESSION_ID", "")
         _origin_session_history_delivery = session_history_delivery_supported()
-    return (_origin_wake_sid, _origin_ui_session_id, *_capture_gateway_steer_authority(_origin_ui_session_id), _origin_session_history_delivery)
+    # No live gateway transport to capture: the origin session is a plain CLI host, so
+    # owner_transport / owner_session_record are always None here (matches the pre-gateway behavior).
+    return (_origin_wake_sid, _origin_ui_session_id, None, None, _origin_session_history_delivery)
 
 def _report_child_done(parent_agent, spinner_ref, entry, tag, task_labels, n_tasks, remaining) -> None:
     """Print one completion line for a finished child and refresh the spinner text. Failed/errored/timed-out children

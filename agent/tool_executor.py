@@ -1219,7 +1219,6 @@ def _finalize_tool_batch(agent, messages: list, effective_task_id: str, num_tool
     contents_before = [message.get("content") for message in batch]
     enforce_turn_budget(batch, env=get_active_env(effective_task_id), config=budget)
     record_tool_batch(agent, batch, contents_before)
-    agent._apply_pending_steer_to_tool_results(messages, num_tools)
     # Deliver user input entered during args-streaming / tool execution: show it in an
     # INPUT box and append it as a plain user message right after this batch.
     from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_box

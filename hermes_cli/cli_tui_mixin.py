@@ -1510,12 +1510,11 @@ class CLITuiMixin:
         return True
 
     def _tui_enter_while_busy(self, text: str, images: list, payload) -> None:
-        """Route a submission typed while the agent runs, per ``busy_input_mode``.
+        """Route a submission typed while the agent runs.
 
-        steer → agent.steer(text) mid-run (images can't ride along and a missing/rejecting
-        steer() falls back to queue so nothing is lost). interrupt → agent.redirect() when the
-        agent supports active-turn redirect, else the legacy interrupt queue (older agents,
-        multimodal follow-ups, or a turn that finished in the race). queue → next turn.
+        Text is already accumulated in self.user_input at submit time (unconditionally).
+        The unified steering mechanism (handle_stream_event + do_close_current_stream)
+        handles delivery at the next newline boundary — no explicit steering call needed here.
         """
         from cli import CLI_CONFIG, _ACCENT, _DIM, _RST, _cprint, _hermes_home
 
@@ -1529,72 +1528,21 @@ class CLITuiMixin:
             except Exception:
                 pass
 
-        _effective_mode = self.busy_input_mode
-        redirected = False
-        if _effective_mode == "steer":
-            if images or not text:
-                _effective_mode = "queue"
-            else:
-                accepted = False
-                try:
-                    if self.agent is not None and hasattr(self.agent, "steer"):
-                        accepted = bool(self.agent.steer(text))
-                except Exception as exc:
-                    _cprint(f"  {_DIM}{t('cli.tui.steer_failed_queued', error=exc)}{_RST}")
-                    accepted = False
-                if accepted:
-                    # Render the steering text as a normal user input box in scrollback,
-                    # consistent with regular submitted messages.
-                    # TEMP-DISABLED for A/B test of regression suspicion:
-                    # self._print_user_message_preview(text)
-                    pass
-                else:
-                    _effective_mode = "queue"
-        if _effective_mode == "queue":
+        # Text is already in user_input; handle_stream_event will detect and deliver it.
+        # If steering doesn't apply (e.g., images attached), queue as a next-turn message.
+        if images or not text:
             self._pending_input.put(payload)
             preview = text if text else _tn("cli.tui.images_attached_preview", len(images))
             preview = preview[:80] + ('...' if len(preview) > 80 else '')
-            _cprint("  " + t("cli.tui.queued_next_turn", preview=preview))
-        elif _effective_mode in ("interrupt", "smart"):
-            # TEMP-DISABLED (steering-unify): all steering text goes through user_input
-            # accumulation + handle_stream_event — never the interrupt queue. The queue's
-            # consumer calls legacy agent.interrupt(), which re-injects the text via
-            # _apply_active_turn_redirect (merge into the original user row). Queue as a
-            # next-turn message instead when there is no live agent/redirect support.
-            if not images and text:
-                try:
-                    if (
-                        self.agent is not None
-                        and getattr(self.agent, "_supports_active_turn_redirect", False) is True
-                        and hasattr(self.agent, "redirect")):
-                        redirected = bool(self.agent.redirect(text, busy_input_mode=self.busy_input_mode))
-                except Exception:
-                    redirected = False
-            # Upstream redirect confirmation display (restored): show the user's text on accept,
-            # except in smart mode — the steer echo already renders it as a user row.
-            if redirected and _effective_mode != "smart":
-                preview = text[:80] + ("..." if len(text) > 80 else "")
-                _cprint(f"  {_ACCENT}{t('cli.tui.redirected_turn', preview=preview)}{_RST}")
-            if not redirected:
-                # TEMP-DISABLED (steering-unify): never enqueue for legacy agent.interrupt()
-                # consumption; queue as a next-turn message so nothing is lost.
-                # self._interrupt_queue.put(payload)
-                # try:
-                #     with open(_hermes_home / "interrupt_debug.log", "a", encoding="utf-8") as _f:
-                #         _f.write(
-                #             f"{time.strftime('%H:%M:%S')} ENTER: queued interrupt msg={str(payload)[:60]!r}, "
-                #             f"agent_running={self._agent_running}\n")
-                # except Exception:
-                #     pass
-                self._pending_input.put(payload)
-        # First-touch onboarding: one-line tip about the /busy knob on the first busy-while-
-        # running event for this install; the flag persists to config.yaml. Guarded so
-        # onboarding can never break the input loop.
+            _cprint(f"  {t('cli.tui.queued_next_turn', preview=preview)}")
+
+        # First-touch onboarding: one-line tip about the steering behavior on the first
+        # busy-while-running event for this install; the flag persists to config.yaml.
+        # Guarded so onboarding can never break the input loop.
         try:
             from agent.onboarding import BUSY_INPUT_FLAG, busy_input_hint_cli, is_seen, mark_seen
             if not is_seen(CLI_CONFIG, BUSY_INPUT_FLAG):
-                _hint_mode = "redirect" if redirected else _effective_mode
-                _cprint(f"  {_DIM}{busy_input_hint_cli(_hint_mode)}{_RST}")
+                _cprint(f"  {_DIM}{busy_input_hint_cli('smart')}{_RST}")
                 mark_seen(_hermes_home / "config.yaml", BUSY_INPUT_FLAG)
                 CLI_CONFIG.setdefault("onboarding", {}).setdefault("seen", {})[BUSY_INPUT_FLAG] = True
         except Exception:
