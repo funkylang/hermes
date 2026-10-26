@@ -361,9 +361,7 @@ TOOL_CATEGORIES = {
 TOOLSET_ENV_REQUIREMENTS = {"vision": [("OPENROUTER_API_KEY", "https://openrouter.ai/keys")]}
 
 # --- Platform / Toolset Helpers ---
-_PLATFORM_ENABLE_ENV_VARS = (
-    ("telegram", "TELEGRAM_BOT_TOKEN"), ("discord", "DISCORD_BOT_TOKEN"), ("slack", "SLACK_BOT_TOKEN"),
-    ("whatsapp", "WHATSAPP_ENABLED"), ("qqbot", "QQ_APP_ID"))
+_PLATFORM_ENABLE_ENV_VARS = ()
 
 
 def _get_enabled_platforms() -> List[str]:

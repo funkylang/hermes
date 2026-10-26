@@ -191,38 +191,7 @@ TOOLSETS = {
 
     # `hermes tools` platform config filters it down and
     # _get_platform_tools() drops _DEFAULT_OFF_TOOLSETS unless user-enabled.
-    "hermes-telegram": _bundle("Telegram bot toolset - full access for personal use (terminal has safety checks)"),
-    "hermes-discord": _bundle(
-        "Discord bot toolset - full access (terminal has safety checks via dangerous "
-        "command approval)",
-        ["discord", "discord_admin"],
-    ),
-    "hermes-whatsapp": _bundle("WhatsApp bot toolset - similar to Telegram (personal messaging, more trusted)"),
-    "hermes-slack": _bundle("Slack bot toolset - full access for workspace use (terminal has safety checks)"),
-    "hermes-signal": _bundle("Signal bot toolset - encrypted messaging platform (full access)"),
-    "hermes-bluebubbles": _bundle("BlueBubbles iMessage bot toolset - Apple iMessage via local BlueBubbles server"),
-    "hermes-email": _bundle("Email bot toolset - interact with Hermes via email (IMAP/SMTP)"),
-    "hermes-mattermost": _bundle("Mattermost bot toolset - self-hosted team messaging (full access)"),
-    "hermes-matrix": _bundle("Matrix bot toolset - decentralized encrypted messaging (full access)"),
-    "hermes-dingtalk": _bundle("DingTalk bot toolset - enterprise messaging platform (full access)"),
-    "hermes-feishu": _bundle("Feishu/Lark bot toolset - enterprise messaging via Feishu/Lark (full access)", _FEISHU_TOOLS),
-    "hermes-weixin": _bundle("Weixin bot toolset - personal WeChat messaging via iLink (full access)"),
-    "hermes-qqbot": _bundle("QQBot toolset - QQ messaging via Official Bot API v2 (full access)"),
-    "hermes-wecom": _bundle("WeCom bot toolset - enterprise WeChat messaging (full access)"),
-    "hermes-wecom-callback": _bundle("WeCom callback toolset - enterprise self-built app messaging (full access)"),
-    "hermes-sms": _bundle("SMS bot toolset - interact with Hermes via SMS (Twilio)"),
     "hermes-webhook": _ts("Webhook toolset - receive and process external webhook events", _HERMES_WEBHOOK_SAFE_TOOLS),
-    "hermes-gateway": _ts(
-        "Gateway toolset - union of all messaging platform tools",
-        [],
-        includes=[
-            "hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack",
-            "hermes-signal", "hermes-bluebubbles", "hermes-email",
-            "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk",
-            "hermes-feishu", "hermes-wecom", "hermes-wecom-callback", "hermes-weixin",
-            "hermes-qqbot", "hermes-webhook",
-        ],
-    ),
 }
 
 # Toolset -> the session platforms it exists for, from the specs that carry ``platforms``.
