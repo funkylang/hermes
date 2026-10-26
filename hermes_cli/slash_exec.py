@@ -100,7 +100,7 @@ def _skill_commands() -> dict:
 
 
 def _exec_help(ctx: CommandContext) -> CommandReply:
-    """Core gateway /help body (pre platform mention decoration)."""
+    """Core /help body (pre platform mention decoration)."""
     from hermes_cli.commands import gateway_help_lines
     # ``allowed_commands`` (gateway, non-admin caller): only the commands the slash-access
     # policy lets this user run; skill commands are hidden too since the gate refuses them.
@@ -110,62 +110,11 @@ def _exec_help(ctx: CommandContext) -> CommandReply:
     try:
         if skill_cmds:
             lines.append(t("gateway.help.skill_header", count=len(skill_cmds)))
-            sorted_cmds = sorted(skill_cmds)  # first 10, then point to /commands for the rest
+            sorted_cmds = sorted(skill_cmds)  # show all skill commands in help
             lines.extend(f"`{cmd}` — {skill_cmds[cmd]['description']}"
-                         for cmd in sorted_cmds[:10])
-            if len(sorted_cmds) > 10:
-                lines.append(t("gateway.help.more_use_commands", count=len(sorted_cmds) - 10))
+                         for cmd in sorted_cmds)
     except Exception:
         pass
-    return CommandReply("\n".join(lines), format="markdown")
-
-
-def _exec_commands(ctx: CommandContext) -> CommandReply:
-    """Core gateway /commands body — paginated command + skill listing.
-
-    ``ctx.options["page_size"]`` is a surface parameter (Telegram uses 15, everything else 20).
-    """
-    from hermes_cli.commands import gateway_help_lines
-    try:
-        requested_page = int((ctx.args or "").strip() or 1)
-    except ValueError:
-        return CommandReply(t("gateway.commands.usage"), format="markdown")
-
-    allowed = ctx.options.get("allowed_commands")
-    entries = list(gateway_help_lines(allowed))
-    skill_cmds = _skill_commands() if allowed is None else {}
-    try:
-        if skill_cmds:
-            entries.extend(["", t("gateway.commands.skill_header")])
-            for cmd in sorted(skill_cmds):
-                desc = skill_cmds[cmd].get("description", "").strip() or t("gateway.commands.default_desc")
-                entries.append(f"`{cmd}` — {desc}")
-        # Skills kept off the menu because a built-in owns the name (agent.skill_commands guard).
-        from agent.skill_commands import skill_command_collision_note
-        from tools.skills_tool import _find_all_skills
-        entries.extend(f"⚠ {note}" for note in filter(None, map(
-            skill_command_collision_note, sorted(s["name"] for s in _find_all_skills()))))
-    except Exception:
-        pass
-
-    if not entries:
-        return CommandReply(t("gateway.commands.none"), format="markdown")
-
-    try:
-        page_size = max(1, int(ctx.options.get("page_size", 20)))
-    except (TypeError, ValueError):
-        page_size = 20
-    total_pages = max(1, (len(entries) + page_size - 1) // page_size)
-    page = max(1, min(requested_page, total_pages))
-    start = (page - 1) * page_size
-    lines = [t("gateway.commands.header", total=len(entries), page=page, total_pages=total_pages),
-             "", *entries[start:start + page_size]]
-    if total_pages > 1:
-        nav_parts = ([t("gateway.commands.nav_prev", page=page - 1)] if page > 1 else []) + (
-            [t("gateway.commands.nav_next", page=page + 1)] if page < total_pages else [])
-        lines.extend(["", " | ".join(nav_parts)])
-    if page != requested_page:
-        lines.append(t("gateway.commands.out_of_range", requested=requested_page, page=page))
     return CommandReply("\n".join(lines), format="markdown")
 
 
@@ -174,8 +123,7 @@ EXECUTORS: dict[str, Callable[[CommandContext], CommandReply]] = {
     "egress": _exec_egress,
     "profile": _exec_profile,
     "bundles": _exec_bundles,
-    "gateway_help": _exec_help,
-    "gateway_commands": _exec_commands}
+    "gateway_help": _exec_help}
 
 
 def resolve_executor(cmd_def: Any) -> Callable[[CommandContext], CommandReply] | None:
