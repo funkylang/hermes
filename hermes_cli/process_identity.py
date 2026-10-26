@@ -241,22 +241,17 @@ def register_self(purpose: str, *, project_root: Optional[Path] = None, detail: 
 
 
 def is_desktop_owned_backend(argv: Optional[Sequence[str]] = None) -> bool:
-    """Whether this process is the backend Desktop spawned and owns.
+    """Whether this process is a backend spawned and owned by a desktop/dashboard client.
 
-    ``HERMES_DESKTOP=1`` is inherited by every shell and agent child the app launches, so the
-    flag alone is not ownership proof (same class as #116107). Desktop hands its backend a
+    ``HERMES_DESKTOP=1`` is inherited by every shell and agent child the client launches, so the
+    flag alone is not ownership proof (same class as #116107). The spawner hands its backend a
     per-spawn credential the terminal pane never receives (and the terminal tool's env policy
-    strips from agent children): the local pool spawn mints ``HERMES_DASHBOARD_SESSION_TOKEN``,
-    the SSH spawn passes a 0600 token FILE on argv and deliberately sets no token env var.
-    ``argv`` defaults to this process's own.
+    strips from agent children): ``HERMES_DASHBOARD_SESSION_TOKEN``. ``argv`` is kept for call
+    compatibility but no longer consulted.
     """
     if os.environ.get("HERMES_DESKTOP") != "1":
         return False
-    if os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN"):
-        return True
-    from hermes_cli._startup_fast import is_desktop_ssh_backend_argv
-
-    return is_desktop_ssh_backend_argv(list(sys.argv[1:] if argv is None else argv))
+    return bool(os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN"))
 
 
 def _desktop_spawner_identity() -> tuple[Optional[int], Optional[float]]:

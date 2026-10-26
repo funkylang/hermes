@@ -579,8 +579,7 @@ def _apply_profile_override() -> None:
     if profile_name is None and hermes_home_env and Path(hermes_home_env).parent.name == "profiles":
         return
 
-    if (profile_name is None and not _under_gateway_supervisor(argv)
-            and not _startup_fast.is_desktop_ssh_backend_argv(argv)):
+    if profile_name is None and not _under_gateway_supervisor(argv):
         try:
             from hermes_constants import get_default_hermes_root
 
