@@ -77,12 +77,3 @@ def prepare_source_dependencies(project_root: Path, workspaces: tuple[str, ...],
         *(arg for workspace in workspaces for arg in ("--workspace", workspace)), env=env,
         label="Preparing Node dependencies",
     )
-
-
-def prepare_launch_dependencies(project_root: Path, *, env: dict) -> None:
-    """A launch rebuild must not prune another installed source frontend."""
-    prepare_source_dependencies(project_root, ("ui-tui", "web"), env=env)
-
-
-def build_source_tui(project_root: Path, *, env: dict) -> None:
-    run_source_script(project_root, "scripts/build/tui.mjs", env=env, label="Building the TUI")
