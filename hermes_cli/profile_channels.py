@@ -119,43 +119,6 @@ def platform_ids(source_dir: Optional[Path] = None) -> List[str]:
     return sorted(ids)
 
 
-def _cred_row_envs(row) -> Set[str]:
-    """Every env name a ``gateway.config_env._Cred`` row reads."""
-    names: Set[str] = set()
-
-    def _flatten(spec) -> None:
-        if isinstance(spec, str):
-            names.add(spec)
-        elif isinstance(spec, (tuple, list)):
-            for item in spec:
-                _flatten(item)
-
-    _flatten(row.creds)
-    if row.token:
-        names.add(row.token)
-    for key_env in (*row.fixed, *row.optional, *row.optional_stripped):
-        _flatten(key_env[1])
-    if row.warn_missing:
-        names.add(row.warn_missing[0])
-    if row.home:
-        names.update({row.home, f"{row.home}_NAME", f"{row.home}_THREAD_ID"})
-    return names
-
-
-def config_env_table_keys() -> Dict[str, str]:
-    """``{ENV_KEY: platform_id}`` for the names the gateway env-override table reads outright: the
-    enable-credential sets and every ``_Cred`` row. Registry-free, so it is cheap at import time;
-    raises if the table cannot be read (callers decide whether that is fatal)."""
-    from gateway import config_env
-    keys: Dict[str, str] = {}
-    for platform, names in config_env._ENV_ENABLE_CREDENTIALS.items():
-        keys.update(dict.fromkeys(names, platform.value))
-    for step in config_env._ENV_STEPS:
-        if isinstance(step, config_env._Cred):
-            keys.update(dict.fromkeys(_cred_row_envs(step), step.platform.value))
-    return keys
-
-
 def declared_channel_env_keys(source_dir: Optional[Path] = None) -> Dict[str, str]:
     """``{ENV_KEY: platform_id}`` for every env name an adapter declares outright (registry entry
     fields, the gateway env-override table) plus gateway-wide channel policy. Prefix matching covers
@@ -170,7 +133,7 @@ def declared_channel_env_keys(source_dir: Optional[Path] = None) -> Dict[str, st
                     keys[name] = entry.name
     with contextlib.suppress(Exception):
         from gateway import config_env
-        keys.update(config_env_table_keys())
+        # Gateway env-override table (full-version upgrades only; no-op here).
         for step in config_env._ENV_STEPS:
             if isinstance(step, partial):
                 platform = step.keywords.get("platform")

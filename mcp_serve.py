@@ -597,37 +597,11 @@ class _ToolHandlers:
         event = self.bridge.wait_for_event(after_cursor=after_cursor, session_key=session_key, timeout_ms=timeout_ms)
         return json.dumps({"event": event} if event else {"event": None, "reason": "timeout"}, indent=2)
 
-    def messages_send(self, target: str, message: str) -> str:
-        """Send a message to a platform conversation.
-
-        The target format is "platform:chat_id" — same format used by the
-        channels_list tool. You can also use human-friendly channel names
-        that will be resolved automatically.
-
-        Examples:
-            target="telegram:6308981865"
-            target="discord:#general"
-            target="slack:#engineering"
-
-        Args:
-            target: Platform target in "platform:identifier" format
-            message: The message text to send
-        """
-        if not target or not message:
-            return json.dumps({"error": "Both target and message are required"})
-        try:
-            from tools.send_message_tool import send_message_tool
-            return send_message_tool({"action": "send", "target": target, "message": message})
-        except ImportError:
-            return json.dumps({"error": "Send message tool not available"})
-        except Exception as e:
-            return json.dumps({"error": f"Send failed: {e}"})
-
     def channels_list(self, platform: Optional[str] = None) -> str:
         """List available messaging channels and targets across platforms.
 
-        Returns channels that you can send messages to. The target strings
-        returned here can be used directly with the messages_send tool.
+        Returns channels from the cached channel directory. The target strings
+        returned here identify platform conversations.
 
         Args:
             platform: Filter by platform name (telegram, discord, slack, etc.)
@@ -684,7 +658,7 @@ class _ToolHandlers:
 # Registration order == list_tools order (wire format).
 _TOOL_NAMES = (
     "conversations_list", "conversation_get", "messages_read", "attachments_fetch",
-    "events_poll", "events_wait", "messages_send", "channels_list",
+    "events_poll", "events_wait", "channels_list",
     "permissions_list_open", "permissions_respond",
 )
 

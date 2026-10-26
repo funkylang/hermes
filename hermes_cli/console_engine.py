@@ -295,7 +295,6 @@ _CLI_FAMILIES: dict[str, tuple[_CliSurface, str]] = {
         _sub("webhook", "build_webhook_parser", "cmd_webhook"),
         "list, *subscribe, *remove, test"),
     "hooks": (_sub("hooks", "build_hooks_parser", "cmd_hooks"), "list, *test, *doctor, *revoke"),
-    "slack": (_sub("slack", "build_slack_parser", "cmd_slack"), "manifest"),
     "profile": (
         _sub("profile", "build_profile_parser", "cmd_profile"),
         "list, show, info, *create, *use, *describe, *rename, *delete, *export, *import, "
@@ -324,7 +323,7 @@ _CLI_FAMILIES: dict[str, tuple[_CliSurface, str]] = {
 # (builder/adder families never did).
 _CONFIRMED_KINDS = {"extracted", "registered"}
 
-_SEND_SURFACE = _CliSurface("adder", "hermes_cli.send_cmd", "register_send_subparser")
+
 
 
 def _register_command_family(
@@ -427,10 +426,6 @@ class HermesConsoleEngine:
                 mutating=bool(confirmation), confirmation=confirmation)
         for root, (surface, paths) in _CLI_FAMILIES.items():
             _register_command_family(self, root, surface, paths)
-        self.register(
-            ("send",), "send --to <target> <message>", "Send a message to a configured platform.",
-            lambda _engine, args: _dispatch(_SEND_SURFACE, "send", (), args),
-            mutating=True, confirmation="Send this message?")
 
     def register(
         self, path: Iterable[str], usage: str, summary: str,

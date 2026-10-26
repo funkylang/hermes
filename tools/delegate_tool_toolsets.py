@@ -16,7 +16,6 @@ DELEGATE_BLOCKED_TOOLS = frozenset(
         "delegate_task",  # no recursive delegation
         "clarify",  # no user interaction
         "memory",  # no writes to shared MEMORY.md
-        "send_message",  # no cross-platform side effects
     ]
 )
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]

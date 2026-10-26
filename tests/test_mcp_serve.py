@@ -763,12 +763,6 @@ class TestMCPToolParameterCoercion:
         assert result["event"] is not None
         assert result["event"]["content"] == "waiting for this"
 
-class TestE2EMessagesSend:
-    def test_send_missing_args(self, mcp_server_e2e, _event_loop):
-        server, _ = mcp_server_e2e
-        result = _run_tool(server, "messages_send", {"target": "", "message": "hi"})
-        assert "error" in result
-
 class TestE2EChannelsList:
     def test_channels_from_sessions(self, mcp_server_e2e, _event_loop):
         server, _ = mcp_server_e2e

@@ -819,16 +819,6 @@ PLATFORM_HINTS = {
         "and emoji. You can send media files natively: include MEDIA:/absolute/path/to/file in "
         "your response. Images are sent as native photos, and other files arrive as downloadable documents."
     ),
-    "yuanbao": (
-        "You are on Yuanbao (\u817e\u8baf\u5143\u5b9d), a Chinese AI assistant "
-        "platform. Markdown renders (code blocks, tables, bold/italic). "
-        f"{_MEDIA_NATIVE}Images (.jpg, .png, .webp, .gif) send as photos, other files as downloadable documents (max 50 MB); "
-        "image URLs via ![alt](url) are downloaded and sent as photos. Never claim you lack file-sending. "
-        "Stickers (\u8d34\u7eb8/\u8868\u60c5\u5305): when the user sends one (you see '[emoji: "
-        "\u540d\u79f0]') or asks for one, use the sticker tools \u2014 yb_search_sticker with a Chinese "
-        "keyword, then yb_send_sticker with the chosen id \u2014 which send a real native sticker. Never "
-        "draw sticker-like PNGs and send them as images, and bare Unicode emoji is not a substitute."
-    ),
     "api_server": (
         "You're responding through an API server. The rendering layer is unknown — assume plain text. No markdown "
         "formatting (no asterisks, bullets, headers, code fences). Treat this like a conversation, not a document. "

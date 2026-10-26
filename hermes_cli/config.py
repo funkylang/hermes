@@ -3209,7 +3209,7 @@ _OPEN_DICT_TOP_LEVEL_KEYS = frozenset({
 _SCHEMA_DEFINED_DICT_KEYS = frozenset({
     # Platform configs — PlatformConfig dataclass + dynamic extras
     "discord", "telegram", "slack", "whatsapp", "signal", "mattermost",
-    "matrix", "feishu", "wecom", "weixin", "bluebubbles", "qqbot", "yuanbao",
+    "matrix", "feishu", "wecom", "weixin", "bluebubbles", "qqbot",
     "email", "sms", "dingtalk",
     # MCP server template / dynamic auth dicts
     "sessions", "checkpoints",
