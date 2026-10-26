@@ -1454,13 +1454,6 @@ class CLITuiMixin:
         has_images = bool(self._attached_images)
         if not (text or has_images):
             return
-        # Accumulate every submitted user message.
-        if text:
-            with self.lock:
-                if self.user_input:
-                    self.user_input += "\n\n" + text  # new paragraph
-                else:
-                    self.user_input = text
         if self._tui_enter_inline_command(event, text, has_images):
             return
         # Snapshot and clear attached images; bundle text + images as a tuple when present.
@@ -1472,6 +1465,20 @@ class CLITuiMixin:
         # be routed into steer/redirect (injecting `!git status` into the model's context as a
         # prompt). It queues and runs locally once the loop drains.
         _is_local_dispatch = bool(text) and (_looks_like_slash_command(text) or text.strip().startswith("!"))
+        # Buffer user_input ONLY for genuine steering content — never commands or control-words,
+        # which have their own handling+display and would otherwise leak into the next turn's box.
+        from agent.control_words import is_standalone_done_control_word, is_standalone_stop_control_word
+        if (
+            text
+            and not _is_local_dispatch
+            and not is_standalone_stop_control_word(text)
+            and not is_standalone_done_control_word(text)
+        ):
+            with self.lock:
+                if self.user_input:
+                    self.user_input += "\n\n" + text  # new paragraph
+                else:
+                    self.user_input = text
         if self._agent_running and not _is_local_dispatch:
             self._tui_enter_while_busy(text, images, payload)
         else:

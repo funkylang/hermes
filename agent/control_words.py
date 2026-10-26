@@ -90,6 +90,11 @@ def is_standalone_stop_control_word(message: Any) -> bool:
     return is_standalone_control_word(message, _STOP_WORD)
 
 
+def is_standalone_done_control_word(message: Any) -> bool:
+    """True when ``message`` is exactly "done" after whitespace stripping, case-insensitive."""
+    return is_standalone_control_word(message, _DONE_WORD)
+
+
 def apply_done_control_word(user_message: Any, persist_user_message: Optional[Any]) -> Tuple[Any, Optional[Any]]:
     """Detect a standalone "done" message and inject its wrap-up instruction for this turn only.
 
