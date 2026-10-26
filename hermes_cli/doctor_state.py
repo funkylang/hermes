@@ -195,7 +195,7 @@ def _check_directory_structure(should_fix: bool, f: Finding) -> None:
     _memory_enabled, _user_profile_enabled = _memory_store_flags(hermes_home)
     memory_on = bool(_memory_enabled or _user_profile_enabled)
     # The built-in file store neither creates nor consumes memories/ when both targets are disabled.
-    for subdir_name in ["cron", "sessions", "logs", "skills"] + (["memories"] if memory_on else []):
+    for subdir_name in ["sessions", "logs", "skills"] + (["memories"] if memory_on else []):
         ensure_dir(f, should_fix, hermes_home / subdir_name, f"{_DHH}/{subdir_name}/ exists",
                    f"Created {_DHH}/{subdir_name}/", f"{_DHH}/{subdir_name}/ not found")
     _check_scratch_dir(hermes_home, _DHH)
@@ -468,10 +468,9 @@ def _retired_wal_holders(f: Finding, state_db_path: Path, _DHH: str) -> bool:
     rendered = ", ".join(describe_holder_pid(pid) for pid in pids)
     check_warn(f"{_DHH}/state.db: {len(pids)} process(es) still hold a retired WAL generation ({rendered})",
                "(every new session refuses to open until they exit; health/stats probes skipped)")
-    f.issues.append(f"state.db retired WAL generation held by {rendered}{host_gateway_note()} — stop the host "
-                    f"gateway, dashboard and cron writers among them ('hermes {profile_cli_selector()}gateway "
-                    "stop' stops the ONE host process serving every profile, quit the Desktop app), do not "
-                    "delete the WAL yourself, then rerun 'hermes doctor'")
+    f.issues.append(f"state.db retired WAL generation held by {len(pids)} process(es) ({rendered}) — stop the "
+                    "hermes processes holding it (or the shell that launched them), do not delete the WAL "
+                    "yourself, then rerun 'hermes doctor'")
     return True
 
 
@@ -489,22 +488,6 @@ def _check_state_db(should_fix: bool, f: Finding) -> None:
     else:
         check_info(f"{_DHH}/state.db not created yet (will be created on first session)")
     _state_db_wal(f, should_fix, state_db_path)
-
-
-@doctor_check()
-def _check_cron_store(should_fix: bool, f: Finding) -> None:
-    """The cron store accepts writes and its filesystem is not nearly full (jobs skip otherwise)."""
-    from hermes_cli.doctor import HERMES_HOME, _DHH
-    from cron.store_health import LOW_FREE_BYTES, free_bytes, probe_report
-    cron_dir = HERMES_HOME / "cron"
-    if (report := probe_report(cron_dir)) is not None:
-        check_warn(f"{_DHH}/cron/ is NOT writable ({report['error']}) — scheduled cron jobs are being skipped")
-        return f.issues.append(f"Cron store {report['store']} is not writable: {report['fix']}")
-    free = free_bytes(cron_dir) if cron_dir.is_dir() else None
-    if free is not None and free < LOW_FREE_BYTES:
-        check_warn(f"{_DHH}/cron/ filesystem has only {_human_bytes(free)} free — cron jobs stop when it fills")
-        return f.issues.append(f"Free disk space on the filesystem holding {cron_dir}")
-    check_ok(f"{_DHH}/cron/ store is writable")
 
 
 @doctor_check()

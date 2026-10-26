@@ -402,9 +402,15 @@ class PluginContext:
             return "default"
 
     def current_cron_execution(self) -> Any:
-        """The cron run executing now (``cron.execution_identity.CronExecution``), else ``None``."""
-        from cron.execution_identity import current_cron_execution
-        return current_cron_execution()
+        """The cron run executing now (``cron.execution_identity.CronExecution``), else ``None``.
+
+        Returns ``None`` when no scheduler is running (the bound module is absent from
+        this build); external schedulers bind the identity through their own worker."""
+        try:
+            from cron.execution_identity import current_cron_execution
+            return current_cron_execution()
+        except ImportError:
+            return None
 
     def on_unload(self, callback: Callable[[], None]) -> PluginRegistration:
         """Register a cleanup callback for unload: runs in reverse acquisition order interleaved
@@ -1010,7 +1016,7 @@ class PluginContext:
         self._manager._subscribe_event(self.plugin_id, event, callback)
         logger.debug("Plugin %s subscribed to event: %s", self.manifest.name, event)
 
-    from hermes_cli.plugins_content import register_automation_blueprint, register_skill
+    from hermes_cli.plugins_content import register_skill
 
 # -- scoped provider registrars ------------------------------------------------------------------
 # Every ``register_<category>_provider`` shares one body (:meth:`PluginContext._register_scoped_provider`):
@@ -1187,7 +1193,6 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         self._plugin_commands: Dict[str, dict] = {}
         self._system_prompt_sections: Dict[str, PluginSystemPromptSection] = {}
         self._plugin_skills: Dict[str, Dict[str, Any]] = {}
-        self._automation_blueprints: Dict[str, Any] = {}  # "<plugin>:<key>" -> AutomationBlueprint
         self._portable_mcp_servers: Dict[str, Dict[str, Any]] = {}
         self._portable_mcp_server_plugins: Dict[str, str] = {}
         self._aux_tasks: Dict[str, Dict[str, Any]] = {}
@@ -1560,10 +1565,6 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
                 "category": "plugin", "frontmatter": dict(entry.get("frontmatter", {})),
             } for qualified, entry in sorted(self._plugin_skills.items())
         ]
-
-    def list_automation_blueprints(self) -> List[Any]:
-        """Plugin-registered ``AutomationBlueprint``s, sorted by key."""
-        return [bp for _key, bp in sorted(self._automation_blueprints.items())]
 
     def has_portable_mcp_servers(self) -> bool:
         return bool(self._portable_mcp_servers)

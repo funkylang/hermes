@@ -506,6 +506,25 @@ def get_process_start_time(pid: int) -> Optional[int]:
     return _get_process_start_time(pid)
 
 
+def current_instantiation_epoch() -> str:
+    """Identity of THIS container / VM instantiation (``"<boot_id>:<pid1_start>"``).
+
+    Stable for the life of PID 1 but changes when the machine is recreated: boot_id on a VM
+    reboot, PID 1's start time on ``docker restart``. Used to compose restart-stable live-process
+    fingerprints (kanban dispatch) that never survive an instantiation boundary. ``""`` when
+    neither is readable (non-Linux, no ``/proc``) — callers treat that as "epoch check disabled",
+    never fail-closed."""
+    boot_id = pid1_start = ""
+    with contextlib.suppress(OSError):
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    with contextlib.suppress(OSError, IndexError):
+        # "<pid> (<comm>) <state> ...": comm may contain spaces/parens, so split on the
+        # LAST ')'. starttime is field 22 (1-indexed) = tail index 19.
+        pid1_start = Path("/proc/1/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[19]
+    return f"{boot_id}:{pid1_start}" if (boot_id or pid1_start) else ""
+
+
+
 def _read_process_cmdline(pid: int) -> Optional[str]:
     """Process command line as one string: /proc, then psutil, then ``ps``.
 

@@ -143,38 +143,13 @@ def _tools_completions(sub_text: str, sub_lower: str):
         ((k, m) for k, m in rows if k not in already), partial, skip_exact=False)
 
 
-def _handoff_completions(sub_text: str, sub_lower: str):
-    """/handoff — connected gateway platforms, first arg only. A home channel is not required
-    (often learned at runtime); the meta hints whether one is set."""
-    completed, partial = _split_args(sub_text)
-    if completed:
-        return
-    try:
-        from gateway.config import load_gateway_config
-        gw = load_gateway_config()
-        platforms = gw.get_connected_platforms()
-    except Exception:
-        return
-    for platform in platforms:
-        name = platform.value
-        if not name.startswith(partial.lower()):
-            continue
-        try:
-            home = gw.get_home_channel(platform)
-        except Exception:
-            home = None
-        home_name = getattr(home, "name", None) if home else None
-        yield _completion(
-            name, partial, name, f"→ {home_name}" if home_name else "send this session here")
-
 
 # base command -> (handler(sub_text, sub_lower), single_word_only). Single-word handlers only
-# run while the first argument is typed; /tools and /handoff parse multi-word input themselves.
+# run while the first argument is typed; /tools parses multi-word input itself.
 _DYNAMIC_COMPLETIONS: dict[str, tuple[Callable[..., Any], bool]] = {
     "/skin": (_skin_completions, True),
     "/personality": (_personality_completions, True),
-    "/tools": (_tools_completions, False),
-    "/handoff": (_handoff_completions, False)}
+    "/tools": (_tools_completions, False)}
 
 
 def _extract_path_word(text: str) -> str | None:

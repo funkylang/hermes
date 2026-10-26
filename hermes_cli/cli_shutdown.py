@@ -156,11 +156,6 @@ _CLEANUP_STEPS = (
 
 
 def _should_emit_cleanup_session_finalize(session_id: str | None) -> bool:
-    # A handed-off session is owned by the gateway process — never finalize it here.
-    # The CLI must not finalize it on exit — that sets end_reason on a row the gateway reopened and is
-    # actively writing to, causing the handoff leg to vanish from session history (#88234).
-    if session_id is not None and session_id in _cli()._handed_off_session_ids:
-        return False
     if not _cli()._single_query_finalize_attempted_session_ids:
         return True
     if session_id is None:
@@ -200,9 +195,6 @@ def _emit_interrupted_session_end(cli, *, reason: str = "keyboard_interrupt") ->
 
     with suppress(Exception):
         agent.interrupt(reason.replace("_", " "))
-
-    if session_id in _cli()._handed_off_session_ids:  # gateway owns the lifecycle now
-        return
     if session_id:
         with suppress(Exception):
             cli.session_id = session_id
@@ -220,9 +212,6 @@ def _notify_single_query_session_finalize(cli, *, reason: str = "shutdown") -> N
     agent, session_id = _oneshot_agent_and_session(cli)
     if session_id in _cli()._single_query_finalize_attempted_session_ids:
         return
-    if session_id in _cli()._handed_off_session_ids:  # gateway owns the lifecycle now
-        return
-
     try:
         _notify_session_finalize(session_id=session_id, platform=getattr(agent, "platform", None) or "cli", reason=reason)
     finally:
@@ -248,7 +237,7 @@ def _flush_one_shot_session_store(cli) -> None:
     """
     from cli import _oneshot_agent_and_session
     agent, session_id = _oneshot_agent_and_session(cli)
-    if agent is None or not session_id or session_id in _cli()._handed_off_session_ids:
+    if agent is None or not session_id:
         return
     if getattr(agent, "_persist_disabled", False):
         return

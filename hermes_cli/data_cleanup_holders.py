@@ -15,8 +15,18 @@ _OWNER_STOP_HINTS = {
 
 
 def _drain_manual_gateway(home: Path) -> None:
-    from gateway.control_socket import identify_gateway, pause_gateway_for_update
     from hermes_cli.runtime_status import get_process_start_time, get_running_pid_identity_strict, _pid_exists
+
+    try:
+        from gateway.control_socket import identify_gateway, pause_gateway_for_update
+    except ImportError:
+        # Full-version installs may still run a gateway on this machine; without the
+        # control socket we can only verify its PID file and refuse when it is live.
+        if get_running_pid_identity_strict(home / "gateway.pid") is not None:
+            raise RuntimeError(
+                f"a live gateway still owns {home}; stop it before deleting one profile's data"
+            )
+        return
 
     identity = identify_gateway(home)
     if identity is None:

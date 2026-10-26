@@ -25,7 +25,6 @@ _HERMES_CORE_TOOLS = [
     "session_search",
     "clarify",
     "execute_code", "delegate_task",
-    "cronjob_manage",
     "kanban_show", "kanban_list",
     "kanban_complete", "kanban_block", "kanban_request_review",
     "kanban_request_changes",
@@ -63,8 +62,8 @@ def _core_without(*excluded, kanban=True):
 
 
 # Coding posture: everything you reach for while pairing on code; drops messaging,
-# tts, image_gen, cron, kanban and computer-use.
-_CODING_TOOLS = _core_without("image_generate", "text_to_speech", "cronjob_manage", "computer_use", kanban=False)
+# tts, image_gen, kanban and computer-use.
+_CODING_TOOLS = _core_without("image_generate", "text_to_speech", "computer_use", kanban=False)
 
 # Toolsets a CLIENT adds to its own sessions (tui_gateway/server.py::_gui_surface_toolsets), never
 # config: another surface lacking them made no configuration choice.
@@ -113,11 +112,6 @@ TOOLSETS = {
         "Browser automation for web interaction (navigate, click, type, scroll, "
         "iframes, hold-click)",
         [t for t in _HERMES_CORE_TOOLS if t.startswith("browser_")],
-    ),
-    "cronjob": _ts(
-        "Cronjob management tool - create, list, update, pause, resume, remove, and "
-        "trigger scheduled tasks",
-        ["cronjob_manage"],
     ),
     "file": _ts(
         "File manipulation tools: read, write, patch (with fuzzy matching), and "
@@ -195,11 +189,10 @@ TOOLSETS = {
         "interactive UI tools like clarify or send_message)",
         _core_without("text_to_speech", "clarify", "computer_use", kanban=False),
     ),
-    "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
+    "hermes-cli": _bundle("Full interactive CLI toolset - all default tools"),
 
-    # Mirrors hermes-cli; `hermes tools` platform config filters it down and
+    # `hermes tools` platform config filters it down and
     # _get_platform_tools() drops _DEFAULT_OFF_TOOLSETS unless user-enabled.
-    "hermes-cron": _bundle("Default cron toolset - same core tools as hermes-cli; gated by `hermes tools`"),
     "hermes-telegram": _bundle("Telegram bot toolset - full access for personal use (terminal has safety checks)"),
     "hermes-discord": _bundle(
         "Discord bot toolset - full access (terminal has safety checks via dangerous "

@@ -325,35 +325,8 @@ def _live_system_guard(request, monkeypatch):
                 "needed (e.g. an integration test testing the update "
                 "flow against a dedicated throwaway repo)."
             )
-        # Block spawning a REAL gateway runtime (``python -m hermes_cli.main
-        # gateway run|start|restart``). ``_spawn_hermes_action`` launches it
-        # with start_new_session=True, so it outlives the pytest worker; the
-        # child inherits the pytest-tmp HERMES_HOME, resolves the DEVELOPER's
-        # ``hermes-gateway`` systemd unit (a tmp home hashes to no profile
-        # suffix), restarts the live gateway, and the survivors squat the
-        # webhook port. 2026-09-03: 39 such orphans lived 6 days after a
-        # sibling refactor moved the spawn seam and left tests patching the
-        # facade. The canonical matcher, never an argv substring.
-        from gateway.status import gateway_spawn_intent_subcommand
-        # A gateway launched INSIDE a container (`docker exec … hermes gateway start`) cannot
-        # reach the host's systemd unit or webhook port; tests/docker/ exists to exercise it.
-        in_container = _first_token_basename(cmd_str) in _CONTAINER_RUNTIMES
-        if (
-            not lookalike_ok
-            and not in_container
-            and gateway_spawn_intent_subcommand(cmd_str) in ("run", "start", "restart")
-        ):
-            raise RuntimeError(
-                f"tests/conftest.py live-system guard: blocked "
-                f"subprocess.{name}({cmd!r}) — this would spawn a REAL "
-                "hermes gateway runtime that outlives the test (it is "
-                "detached), restarts the developer's live gateway, and "
-                "holds the webhook port. Patch the spawn seam where "
-                "production reads it (hermes_cli.web_server_gateway."
-                "_spawn_hermes_action), or mark with "
-                "@pytest.mark.spawns_gateway_lookalike a test that spawns "
-                "and reaps its own stub child."
-            )
+        # (The former "block spawning a REAL gateway runtime" check is gone
+        # with the gateway: there is no daemon left to spawn.)
 
     def _wrap_subprocess(name, real):
         def _guarded(cmd, *args, **kwargs):

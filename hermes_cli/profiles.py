@@ -1147,12 +1147,16 @@ def profile_is_standalone(home: Path) -> bool:
     return result
 
 
+# Config-bool token sets (inlined from gateway.config with the gateway removal).
+_TRUTHY_CONFIG_TOKENS = frozenset({"1", "true", "yes", "on"})
+
+
 def _standalone_truthy(value: object) -> bool:
     """``gateway.standalone`` truthiness via the shared bool parser; only the
-    ``gateway:`` section's ``standalone`` key is read (no top-level alias)."""
-    from gateway.config import _bool_token
+    ``gateway:`` section's ``standalone`` key is read (no top-level alias).
+    Parser inlined after the gateway package removal (same token sets)."""
     if isinstance(value, str):
-        return _bool_token(value) is True
+        return value.strip().lower() in _TRUTHY_CONFIG_TOKENS
     return bool(value)
 
 

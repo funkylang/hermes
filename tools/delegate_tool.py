@@ -597,12 +597,12 @@ def _build_top_level_description(*, independent_completions=None) -> str:
     # vocabulary); model_tools session-filters the list to tools the session has.
     if orchestration_available:
         restrictions_rule = (
-            "- Children cannot call clarify, memory, or cronjob.\n"
+            "- Children cannot call clarify or memory.\n"
             f"- Children can themselves delegate while depth remains (max_spawn_depth={_get_max_spawn_depth()}); the "
             "runtime derives this from depth automatically.\n"
         )
     else:
-        restrictions_rule = "- Children cannot call delegate_task, clarify, memory, or cronjob.\n"
+        restrictions_rule = "- Children cannot call delegate_task, clarify, or memory.\n"
     from tools.delegate_tool_config import _get_independent_completions
 
     if independent_completions is None:

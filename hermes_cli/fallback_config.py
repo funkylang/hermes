@@ -165,3 +165,37 @@ def scoped_fallback_chain(
         logger.warning("%s fallback_providers has no usable routes; using the %s default",
                        owner, "pinned" if pinned else "inherited")
     return normalized or default
+
+
+def apply_fallback_chain_to_agent(agent: Any, chain: list | None) -> None:
+    """Keep a cached agent's fallback chain aligned with current config.
+
+    Extracted from gateway.run_config_loaders (2026-10-26): the CLI's per-turn sync needs it.
+    Skips the rewrite while a cooldown holds the agent on an activated fallback provider
+    (``restore_primary_runtime`` owns that lifecycle); otherwise replaces the chain so
+    mid-uptime ``fallback_providers`` edits apply without a restart.
+
+    When primary is active (or cooldown expired), replace the chain so mid-uptime ``fallback_providers``
+    edits take effect without requiring a gateway restart (#60955).
+    """
+    if agent is None:
+        return
+    import time
+
+    new_chain = list(chain or [])
+    rate_limited_until = getattr(agent, "_rate_limited_until", 0) or 0
+    if getattr(agent, "_fallback_activated", False) and rate_limited_until > time.monotonic():
+        return
+    old_chain = list(getattr(agent, "_fallback_chain", []) or [])
+    agent._fallback_chain = new_chain
+    agent._fallback_model = new_chain[0] if new_chain else None
+    if not getattr(agent, "_fallback_activated", False):
+        agent._fallback_index = 0
+    # A config edit means the user changed something — drop the session-scoped unavailability
+    # memo so re-configured entries (e.g. credentials added mid-uptime) get retried. Only on real
+    # content change, so the per-message no-op refresh keeps the memo's rate-limiting benefit.
+    # See #60955.
+    if new_chain != old_chain:
+        unavailable = getattr(agent, "_unavailable_fallback_keys", None)
+        if unavailable:
+            unavailable.clear()

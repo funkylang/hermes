@@ -304,26 +304,6 @@ def _systemd_run_user_scope_available() -> bool:
         return available
 
 
-def _is_supervised_gateway_process() -> bool:
-    """Whether this process is the live, supervised Hermes gateway itself.
-    Supervisor markers and ``_HERMES_GATEWAY`` are inherited by every descendant (and
-    importing ``gateway.run`` sets the latter), so also require ownership of the live
-    gateway PID file — scopes are for the gateway, not terminal children or CLIs.
-    Reads the launch marker (``HERMES_SUPERVISED_CHILD`` included), not the restart-route
-    probe: a Windows Scheduled-Task gateway sets only that marker, and the self-kill guards
-    gated here must protect it too (#113667)."""
-    if os.environ.get("_HERMES_GATEWAY") != "1":
-        return False
-    try:
-        from gateway.restart import is_supervised_gateway_launch
-        from hermes_cli.runtime_status import get_running_pid
-
-        return is_supervised_gateway_launch() and get_running_pid(cleanup_stale=False) == os.getpid()
-    except Exception as exc:
-        logger.debug("Could not verify supervised gateway process identity: %s", exc)
-        return False
-
-
 def _build_systemd_scope_argv(shell_argv: List[str], unit_suffix: str) -> List[str]:
     """Wrap *shell_argv* in a ``systemd-run --user --scope`` invocation with its own
     memory accounting, so an OOM in the worker cannot kill the gateway cgroup.
@@ -439,27 +419,23 @@ def restart_safe_gateway_child_argv(
         return GatewayChildDispatch("in_process", command)
     if not os.environ.get("INVOCATION_ID"):
         return GatewayChildDispatch("in_process", command)
-    supervised_gateway = _is_supervised_gateway_process()
-    if not supervised_gateway and not outlives_parent:
+    if not outlives_parent:
         return GatewayChildDispatch("in_process", command)
 
     def _degrade(detail: str) -> GatewayChildDispatch:
-        if supervised_gateway:
-            if require_restart_safe_scope:
-                # Stored as the cron execution's error and shown on the job row: name the remedy.
-                raise RestartSafeScopeUnavailable(
-                    f"cannot create restart-safe systemd scope for gateway child: {detail}"
-                )
-            _warn_scope_degraded_once(f"managed gateway: {detail}", consequence=_CRON_DEGRADED_CONSEQUENCE)
-        else:
-            _warn_scope_degraded_once(f"systemd unit dispatch: {detail}", consequence=_UNIT_DEGRADED_CONSEQUENCE)
+        if require_restart_safe_scope:
+            # Stored as the spawn's error and shown on the job row: name the remedy.
+            raise RestartSafeScopeUnavailable(
+                f"cannot create restart-safe systemd scope for worker child: {detail}"
+            )
+        _warn_scope_degraded_once(f"systemd unit dispatch: {detail}", consequence=_UNIT_DEGRADED_CONSEQUENCE)
         return GatewayChildDispatch("degraded", command)
 
     if not _systemd_run_user_scope_available():
         return _degrade(
             "systemd-run --user --scope is unavailable (usually no reachable user D-Bus session at "
             f"/run/user/{os.getuid()}/bus). On a system-level service install, run "  # windows-footgun: ok — behind the _IS_LINUX return above
-            "`sudo loginctl enable-linger <gateway-user>` and restart the gateway."
+            "`sudo loginctl enable-linger <user>` for the user running Hermes."
         )
     scoped = _build_systemd_scope_argv(command, unit_suffix=unit_suffix)
     if scoped == command:
@@ -1129,22 +1105,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
 
     def _scope_argv(self, session: ProcessSession, safe_command: str, unit_suffix: str, label: str) -> List[str]:
         """Login-shell argv for *safe_command* (parity with LocalEnvironment: rc files
-        sourced, user tools on PATH), wrapped in a transient systemd scope when we are
-        the supervised gateway (own cgroup: an OOM kills only the worker, not the
-        gateway and its messaging control plane)."""
-        argv = [_find_shell(), "-lic", f"set +m; {safe_command}"]
-        # This applies to both pipe mode and the PTY path above. See #70716.
-        in_supervised_gateway = _IS_LINUX and _is_supervised_gateway_process()
-        if in_supervised_gateway and _systemd_run_user_scope_available():
-            session.systemd_unit = f"hermes-worker-{unit_suffix}.scope"
-            return _build_systemd_scope_argv(argv, unit_suffix=unit_suffix)
-        if in_supervised_gateway:
-            # Under a supervisor but no private cgroup: a worker OOM can still take
-            # the whole gateway down.
-            logger.debug(
-                "%s background executor not isolated in a systemd scope "
-                "(systemd-run --user unavailable); worker shares the gateway cgroup.", label)
-        return argv
+        sourced, user tools on PATH)."""
+        return [_find_shell(), "-lic", f"set +m; {safe_command}"]
 
     @staticmethod
     def _spawn_env(env_vars: dict) -> dict:

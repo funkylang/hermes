@@ -77,12 +77,6 @@ def _render_distribution_plan(plan) -> None:
             if er.description:
                 line += f" — {er.description}"
             print(line)
-    if plan.has_cron:
-        print(
-            "\n  ⚠ This distribution ships cron jobs.  They will NOT run "
-            "automatically — review and enable manually."
-        )
-
 
 def _profile_status(args):
     """Bare ``hermes profile`` — show current profile status."""
@@ -524,11 +518,6 @@ def _profile_install(args):
                 f"  Next: copy .env.EXAMPLE to .env and fill in required keys:\n"
                 f"    {plan.target_dir}/.env.EXAMPLE"
             )
-        if plan.has_cron:
-            print(
-                "  Cron jobs were included but are NOT scheduled automatically.\n"
-                f"  Review them with:  hermes -p {plan.manifest.name} cron list"
-            )
         print(f"\n  Use with:      hermes -p {plan.manifest.name} chat")
     except (DistributionError, ValueError) as e:
         _die(f"Error: {e}")
@@ -559,8 +548,6 @@ def _profile_update(args):
                 return
         plan = update_distribution(canon, force_config=force_config)
         print(f"\n✓ Updated '{plan.manifest.name}' → v{plan.manifest.version}")
-        if plan.has_cron:
-            print(f"  Cron files were refreshed.  Review with:  hermes -p {plan.manifest.name} cron list")
     except (DistributionError, ValueError) as e:
         _die(f"Error: {e}")
 

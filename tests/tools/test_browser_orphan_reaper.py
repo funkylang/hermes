@@ -80,7 +80,7 @@ class TestReapOrphanedBrowserSessions:
         """Alive, untracked, legacy (no owner_pid) daemon is reaped.
 
         Post-#21561 the liveness probe goes through
-        ``gateway.status._pid_exists`` (which wraps ``psutil.pid_exists``
+        ``hermes_cli.runtime_status._pid_exists`` (which wraps ``psutil.pid_exists``
         because ``os.kill(pid, 0)`` is a footgun on Windows — bpo-14484).
         With no owner_pid file and no tracked-name entry, the reaper
         terminates the daemon (and its process tree) and removes its socket
@@ -96,8 +96,8 @@ class TestReapOrphanedBrowserSessions:
         def mock_terminate(pid, expected_start=None):
             terminate_calls.append(pid)
 
-        with patch("gateway.status._pid_exists", return_value=True), \
-             patch("gateway.status.get_process_start_time", return_value=777), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
+             patch("hermes_cli.runtime_status.get_process_start_time", return_value=777), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid", side_effect=mock_terminate):
             _reap_orphaned_browser_sessions()
@@ -118,8 +118,8 @@ class TestReapOrphanedBrowserSessions:
         def _pid_exists(pid):
             return pid == 4242  # daemon alive, owning hermes gone
 
-        with patch("gateway.status._pid_exists", side_effect=_pid_exists), \
-             patch("gateway.status.get_process_start_time", return_value=777), \
+        with patch("hermes_cli.runtime_status._pid_exists", side_effect=_pid_exists), \
+             patch("hermes_cli.runtime_status.get_process_start_time", return_value=777), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=lambda pid, expected_start=None: terminate_calls.append(pid)):
@@ -141,8 +141,8 @@ class TestReapOrphanedBrowserSessions:
         _make_socket_dir(fake_tmpdir, "h_perm7654321", pid=12345)
         terminate_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
-             patch("gateway.status.get_process_start_time", return_value=None), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
+             patch("hermes_cli.runtime_status.get_process_start_time", return_value=None), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=lambda pid, expected_start=None: terminate_calls.append(pid)):
@@ -189,7 +189,7 @@ class TestOwnerPidCrossProcess:
             kill_calls.append(pid)
 
         # Owner alive → reaper skips without ever probing the daemon.
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid", side_effect=mock_terminate):
             _reap_orphaned_browser_sessions()
 
@@ -318,7 +318,7 @@ class TestReaperIdentityGuard:
         terminate_calls = []
         proc = self._FakeProc(name="sleep", cmdline=["/bin/sleep", "600"])
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
              patch("psutil.Process", return_value=proc), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=lambda pid: terminate_calls.append(pid)):
@@ -390,7 +390,7 @@ class TestLeakedDaemonWithLiveOwner:
         )
         kill_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=kill_calls.append):
@@ -410,8 +410,8 @@ class TestLeakedDaemonWithLiveOwner:
         _age_socket_dir(d, BROWSER_ORPHAN_GRACE_SECONDS + 600)
         kill_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
-             patch("gateway.status.get_process_start_time", return_value=777), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
+             patch("hermes_cli.runtime_status.get_process_start_time", return_value=777), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=lambda pid, expected_start=None: kill_calls.append(pid)):
@@ -437,7 +437,7 @@ class TestLeakedDaemonWithLiveOwner:
         bt._active_sessions["task-1"] = {"session_name": "h_tracked_old"}
         kill_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=kill_calls.append):
@@ -455,7 +455,7 @@ class TestLeakedDaemonWithLiveOwner:
         )
         kill_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
              patch("tools.browser_tool_lifecycle._socket_dir_idle_seconds", return_value=None), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
@@ -480,7 +480,7 @@ class TestLeakedDaemonWithLiveOwner:
         _age_socket_dir(d, BROWSER_ORPHAN_GRACE_SECONDS + 600)
         kill_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("hermes_cli.runtime_status._pid_exists", return_value=True), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=False), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
                    side_effect=kill_calls.append):

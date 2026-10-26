@@ -726,42 +726,6 @@ def execute_code(
     if not code or not code.strip():
         return tool_error("No code provided. execute_code requires a non-empty 'code' "
                           "parameter containing Python source. To run shell commands, use terminal(command=...) instead.")
-    # Hard-block gateway-lifecycle commands (mirrors the terminal_tool guard — otherwise
-    # `os.system("launchctl bootout ...")` here bypasses it and SIGTERMs the gateway mid-task).
-    # Gated on PID-file ownership, not the inherited env marker.
-    # Hard-block gateway-lifecycle commands, mirroring the terminal_tool guard (#68289): without this,
-    # execute_code is a straight bypass — the terminal() path refuses `launchctl bootout ai.hermes.gateway`,
-    # but the identical command inside `os.system(...)` / `subprocess.run([...])` here sailed through and
-    # SIGTERM'd the gateway mid-task.
-    # The identity probe ends in a kernel process query that has wedged on macOS
-    # (#111922); share the cell's own deadline and fail CLOSED when it renders no verdict.
-    from agent.deadline import run_bounded_sync
-    from tools.process_registry import _is_supervised_gateway_process
-    from tools.terminal_tool import _PRE_EXEC_GUARD_MIN_TIMEOUT_S
-    _probe_timeout = max(_load_config().get("timeout", DEFAULT_TIMEOUT), _PRE_EXEC_GUARD_MIN_TIMEOUT_S)
-    _probe = run_bounded_sync(
-        _is_supervised_gateway_process, _probe_timeout, label="execute_code.lifecycle-guard",
-    )
-    if _probe.timed_out:
-        return tool_error(
-            f"execute_code lifecycle guard did not finish within {_probe_timeout}s "
-            "(process-identity probe wedged); the code was not run. Retry the call."
-        )
-    if _probe.value:
-        from cron.lifecycle_guard import (
-            HOST_INTERPRETER_KILL_REJECTION,
-            contains_gateway_lifecycle_command,
-            contains_host_interpreter_kill,
-        )
-        if contains_gateway_lifecycle_command(code):
-            if contains_host_interpreter_kill(code):
-                return tool_error(HOST_INTERPRETER_KILL_REJECTION)
-            return tool_error(
-                "Blocked: cannot restart or stop the gateway from inside the "
-                "gateway process. The gateway would kill this script before "
-                "it could complete (SIGTERM propagates to child processes). "
-                "Run the lifecycle command from a shell outside the gateway."
-            )
     from tools.terminal_tool import _get_env_config, _docker_has_host_access
     _env_config = _get_env_config()
     env_type = _env_config["env_type"]

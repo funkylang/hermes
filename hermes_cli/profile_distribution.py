@@ -303,11 +303,7 @@ class InstallPlan:
     target_dir: Path
     existing: bool  # True if target profile already exists (update path)
     preserves_config: bool = True
-    has_cron: bool = False
 
-
-def _has_cron_jobs(staged: Path) -> bool:
-    return staged.joinpath(*_CRON_STORE_REL).is_file()
 
 
 def plan_install(source: str, workdir: Path, override_name: Optional[str] = None) -> InstallPlan:
@@ -336,7 +332,7 @@ def plan_install(source: str, workdir: Path, override_name: Optional[str] = None
     existing = target_dir.is_dir()
     return InstallPlan(
         manifest=manifest, staged_dir=staged, provenance=provenance, target_dir=target_dir, existing=existing,
-        preserves_config=existing, has_cron=_has_cron_jobs(staged),
+        preserves_config=existing,
     )
 
 
@@ -381,44 +377,6 @@ def _replace_entry(src: Path, dest: Path) -> None:
         shutil.copytree(src, dest)
     else:
         shutil.copy2(src, dest)
-
-
-def _shipped_cron_store(entries: List[Tuple[Path, Tuple[str, ...]]]) -> Optional[Path]:
-    """Return the staged ``cron/jobs.json`` when the distribution owns it (via ``cron/`` or exactly)."""
-    for src, rel_parts in entries:
-        if rel_parts == _CRON_STORE_REL:
-            return src
-        if rel_parts == _CRON_STORE_REL[:1] and (src / _CRON_STORE_REL[1]).is_file():
-            return src / _CRON_STORE_REL[1]
-    return None
-
-
-def _merge_cron_store(src: Path, home: Path) -> None:
-    """Merge a distribution's cron store into profile *home* by job id; new jobs arrive paused.
-
-    Nothing is written when a shipped job cannot be scheduled (unparseable schedule, past
-    one-shot for a job the installer resumed); the error names the job."""
-    from cron import jobs as cron_jobs
-    from cron.job_definition import import_job_definitions
-
-    dest = home.joinpath(*_CRON_STORE_REL)
-    try:
-        with tempfile.TemporaryDirectory(prefix="hermes_dist_cron_") as tmp:
-            staged_store = Path(tmp) / "cron"
-            staged_store.mkdir()
-            shutil.copy2(src, staged_store / "jobs.json")
-            with cron_jobs.use_cron_store(tmp):
-                shipped = {
-                    job["id"]: job for job in cron_jobs.load_jobs()
-                    if isinstance(job, dict) and job.get("id")
-                }
-        with cron_jobs.use_cron_store(home):
-            import_job_definitions(
-                shipped, paused_reason="Installed from a profile distribution; review it, then resume.")
-    except (RuntimeError, ValueError) as exc:
-        # RuntimeError: load_jobs on a corrupt/unreadable store; ValueError: a job-labelled
-        # unschedulable definition. OSError propagates as-is like every other copy step.
-        raise DistributionError(f"Could not merge cron jobs into {dest}: {exc}") from exc
 
 
 def _real_dir(base: Path, parts: Tuple[str, ...]) -> Path:
@@ -466,8 +424,6 @@ def _merge_dir(src: Path, dest: Path, rel: Tuple[str, ...]) -> None:
         parts = (*rel, child.name)
         if _is_installer_owned_path(parts):
             continue
-        if parts == _CRON_STORE_REL:
-            continue  # merged up front by _copy_dist_payload
         if _merges_per_root(child, parts):
             _merge_dir(child, _real_dir(dest, (child.name,)), parts)
         else:
@@ -536,22 +492,12 @@ def _copy_dist_payload(staged: Path, target: Path, manifest: DistributionManifes
     as ``.env.EXAMPLE`` so it never shadows a real ``.env``.
 
     A top-level owned directory, and an owned container (``_is_container``), is merged per
-    authored root. ``cron/jobs.json`` is special: it is one multi-record runtime store, so
-    shipped definitions merge by job id instead of replacing the file."""
+    authored root; everything else is replaced or copied whole."""
     target.mkdir(parents=True, exist_ok=True)
     entries = list(_owned_entries(staged, manifest))
     _refuse_symlinked_targets(target, entries)
 
-    # The cron merge runs first: it is the one step that can reject shipped content
-    # (an unschedulable job), and rejecting before any file is replaced keeps the profile whole.
-    cron_store = _shipped_cron_store(entries)
-    if cron_store is not None:
-        _real_dir(target, _CRON_STORE_REL[:-1])
-        _merge_cron_store(cron_store, target)
-
     for src, rel_parts in entries:
-        if rel_parts == _CRON_STORE_REL:
-            continue
         if len(rel_parts) == 1:
             name = rel_parts[0]
             if name == ENV_TEMPLATE_FILENAME:

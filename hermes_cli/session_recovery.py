@@ -31,8 +31,30 @@ _TOPIC_TABLES = ("telegram_dm_topic_mode", "telegram_dm_topic_bindings")
 
 
 def _init_delivery_ledger_schema(conn: sqlite3.Connection) -> None:
-    from gateway.delivery_ledger import _initialize_schema
-    _initialize_schema(conn)
+    # Inlined from gateway.delivery_ledger (2026-10-26): recovery of pre-minimal state.db files
+    # must still create the legacy delivery_obligations table when copying it.
+    from hermes_cli.sqlite_util import add_column_if_missing
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS delivery_obligations (
+            obligation_id TEXT PRIMARY KEY,
+            session_key TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            thread_id TEXT,
+            content TEXT NOT NULL,
+            state TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            owner_pid INTEGER,
+            owner_started_at INTEGER,
+            last_error TEXT,
+            adapter_profile TEXT
+        )"""
+    )
+    if "adapter_profile" not in {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}:
+        add_column_if_missing(conn, "delivery_obligations", "adapter_profile", "adapter_profile TEXT")
 
 
 # state.db tables created lazily by a gateway module (base ``SessionDB`` never creates them on a fresh

@@ -30,7 +30,6 @@ import cli as cli_mod
 @pytest.fixture(autouse=True)
 def _reset_finalize_state(monkeypatch):
     monkeypatch.setattr(cli_mod, "_single_query_finalize_attempted_session_ids", set())
-    monkeypatch.setattr(cli_mod, "_handed_off_session_ids", set())
     monkeypatch.setattr(cli_mod, "_cleanup_done", False, raising=False)
 
 def _make_agent(session_db, session_id="oneshot-88583"):
@@ -152,28 +151,6 @@ class TestOneShotDurableFlush:
                 assert len(rows) == 2, f"duplicate rows written: {rows}"
             finally:
                 db.close()
-
-    def test_flush_skips_handed_off_sessions(self):
-        """A session handed off to the gateway is owned there (#88234)."""
-        from hermes_state import SessionDB
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db = SessionDB(db_path=Path(tmpdir) / "state.db")
-            try:
-                agent = _make_agent(db)
-                agent._session_messages = [
-                    {"role": "user", "content": "hi"},
-                    {"role": "assistant", "content": "hello"},
-                ]
-                cli_mod._handed_off_session_ids.add(agent.session_id)
-
-                cli_mod._flush_one_shot_session_store(_fake_cli(agent))
-
-                assert db.get_messages(agent.session_id) == []
-                assert db.get_session(agent.session_id)["ended_at"] is None
-            finally:
-                db.close()
-
     def test_flush_skips_persist_disabled_agents(self):
         """Persistence-isolated forks must never write the canonical store."""
         from hermes_state import SessionDB

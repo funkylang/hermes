@@ -100,15 +100,13 @@ def _build_provider_env_blocklist() -> frozenset:
 
 def _build_adapter_secret_env() -> frozenset:
     """Secrets the messaging adapters declare, process-wide: core ``password`` messaging entries
-    of OPTIONAL_ENV_VARS, the bundled platform plugin manifests' secret entries, and the
-    secret-named keys the gateway env-override table reads (WEIXIN_TOKEN, FEISHU_ENCRYPT_KEY, ...).
+    of OPTIONAL_ENV_VARS and the bundled platform plugin manifests' secret entries.
     Declared names only: a user's own ``SLACK_USER_TOKEN`` or ``LOCAL_LLM_API_KEY`` is not Hermes's.
     A profile's user-installed platform plugins are per home: :func:`_home_adapter_secret_env`.
-    Nothing here fails soft: an unreadable bundled manifest or env table fails the import rather
+    Nothing here fails soft: an unreadable bundled manifest fails the import rather
     than dropping its secrets from the policy."""
     from hermes_cli.config import (
-        CORE_DECLARED_ENV_NAMES, OPTIONAL_ENV_VARS, PLATFORM_SECRET_ENV_SUFFIXES, platform_manifest_secret_envs)
-    from hermes_cli.profile_channels import config_env_table_keys
+        CORE_DECLARED_ENV_NAMES, OPTIONAL_ENV_VARS, platform_manifest_secret_envs)
     # Read in code only, declared nowhere else: the Microsoft Graph app secret and webhook
     # clientState, and the QQ bot's speech-to-text key.
     names: set[str] = {"MSGRAPH_CLIENT_SECRET", "MSGRAPH_WEBHOOK_CLIENT_STATE", "QQ_STT_API_KEY"}
@@ -116,7 +114,6 @@ def _build_adapter_secret_env() -> frozenset:
                  if name in CORE_DECLARED_ENV_NAMES
                  and meta.get("category") == "messaging" and meta.get("password"))
     names |= platform_manifest_secret_envs(source="bundled", strict=True)
-    names.update(n.upper() for n in config_env_table_keys() if n.upper().endswith(PLATFORM_SECRET_ENV_SUFFIXES))
     return frozenset(names)
 
 
@@ -153,14 +150,11 @@ def _home_adapter_secret_env() -> frozenset:
 
 
 def _registry_adapter_secret_env() -> frozenset:
-    """Secret-named ``required_env`` of the adapters registered in the current profile scope.
-    Tier 2 only: ``required_env`` is an unchecked setup list, so a plugin naming OPENAI_API_KEY
-    must not strip it from credentialed children. No blanket fallback: a registry error surfaces
-    instead of an empty (fail-open) set."""
-    from gateway.platform_registry import platform_registry
-    from hermes_cli.config import PLATFORM_SECRET_ENV_SUFFIXES
-    return frozenset(n.upper() for n in platform_registry.required_env_names()
-                     if n.upper().endswith(PLATFORM_SECRET_ENV_SUFFIXES))
+    """Secret-named ``required_env`` of adapters registered in the current profile scope.
+    The platform registry (and all messaging adapters) is gone from this product, so this
+    tier is empty: declared-config secrets are covered by :func:`_ADAPTER_SECRET_ENV` and
+    per-home plugin manifests by :func:`_home_adapter_secret_env`."""
+    return frozenset()
 
 
 def _registered_adapter_secret_env() -> frozenset:

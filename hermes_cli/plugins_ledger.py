@@ -262,10 +262,7 @@ class PluginLedgerMixin:
         """Sweep pre-ledger global state and clear every manager-local container."""
         # Handles are authoritative for global registries; names present in the manager-local sets without a
         # ledger entry (pre-ledger or manually set state) are swept here so they do not survive a force reload
-        # as zombies.
-        from gateway.platform_registry import platform_registry
-        for platform_name in tuple(self._plugin_platform_names):
-            platform_registry.unregister(platform_name)
+        # as zombies. (The gateway platform_registry sweep is gone with the gateway.)
         # Ledger-owned tool names are excluded: their handles already restored the previous entry, and blanket
         # deregistration would remove what the ledger just restored.
         ledger_tool_names = {r.key for r in registrations if r.kind == "tool"}
@@ -288,7 +285,7 @@ class PluginLedgerMixin:
         for container in (
             self._ownership_ledger, self._plugins, self._hooks, self._middleware,
             self._plugin_tool_names, self._plugin_platform_names, self._cli_commands,
-            self._plugin_commands, self._plugin_skills, self._automation_blueprints, self._portable_mcp_servers,
+            self._plugin_commands, self._plugin_skills, self._portable_mcp_servers,
             self._portable_mcp_server_plugins, self._aux_tasks, self._system_prompt_sections, self._approval_transports,
             self._slack_action_handlers, self._predeclared_modules, self._predeclared_tools,
             self._platform_handler_factories,

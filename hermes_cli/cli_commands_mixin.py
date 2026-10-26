@@ -40,6 +40,22 @@ from hermes_cli.browser_connect import (
     launch_chrome_debug, local_port_in_use, manual_chrome_debug_command)
 
 
+# /branch argument parsing: the gateway's parser moved with the gateway; the CLI keeps its own
+# copy so ``/branch --here`` never becomes a session titled ``--here``.
+_BRANCH_HERE_FLAG = "--here"
+
+
+def _parse_branch_args(raw: str) -> tuple[bool, str]:
+    """``(stay_here, title)`` from the text after ``/branch``. Only a leading ``--here`` is a
+    flag; everything else is the optional title."""
+    text = (raw or "").strip()
+    head, _, rest = text.partition(" ")
+    if head.lower() == _BRANCH_HERE_FLAG:
+        return True, rest.strip()
+    return False, text
+
+
+
 # Output helpers. Slash-command text is user-visible: every literal below is load-bearing.
 
 
@@ -78,16 +94,6 @@ def _ellipsize(text: str, limit: int) -> str:
 
 
 # Small data tables.
-
-# /cron flag tables: flag -> opts key. Order-sensitive in _parse_cron_flags: bool flags never
-# consume a value; --repeat is int-validated separately.
-_CRON_BOOL_FLAGS = {"--clear-skills": "clear_skills", "--all": "all"}
-_CRON_LIST_FLAGS = {"--skill": "skills", "--add-skill": "add_skills", "--remove-skill": "remove_skills"}
-_CRON_VALUE_FLAGS = {"--name": "name", "--deliver": "deliver", "--prompt": "prompt", "--schedule": "schedule"}
-# /cron subcommand -> CLICommandsMixin method name.
-_CRON_SUBCOMMANDS = {
-    "list": "_cron_list", "add": "_cron_add", "create": "_cron_add", "edit": "_cron_edit",
-    **{k: "_cron_job_action" for k in ("pause", "resume", "run", "remove", "rm", "delete")}}
 
 _ON_WORDS = {"on", "enable", "true", "1"}
 _OFF_WORDS = {"off", "disable", "false", "0"}
@@ -176,53 +182,6 @@ def _toggle_target(arg: str, current: bool):
     if arg == "":
         return not current
     return None
-
-
-def _cron_api(**kwargs) -> dict:
-    """Call the cronjob model tool and decode its JSON reply."""
-    from tools.cronjob_tools import cronjob as cronjob_tool
-    return json.loads(cronjob_tool(**kwargs))
-
-
-def _normalize_skills(values) -> list:
-    """Strip, drop empties, and dedupe (order-preserving)."""
-    normalized = []
-    for value in values:
-        text = str(value or "").strip()
-        if text and text not in normalized:
-            normalized.append(text)
-    return normalized
-
-
-def _parse_cron_flags(tokens):
-    """Parse /cron flags into an opts dict (None after printing an error for a bad --repeat)."""
-    opts = {
-        "name": None, "deliver": None, "repeat": None, "prompt": None, "schedule": None,
-        "skills": [], "add_skills": [], "remove_skills": [],
-        "clear_skills": False, "all": False, "positionals": []}
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        has_value = i + 1 < len(tokens)
-        if token in _CRON_BOOL_FLAGS:
-            opts[_CRON_BOOL_FLAGS[token]] = True
-            i += 1
-        elif token in _CRON_LIST_FLAGS and has_value:
-            opts[_CRON_LIST_FLAGS[token]].append(tokens[i + 1])
-            i += 2
-        elif token == "--repeat" and has_value:
-            try:
-                opts["repeat"] = int(tokens[i + 1])
-            except ValueError:
-                return print(_t("cron.repeat_must_be_integer"))
-            i += 2
-        elif token in _CRON_VALUE_FLAGS and has_value:
-            opts[_CRON_VALUE_FLAGS[token]] = tokens[i + 1]
-            i += 2
-        else:
-            opts["positionals"].append(token)
-            i += 1
-    return opts
 
 
 # Session-switch plumbing shared by /resume and /branch.
@@ -816,158 +775,6 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                     print(f"  {_t('import.wrapper_created', path=wrapper_path)}")
         print(f"  {_t('import.use_it', name=imported)}")
 
-    # ---- /handoff -------------------------------------------------------------------------
-
-    _HANDOFF_PENDING_TIMEOUT = 60.0
-    _HANDOFF_RUNNING_TIMEOUT = 900.0  # full synthetic agent turn + delivery
-    _HANDOFF_HEARTBEAT_EVERY = 30.0
-
-    @staticmethod
-    def _handoff_keep(*lines: str) -> bool:
-        """Print ``lines`` and keep the CLI session (the True verdict of /handoff)."""
-        _cp(*lines)
-        return True
-
-    def _handle_handoff_command(self, cmd_original: str) -> bool:
-        """Handle ``/handoff <platform>`` — transfer this CLI session to a gateway platform.
-
-        Validate target → prepare session row → mark pending → block-poll (see ``_handoff_wait``).
-        Returns False only on ``completed`` (caller exits like /quit); True keeps the session."""
-        platform_name = _command_arg(cmd_original).lower()
-        if not platform_name:
-            return self._handoff_keep(
-                f"  {_t('handoff.usage')}", f"  {_t('handoff.usage_detail_1')}",
-                f"  {_t('handoff.usage_detail_2')}")
-        home = self._handoff_validate_target(platform_name)
-        if home is None:
-            return True
-        session_title = self._handoff_prepare_session()
-        if session_title is None:
-            return True
-        if not self._session_db.request_handoff(self.session_id, platform_name):
-            return self._handoff_keep(f"  {_t('handoff.already_in_flight')}")
-        _cp(f"  {_t('handoff.queued', title=session_title, platform=platform_name, home=home.name)}",
-            f"  {_t('handoff.waiting')}")
-        return self._handoff_wait(platform_name, session_title)
-
-    def _handoff_validate_target(self, platform_name: str):
-        """Resolve the destination home channel via the live gateway config; None (after printing
-        the reason) when the platform is unknown, disabled, or has no home channel."""
-        try:
-            from gateway.config import load_gateway_config, Platform
-        except Exception as exc:  # pragma: no cover — gateway pkg always shipped
-            return _cp(f"  {_t('handoff.config_load_failed', error=exc)}")
-        try:
-            platform = Platform(platform_name)
-        except (ValueError, KeyError):
-            return _cp(f"  {_t('handoff.unknown_platform', platform=platform_name)}")
-        try:
-            gw_config = load_gateway_config()
-        except Exception as exc:
-            return _cp(f"  {_t('handoff.config_load_failed', error=exc)}")
-        pcfg = gw_config.platforms.get(platform)
-        if not pcfg or not pcfg.enabled:
-            # Relay aliasing: a relay-fronted gateway has only a RELAY block yet /handoff discord
-            # is deliverable. UX pre-check only — the gateway watcher re-checks before dispatch.
-            relay_fronts = False
-            with suppress(Exception):
-                from gateway.relay import relay_platform_identities
-                relay_cfg = gw_config.platforms.get(Platform.RELAY)
-                if relay_cfg and relay_cfg.enabled:
-                    relay_fronts = platform_name in {p for p, _ in relay_platform_identities()}
-            if not relay_fronts:
-                return _cp(f"  {_t('handoff.platform_not_enabled', platform=platform_name)}")
-        home = gw_config.get_home_channel(platform)
-        if not home or not home.chat_id:
-            return _cp(f"  {_t('handoff.no_home_channel', platform=platform_name)}",
-                       f"  {_t('handoff.set_home_hint')}")
-        return home
-
-    def _handoff_prepare_session(self):
-        """Refuse mid-turn, make sure a SessionDB handle + session row exist, and return the
-        display title (None after printing why the handoff cannot start)."""
-        # An in-flight agent run would race the gateway's switch_session and the synthetic turn.
-        if getattr(self, "_agent_running", False):
-            return _cp(f"  {_t('shared.agent_busy', command='/handoff')}")
-        if not self._session_db:
-            with suppress(Exception):
-                from hermes_state_registry import acquire
-                self._session_db = acquire()
-        if not self._session_db:
-            return _cp(_db_unavailable_line())
-        # Ensure the session row exists (an empty session has flushed nothing yet): the gateway
-        # needs a row to switch_session onto; set_session_title's INSERT OR IGNORE creates it.
-        try:
-            if not self._session_db.get_session(self.session_id):
-                self._session_db.set_session_title(self.session_id, f"handoff-{self.session_id[:8]}")
-        except Exception as exc:
-            return _cp(f"  {_t('handoff.session_row_failed', error=exc)}")
-        session_title = ""
-        with suppress(Exception):
-            session_title = (self._session_db.get_session(self.session_id) or {}).get("title") or ""
-        return session_title or self.session_id[:8]
-
-    def _handoff_wait(self, platform_name: str, session_title: str) -> bool:
-        """Two-phase 0.5s poll. PENDING (unclaimed): 60s, then CAS-fail the row so the user can
-        retry (a claim racing this instant wins). RUNNING (claimed): the gateway replays the
-        transcript via a synthetic turn (routinely >60s) — wait 15 min with heartbeats and on
-        timeout do NOT touch the row; failing it here was the split-brain bug."""
-        pending_deadline = time.time() + self._HANDOFF_PENDING_TIMEOUT
-        running_deadline = None
-        next_heartbeat = None
-        last_state = "pending"
-        while True:
-            try:
-                state_row = self._session_db.get_handoff_state(self.session_id)
-            except Exception:
-                state_row = None
-            current = (state_row or {}).get("state") or "pending"
-            if current != last_state:
-                if current == "running":
-                    _cp(f"  {_t('handoff.picked_up')}")
-                    running_deadline = time.time() + self._HANDOFF_RUNNING_TIMEOUT
-                    next_heartbeat = time.time() + self._HANDOFF_HEARTBEAT_EVERY
-                last_state = current
-            if current == "completed":
-                _cp("", f"  {_t('handoff.complete', platform=platform_name)}",
-                    f"  {_t('handoff.resume_hint', title=session_title)}", "")
-                # _run_cleanup must NOT finalize the row on exit: the gateway owns it now, and an
-                # end_reason set under it would drop the handoff leg from session history/search.
-                # See #88234.
-                from cli import _handed_off_session_ids
-                _handed_off_session_ids.add(self.session_id)
-                self._should_exit = True  # same exit semantics as /quit
-                return False
-            if current == "failed":
-                err = (state_row or {}).get("error") or _t("handoff.unknown_error")
-                return self._handoff_keep(
-                    f"  {_t('handoff.failed', error=err)}", f"  {_t('handoff.session_intact_retry')}")
-            now = time.time()
-            if current == "pending":
-                if now >= pending_deadline:
-                    break
-            else:  # running
-                if next_heartbeat is not None and now >= next_heartbeat:
-                    _cp(f"  {_t('handoff.still_transferring')}")
-                    next_heartbeat = now + self._HANDOFF_HEARTBEAT_EVERY
-                if running_deadline is not None and now >= running_deadline:
-                    # Do NOT fail the row: the gateway owns it (split-brain bug otherwise).
-                    return self._handoff_keep(
-                        f"  {_t('handoff.taking_long')}",
-                        f"  {_t('handoff.check_platform', platform=platform_name)}",
-                        f"  {_t('handoff.no_longer_waiting')}", f"  {_t('handoff.retry_when_settled')}")
-            time.sleep(0.5)
-        try:  # pending timed out: CAS-clear so the user can retry
-            self._session_db.fail_handoff(
-                self.session_id, "timed out waiting for gateway", only_states=("pending",))
-        except TypeError:
-            # Older SessionDB without only_states (mixed installs): legacy unconditional fail.
-            with suppress(Exception):
-                self._session_db.fail_handoff(self.session_id, "timed out waiting for gateway")
-        except Exception:
-            pass
-        return self._handoff_keep(f"  {_t('handoff.timed_out')}", f"  {_t('handoff.session_intact')}")
-
     # ---- /resume, /sessions, /branch ------------------------------------------------------
     def _handle_resume_command(self, cmd_original: str) -> None:
         """Handle /resume <session_id_or_title> — switch to a previous session mid-conversation."""
@@ -1093,9 +900,8 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
             return _cp(f"  {_gt('branch.no_conversation')}")
         if not self._session_db:
             return _cp(_db_unavailable_line())
-        # CLI has no threads: always in place; strip the gateway's ``--here`` so it is never a title.
-        from gateway.slash_commands_branch_thread import parse_branch_args
-        _, branch_name = parse_branch_args(_command_arg(cmd_original))
+        # CLI has no threads: always in place; strip the ``--here`` flag so it is never a title.
+        _, branch_name = _parse_branch_args(_command_arg(cmd_original))
         now = datetime.now()
         new_session_id = mint_session_id(now)
         branch_title = branch_name or self._session_db.get_next_title_in_lineage(
@@ -1362,181 +1168,8 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         _set_active(result.slug)
         print(_t("hatch.hatched", name=result.display_name))
 
-    # ---- /cron ----------------------------------------------------------------------------
-    def _handle_cron_command(self, cmd: str):
-        """Handle the /cron command to manage scheduled tasks."""
-        tokens = shlex.split(cmd)
-        if len(tokens) == 1:
-            return self._cron_overview()
-        subcommand = tokens[1].lower()
-        opts = _parse_cron_flags(tokens[2:])
-        if opts is None:
-            return
-        handler = _CRON_SUBCOMMANDS.get(subcommand)
-        if handler is None:
-            return _pr(_t("cron.unknown_command", subcommand=subcommand), f"  {_t('cron.available')}")
-        getattr(self, handler)(subcommand, opts)
 
-    def _cron_overview(self) -> None:
-        _pr("", "+" + "-" * 68 + "+", "|" + _t("cron.overview_title").center(68) + "|",
-            "+" + "-" * 68 + "+", "", f"  {_t('cron.overview_commands')}",
-            *_lines(_t("cron.overview_usage"), pad="    "), "")
-        result = _cron_api(action="list")
-        jobs = result.get("jobs", []) if result.get("success") else []
-        if jobs:
-            from hermes_cli.cron import _next_run_row
-            _pr(f"  {_t('cron.current_jobs')}", "  " + "-" * 63)
-            for job in jobs:
-                print(f"    {job['job_id'][:12]:<12} | {job['schedule']:<15} | {job.get('repeat', '?'):<8}")
-                if job.get("skills"):
-                    print(f"      {_t('cron.skills', skills=', '.join(job['skills']))}")
-                print(f"      {job.get('prompt_preview', '')}")
-                if job.get("next_run_at"):
-                    # A stamp parked past the scheduler grace must not read as upcoming (#114309).
-                    label, value = _next_run_row(job)
-                    print(f"      {_t('cron.next_short') if label == 'Next run' else label}: {value}")
-                print()
-        else:
-            print(f"  {_t('cron.no_jobs_hint')}")
-        print()
-
-    def _cron_list(self, subcommand: str, opts: dict) -> None:
-        result = _cron_api(action="list", include_disabled=opts["all"])
-        jobs = result.get("jobs", []) if result.get("success") else []
-        if not jobs:
-            return print(_t("cron.no_jobs"))
-        from hermes_cli.cron import _next_run_row
-        print()
-        _pr(_t("cron.list_header"), "-" * 80)
-        for job in jobs:
-            _pr(f"  {_t('cron.id', job_id=job['job_id'])}", f"  {_t('cron.name', name=job['name'])}",
-                f"  {_t('cron.state', state=job.get('state', '?'))}",
-                f"  {_t('cron.schedule_repeat', schedule=job['schedule'], repeat=job.get('repeat', '?'))}",
-                "  %s: %s" % _next_run_row(job) if job.get("next_run_at") else f"  {_t('cron.next_run_na')}")
-            if job.get("skills"):
-                print(f"  {_t('cron.skills', skills=', '.join(job['skills']))}")
-            print(f"  {_t('cron.prompt', prompt=job.get('prompt_preview', ''))}")
-            if job.get("last_run_at"):
-                status = job.get("last_status") or "?"
-                # delivery_failed: the run succeeded but delivery didn't — the reason lives
-                # in last_delivery_error (last_error is None).
-                if status == "delivery_failed" and job.get("last_delivery_error"):
-                    status = _t("cron.status_delivery_failed", error=job["last_delivery_error"])
-                elif status == "error" and job.get("last_error"):
-                    status = _t("cron.status_error", error=job["last_error"])
-                print(f"  {_t('cron.last_run', when=job['last_run_at'], status=status)}")
-            print()
-
-    def _cron_add(self, subcommand: str, opts: dict) -> None:
-        positionals = opts["positionals"]
-        if not positionals:
-            return print(_t("cron.usage_add"))
-        schedule = opts["schedule"] or positionals[0]
-        prompt = opts["prompt"] or " ".join(positionals[1:])
-        skills = _normalize_skills(opts["skills"])
-        if not prompt and not skills:
-            return print(_t("cron.need_prompt_or_skill"))
-        result = _cron_api(
-            action="create", schedule=schedule, prompt=prompt or None, name=opts["name"],
-            deliver=opts["deliver"], repeat=opts["repeat"], skills=skills or None)
-        if not result.get("success"):
-            return print(_t("cron.create_failed", error=result.get("error")))
-        _pr(_t("cron.created", job_id=result["job_id"]),
-            f"  {_t('cron.schedule', schedule=result['schedule'])}")
-        if result.get("skills"):
-            print(f"  {_t('cron.skills', skills=', '.join(result['skills']))}")
-        print(f"  {_t('cron.next_run', value=result['next_run_at'])}")
-
-    def _cron_edit(self, subcommand: str, opts: dict) -> None:
-        from cron import get_job
-        positionals = opts["positionals"]
-        if not positionals:
-            return print(_t("cron.usage_edit"))
-        job_id = positionals[0]
-        existing = get_job(job_id)
-        if not existing:
-            return print(_t("cron.job_not_found", job_id=job_id))
-        # Skill edit precedence: --clear-skills > --skill (replace) > --add/--remove (merge) > untouched.
-        final_skills = None
-        replacement_skills = _normalize_skills(opts["skills"])
-        add_skills = _normalize_skills(opts["add_skills"])
-        remove_skills = set(_normalize_skills(opts["remove_skills"]))
-        if opts["clear_skills"]:
-            final_skills = []
-        elif replacement_skills:
-            final_skills = replacement_skills
-        elif add_skills or remove_skills:
-            existing_skills = list(
-                existing.get("skills") or ([existing["skill"]] if existing.get("skill") else []))
-            final_skills = [skill for skill in existing_skills if skill not in remove_skills]
-            final_skills += [skill for skill in add_skills if skill not in final_skills]
-        result = _cron_api(
-            action="update", job_id=job_id, schedule=opts["schedule"], prompt=opts["prompt"],
-            name=opts["name"], deliver=opts["deliver"], repeat=opts["repeat"], skills=final_skills)
-        if not result.get("success"):
-            return print(_t("cron.update_failed", error=result.get("error")))
-        job = result["job"]
-        _pr(_t("cron.updated", job_id=job["job_id"]), f"  {_t('cron.schedule', schedule=job['schedule'])}",
-            f"  {_t('cron.skills', skills=', '.join(job['skills']))}" if job.get("skills")
-            else f"  {_t('cron.skills_none')}")
-
-    def _cron_job_action(self, subcommand: str, opts: dict) -> None:
-        """pause / resume / run / remove (aliases rm, delete) on one job id."""
-        positionals = opts["positionals"]
-        if not positionals:
-            return print(_t("cron.usage_action", subcommand=subcommand))
-        job_id = positionals[0]
-        action = "remove" if subcommand in {"remove", "rm", "delete"} else subcommand
-        result = _cron_api(action=action, job_id=job_id,
-                           reason="paused from /cron" if action == "pause" else None)
-        if not result.get("success"):
-            return print(_t(f"cron.{action}_failed", error=result.get("error")))
-        if action == "remove":
-            removed = result.get("removed_job", {})
-            return print(_t("cron.removed", name=removed.get("name", job_id), job_id=job_id))
-        job = result["job"]
-        if action == "run" and job.get("execution_skipped"):
-            # A refused run-now (claim lost, paused, gone) must not read as accepted.
-            return print(_t("cron.did_not_run", name=job["name"], job_id=job_id, reason=job["execution_skipped"]))
-        # One full template per action verb (cron.paused / cron.resumed / cron.triggered).
-        print(_t({"pause": "cron.paused", "resume": "cron.resumed", "run": "cron.triggered"}[action],
-                 name=job["name"], job_id=job_id))
-        if action == "resume":
-            print(f"  {_t('cron.next_run', value=job.get('next_run_at'))}")
-        elif action == "run":
-            from hermes_cli.cron import _run_outcome
-            print(f"  {_run_outcome(job)}")
-
-    # ---- delegating handlers: /suggestions, /blueprint, /curator, /kanban, /skills, /memory --
-    def _handle_suggestions_command(self, cmd: str):
-        """Handle /suggestions — review/accept/dismiss suggested automations via the shared handler.
-        CLI origin is the local platform so an accepted job's "origin" delivery resolves to a home channel."""
-        args = " ".join(_shlex_args(cmd))
-        try:
-            from hermes_cli.suggestions_cmd import handle_suggestions_command
-            output = handle_suggestions_command(args)
-        except Exception as e:
-            output = _t("suggestions.failed", error=e)
-        self._console_print(output)
-
-    def _handle_blueprint_command(self, cmd: str):
-        """Handle /blueprint — set up an automation from a blueprint template (shared handler).
-        Bare lists the catalog; ``<name>`` seeds the agent to ask for each value conversationally
-        (``agent_seed``, run as the next turn); ``<name> slot=val …`` creates the job directly."""
-        args = " ".join(shlex.quote(part) for part in _shlex_args(cmd))
-        try:
-            from hermes_cli.blueprint_cmd import handle_blueprint_command
-            result = handle_blueprint_command(args)
-        except Exception as e:
-            self._console_print(_t("blueprint.failed", error=e))
-            return
-        self._console_print(result.text)
-        seed = getattr(result, "agent_seed", None)
-        if seed:
-            # One-shot: the interactive loop picks this up right after the slash command
-            # returns and runs it as a normal agent turn.
-            self._pending_agent_seed = seed
-
+    # ---- delegating handlers: /curator, /kanban, /skills, /memory --
     def _handle_curator_command(self, cmd: str):
         """Handle /curator — delegates to hermes_cli.curator so the CLI and the `hermes curator`
         subcommand share the same handler set."""
@@ -1888,7 +1521,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
     def _handle_heartbeat_command(self, cmd: str) -> None:
         """Dispatch /heartbeat: set / status / pause / resume / clear. ``/heartbeat every 10m <prompt>``
         sets the session's one recurring instruction, injected as a normal user turn when due.
-        Session-scoped and in-process — use `hermes cron` for durable schedules."""
+        Session-scoped and in-process only (not persisted across sessions)."""
         from hermes_cli.heartbeat import format_interval
         arg = _command_arg(cmd)
         lower = arg.lower()

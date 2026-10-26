@@ -3,7 +3,7 @@
 
 Usage:
     hermes                     # Interactive chat (default)
-    hermes chat / gateway / setup / status / cron / doctor / update / ...
+    hermes setup / status / doctor / tools / ...   # Subcommands
     hermes --version           # Show version and update status
     hermes <cmd> --help        # Per-command help
 """
@@ -43,28 +43,6 @@ from hermes_cli import _startup_fast  # noqa: E402
 # A literal ``~``/``$VAR`` in HERMES_HOME (fish, or any quoted value) must become absolute
 # before the first reader — otherwise it resolves against cwd and scaffolds <cwd>/~/.hermes.
 _startup_fast.normalize_hermes_home_env()
-
-# Startup-liveness watchdog: for gateway runs, arm BEFORE the heavy import
-# graph below — an import-time deadlock (native-extension init, contended
-# import lock) is exactly the "wedged before the event loop, no logs, live
-# PID" class it exists for. ``hermes_startup_watchdog`` is stdlib-only so it
-# cannot itself wedge. The match requires the ADJACENT pair ``gateway run``
-# (wherever global flags like ``-p <profile>`` put it) so unrelated commands
-# mentioning both words never arm a 300s hard-exit timer. Foreground runs arm
-# too — a pre-loop wedge is just as dead without a supervisor; GatewayRunner
-# disarms once the event loop is live.
-def _argv_is_gateway_run(argv: list) -> bool:
-    return any(a == "gateway" and b == "run" for a, b in zip(argv, argv[1:]))
-
-
-if _argv_is_gateway_run(sys.argv[1:]):
-    try:
-        from hermes_startup_watchdog import arm_startup_watchdog as _arm_sw
-
-        _arm_sw()
-        del _arm_sw
-    except Exception:
-        pass
 
 
 def _exit_after_oneshot(rc: object) -> None:
@@ -339,7 +317,6 @@ from pathlib import Path
 from typing import Optional
 
 
-from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.setup import build_setup_parser
@@ -375,7 +352,6 @@ from hermes_cli.subcommands.insights import build_insights_parser
 from hermes_cli.subcommands.usage import build_usage_parser
 from hermes_cli.subcommands.monitoring import build_monitoring_parser
 from hermes_cli.subcommands.skills import build_skills_parser
-from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
 from hermes_cli.subcommands.mcp import build_mcp_parser
 from hermes_cli.subcommands.claw import build_claw_parser
@@ -1744,7 +1720,6 @@ cmd_login = _forward_command("cmd_login", "hermes_cli.auth", "login_command", do
 cmd_logout = _forward_command("cmd_logout", "hermes_cli.auth", "logout_command", doc='Clear provider authentication.')
 cmd_auth = _forward_command("cmd_auth", "hermes_cli.auth_commands", "auth_command", doc='Manage pooled credentials.')
 cmd_status = _forward_command("cmd_status", "hermes_cli.status", "show_status", doc='Show status of all components.')
-cmd_cron = _forward_command("cmd_cron", "hermes_cli.cron", "cron_command", forward_return=True, doc='Cron job management.')
 cmd_webhook = _forward_command("cmd_webhook", "hermes_cli.webhook", "webhook_command", doc='Webhook subscription management.')
 cmd_kanban = _forward_command("cmd_kanban", "hermes_cli.kanban", "kanban_command", forward_return=True, doc='Multi-profile collaboration board.')
 cmd_project = _forward_command("cmd_project", "hermes_cli.projects_cmd", "projects_command", forward_return=True, doc='Manage projects (named, multi-folder workspaces).')
@@ -1755,7 +1730,6 @@ cmd_debug = _forward_command("cmd_debug", "hermes_cli.debug", "run_debug", doc='
 cmd_skin = _forward_command("cmd_skin", "hermes_cli.skin_cmd", "skin_command", doc='Skin management (list / use / set).')
 cmd_import = _forward_command("cmd_import", "hermes_cli.backup", "run_import", forward_return=True, doc='Restore a Hermes backup from a zip file.')
 cmd_prompt_size = _forward_command("cmd_prompt_size", "hermes_cli.prompt_size", "cmd_prompt_size", doc='Show a byte/char breakdown of the system prompt + tool schemas.')
-cmd_pairing = _forward_command("cmd_pairing", "hermes_cli.pairing", "pairing_command")
 cmd_plugins = _forward_command("cmd_plugins", "hermes_cli.plugins_cmd", "plugins_command")
 cmd_mcp = _forward_command("cmd_mcp", "hermes_cli.mcp_config", "mcp_command", forward_return=True)
 cmd_claw = _forward_command("cmd_claw", "hermes_cli.claw", "claw_command")
@@ -2121,8 +2095,8 @@ def _coalesce_session_name_args(argv: list) -> list:
     are collected until the next flag (``-*``) or known top-level subcommand.
     """
     _SUBCOMMANDS = {
-        "chat", "model", "gateway", "setup", "whatsapp", "whatsapp-cloud", "login", "logout",
-        "auth", "status", "cron", "doctor", "config", "pairing", "skills", "tools", "mcp",
+        "chat", "model", "setup", "whatsapp", "whatsapp-cloud", "login", "logout",
+        "auth", "status", "doctor", "config", "skills", "tools", "mcp",
         "sessions", "insights", "uninstall", "profile",
         "honcho", "claw", "plugins", "security", "webhook", "peer",
         "memory", "dump", "debug", "backup", "import", "completion", "logs", "usage",
@@ -2205,11 +2179,11 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "codex-runtime", "completion",
         "computer-use",
-        "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
-        "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
-        "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
+        "config", "console", "curator", "debug", "doctor",
+        "dump", "egress", "fallback", "hooks", "import", "import-agent", "insights",
+        "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pause", "peer", "pets", "plugins", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -2716,7 +2690,6 @@ def _build_cli_parser():
     build_auth_parser(subparsers, cmd_auth=cmd_auth)
     build_status_parser(subparsers, cmd_status=cmd_status)
     build_pause_parser(subparsers)
-    build_cron_parser(subparsers, cmd_cron=cmd_cron)
     build_webhook_parser(subparsers, cmd_webhook=cmd_webhook)
 
     from hermes_cli.subcommands.peer import build_peer_parser
@@ -2745,7 +2718,6 @@ def _build_cli_parser():
     build_config_parser(subparsers, cmd_config=cmd_config)
     build_skin_parser(subparsers, cmd_skin=cmd_skin)
     build_console_parser(subparsers, cmd_console=cmd_console)
-    build_pairing_parser(subparsers, cmd_pairing=cmd_pairing)
     build_skills_parser(subparsers, cmd_skills=cmd_skills)
     build_bundles_parser(subparsers)
     build_plugins_parser(subparsers, cmd_plugins=cmd_plugins)

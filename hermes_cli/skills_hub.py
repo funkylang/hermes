@@ -597,32 +597,6 @@ def _resolve_url_bundle_name(c: Console, bundle, meta, identifier: str,
     return True
 
 
-def _announce_blueprint(c: Console, skill_name: str) -> None:
-    """Offer an installed skill's ``metadata.hermes.blueprint`` via /suggestions — never
-    auto-scheduled (installing must not silently create a recurring job). Never raises."""
-    try:
-        from tools.blueprints import BlueprintError, blueprint_spec_for_installed, register_blueprint_suggestion
-        try:
-            spec = blueprint_spec_for_installed(skill_name)
-        except BlueprintError as _rec_err:
-            c.print(f"[yellow]Blueprint block present but invalid:[/] {_rec_err}\n")
-            return
-        if spec is None:
-            return
-        lead = (f"[bold cyan]Blueprint:[/] '{skill_name}' is an automation "
-                f"(schedule [bold]{spec.schedule}[/])")
-        if register_blueprint_suggestion(spec) is not None:
-            c.print(f"{lead}.")
-            c.print("[dim]Added to your suggestions — run[/] [bold]/suggestions[/] "
-                    "[dim]to schedule or dismiss it.[/]\n")
-        else:
-            # Dropped: already offered/dismissed (latched) or the pending list is at its cap.
-            c.print(f"{lead}, but it wasn't added to your suggestions (already offered/dismissed, "
-                    "or the pending list is full — run [bold]/suggestions[/] to review).")
-            c.print("[dim]You can still schedule it any time by asking the agent "
-                    "or via[/] [bold]hermes cron add[/][dim].[/]\n")
-    except Exception:  # pragma: no cover - blueprint detection is best-effort
-        pass
 
 
 def _pinned_sources(c: Console, sources, source_id: Optional[str], identifier: str):
@@ -922,7 +896,6 @@ def _install_skill(identifier: str, category: str, force: bool, c: Console, skip
     from tools.skills_hub import SKILLS_DIR
     c.print(f"[bold green]Installed:[/] {install_dir.resolve().relative_to(Path(SKILLS_DIR).resolve()).as_posix()}")
     c.print(f"[dim]Files: {', '.join(bundle.files.keys())}[/]\n")
-    _announce_blueprint(c, bundle.name)
     _finish_change(c, invalidate_cache, "Skill will be available", "activate")
     return bundle, None if existing else "success", True
 

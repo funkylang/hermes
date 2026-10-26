@@ -181,7 +181,6 @@ _LEGACY_TOOLSET_MAP = {
     "skills_tools": ["skills_list", "skill_view", "skill_manage"],
     "browser_tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll",
                       "browser_back", "browser_press", "browser_get_images", "browser_vision", "browser_console"],
-    "cronjob_tools": ["cronjob_manage"],
     "file_tools": ["read_file", "write_file", "patch", "search_files"],
     "tts_tools": ["text_to_speech"],
 }
@@ -396,12 +395,12 @@ def _rewrite_delegate_task(td: Dict[str, Any], available: set) -> Optional[Dict[
     the line when none apply, so the model never learns ghost vocabulary. Two
     source variants exist (depth-off also names delegate_task itself); test the
     longer one first because the sibling list is a substring of it."""
-    blocked_present = [t for t in ("clarify", "memory", "cronjob_manage") if t in available]
-    if len(blocked_present) == 3:
+    blocked_present = [t for t in ("clarify", "memory") if t in available]
+    if len(blocked_present) == 2:
         return td
     fn = td.get("function", {})
     desc = fn.get("description", "")
-    for full, self_named in (("delegate_task, clarify, memory, or cronjob", True), ("clarify, memory, or cronjob", False)):
+    for full, self_named in (("delegate_task, clarify, or memory", True), ("clarify or memory", False)):
         if full in desc:
             break
     else:
@@ -610,7 +609,7 @@ _AGENT_LOOP_TOOLS = {"todo_list", "memory", "session_search", "delegate_task"}
 # Legacy tool-name aliases accepted at every dispatch seam (old sessions/saved
 # prompts keep working); schemas advertise only new names.
 _LEGACY_TOOL_ALIASES = {
-    **dict.fromkeys(TODO_LEGACY_ALIASES, TODO_SCHEMA["name"]), "cronjob": "cronjob_manage", "process": "process_manage",
+    **dict.fromkeys(TODO_LEGACY_ALIASES, TODO_SCHEMA["name"]), "process": "process_manage",
     "tour": "gui_tour", "tip": "show_tip",
 }
 _READ_SEARCH_TOOLS = {"read_file", "search_files"}

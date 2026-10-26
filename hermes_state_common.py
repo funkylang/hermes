@@ -6,9 +6,11 @@ import errno
 import json
 import logging
 import os
+import re
 import sys
 import time
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional, Tuple
 
 from hermes_cli.timefmt import EPOCH_MAX, EPOCH_MIN
 from hermes_state_pidns import persistent_record_pidns_checkable, pid_namespace_id
@@ -1326,3 +1328,106 @@ def _json_or(raw: Any, fallback: Any, warning: str) -> Any:
     except (json.JSONDecodeError, TypeError):
         logger.warning(warning)
         return fallback
+
+
+# ── Message timestamp prefixes (extracted from gateway.message_timestamps 2026-10-26) ──────────────
+# The state-repair path must recognize the leading "[timestamp]" prefix persisted on user rows so
+# coverage/repair comparisons see clean content. Gateway-only rendering helpers stayed deleted with
+# the gateway; only the reader (strip) moved here.
+
+# Leading timestamp prefix, either the current human format
+# ``[Tue 2026-04-28 13:40:53 CEST]`` or the older ISO one
+# ``[2026-04-13T17:02:06+0200]`` / ``[...+02:00]`` (human tried first).
+_TIMESTAMP_PREFIX_RE = re.compile(
+    r"^\[(?:"
+    r"(?P<dow>[A-Z][a-z]{2}) "
+    r"(?P<date>\d{4}-\d{2}-\d{2}) "
+    r"(?P<time>\d{2}:\d{2}:\d{2})"
+    r"(?: (?P<tz>[A-Za-z0-9_+\-/:]+))?"
+    r"|(?P<iso>\d{4}-\d{2}-\d{2}T[^\]]+)"
+    r")\]\s*"
+)
+
+
+def _localize(dt: datetime, tz) -> Optional[float]:
+    """Epoch for ``dt`` in ``tz`` or the local zone; None outside platform limits."""
+    naive_local = dt.tzinfo is None and tz is None
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz) if tz is not None else dt.astimezone()
+        return float(dt.timestamp())
+    except (OverflowError, ValueError):
+        return None
+    except OSError as exc:
+        if not (sys.platform == "win32" and naive_local and exc.errno == errno.EINVAL):
+            return None
+        # Windows' fold probe can reject the first Unix day. mktime can
+        # resolve those local wall times without changing their meaning.
+        # Limit recovery to that fold-free interval and reject normalization.
+        wall_time = dt.timetuple()
+        try:
+            epoch = time.mktime(wall_time)
+            if 0 <= epoch < 86_400 and time.localtime(epoch)[:6] == wall_time[:6]:
+                return float(epoch + dt.microsecond / 1_000_000)
+        except (OSError, OverflowError, ValueError):
+            pass
+        return None
+
+
+def _parse_iso(text: str, tz=None) -> Optional[float]:
+    """Parse an ISO-8601 string (incl. ``+0200`` offsets fromisoformat rejects)."""
+    for parse in (datetime.fromisoformat, lambda t: datetime.strptime(t, "%Y-%m-%dT%H:%M:%S%z")):
+        try:
+            return _localize(parse(text), tz)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _parse_timestamp_match(match: re.Match, tz=None) -> Optional[float]:
+    if match.group("iso"):
+        return _parse_iso(match.group("iso"), tz)
+    try:
+        dt = datetime.strptime(f"{match.group('date')} {match.group('time')}", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return _localize(dt, tz)
+
+
+def strip_leading_message_timestamps(content: str, tz=None) -> Tuple[str, Optional[float]]:
+    """Strip leading gateway timestamp prefixes → ``(clean_content, embedded_epoch)``.
+    With several prefixes the one closest to the text wins, preserving the platform-send
+    time of legacy rows like ``[processing time] [platform time] [sender] message``."""
+    if not isinstance(content, str) or not content:
+        return content, None
+    text, embedded_epoch = content, None
+    while (match := _TIMESTAMP_PREFIX_RE.match(text)) is not None:
+        parsed = _parse_timestamp_match(match, tz=tz)
+        if parsed is not None:
+            embedded_epoch = parsed
+        text = text[match.end():]
+    return text, embedded_epoch
+
+
+# ── Session-key namespaces (extracted from gateway.session 2026-10-26) ─────────────────────────────
+# The state-repair path rewrites/reads the ``agent:<ns>:…`` key format of rows written by legacy
+# gateway installs; the mapping is pure data-format logic and survives without the gateway.
+
+def session_key_namespace(profile: Optional[str]) -> str:
+    """``agent:<ns>`` prefix for a session key: default/None profile → ``agent:main``
+    (BYTE-IDENTICAL to every historical key); named profile → ``agent:<name>`` so two
+    profiles serving the same chat never collide. A profile literally named ``main`` would
+    otherwise produce the default's namespace and share every session (routing index, agent
+    cache, store) with it, so it is marked ``main~``: ``~`` is outside the profile-id alphabet,
+    so the marked form can never be another profile's id."""
+    if not profile or profile == "default":
+        return "agent:main"
+    return "agent:main~" if profile == "main" else f"agent:{profile}"
+
+
+def profile_from_session_key_namespace(namespace: str) -> str:
+    """Inverse of :func:`session_key_namespace` for the ``<ns>`` slot of a key: ``"default"`` for
+    ``main``, ``"main"`` for the marked ``main~``, else the slot is the profile id."""
+    if namespace == "main":
+        return "default"
+    return "main" if namespace == "main~" else namespace

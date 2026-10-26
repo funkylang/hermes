@@ -141,12 +141,6 @@ def _format_sessions(sessions: Sequence[dict]) -> str:
     return "\n".join(lines)
 
 
-def _format_job(job: dict, action: str) -> str:
-    from cron.jobs import effective_job_state
-    job_id = job.get("id") or job.get("job_id") or "?"
-    return f"{action} job: {job.get('name') or '(unnamed)'} ({job_id}) [{effective_job_state(job)}]"
-
-
 def _clean_summary(text: str | None) -> str:
     if not text or text is argparse.SUPPRESS:
         return ""
@@ -306,7 +300,6 @@ _CLI_FAMILIES: dict[str, tuple[_CliSurface, str]] = {
         _sub("profile", "build_profile_parser", "cmd_profile"),
         "list, show, info, *create, *use, *describe, *rename, *delete, *export, *import, "
         "*install, *update"),
-    "cron": (_sub("cron", "build_cron_parser", "cmd_cron"), "*create, *edit, *remove, *tick"),
     "portal": (_CliSurface("adder", "hermes_cli.portal_cli", "add_parser"), "info, tools"),
     "project": (
         _CliSurface("builder", "hermes_cli.projects_cmd", "build_parser", "cmd_project"),
@@ -563,7 +556,6 @@ def _status(_engine: HermesConsoleEngine, args: list[str]) -> str:
 _doctor = _simple_command(
     "doctor", "hermes_cli.doctor", "run_doctor", lambda: (SimpleNamespace(fix=False, ack=None),))
 _config_show = _simple_command("config show", "hermes_cli.config", "show_config")
-_cron_status = _simple_command("cron status", "hermes_cli.cron", "cron_status")
 
 
 def _logs(_engine: HermesConsoleEngine, args: list[str]) -> str:
@@ -743,53 +735,6 @@ def _profile_status(_engine: HermesConsoleEngine, args: list[str]) -> str:
     return _dispatch(_CLI_FAMILIES["profile"][0], "profile", (), ())
 
 
-def _cron_list(_engine: HermesConsoleEngine, args: list[str]) -> str:
-    ns = _parse("cron list", args, (("--all",), dict(action="store_true")))
-    from hermes_cli.cron import cron_list
-    return _capture_output(lambda: cron_list(show_all=ns.all))
-
-
-def _cron_job_action(args: list[str], usage: str, action: str, run) -> str:
-    """Shared body for single-job cron commands: ``run(job_ref) -> job | None``."""
-    if len(args) != 1:
-        raise ConsoleCommandError(f"Usage: {usage}")
-    from cron.jobs import AmbiguousJobReference
-    try:
-        job = run(args[0])
-    except AmbiguousJobReference as exc:
-        raise ConsoleCommandError(str(exc)) from exc
-    if not job:
-        raise ConsoleCommandError(f"Job not found: {args[0]}")
-    return _format_job(job, action)
-
-
-def _cron_pause(_engine: HermesConsoleEngine, args: list[str]) -> str:
-    from cron.jobs import pause_job
-    return _cron_job_action(
-        args, "cron pause <job>", "Paused",
-        lambda ref: pause_job(ref, reason="paused from hermes console"))
-
-
-def _cron_resume(_engine: HermesConsoleEngine, args: list[str]) -> str:
-    ns = _parse("cron resume", args, "job", "--at", (("--run-now",), dict(action="store_true")))
-    if ns.at and ns.run_now:
-        raise ConsoleCommandError("Use exactly one of --at or --run-now.")
-    from cron.jobs import AmbiguousJobReference, _hermes_now, rearm_oneshot, resume_job
-    try:
-        job = (
-            rearm_oneshot(ns.job, _hermes_now().isoformat() if ns.run_now else ns.at)
-            if ns.at or ns.run_now else resume_job(ns.job))
-    except (AmbiguousJobReference, ValueError) as exc:
-        raise ConsoleCommandError(str(exc)) from exc
-    if not job:
-        raise ConsoleCommandError(f"Job not found: {ns.job}")
-    return _format_job(job, "Resumed")
-
-
-def _cron_run(_engine: HermesConsoleEngine, args: list[str]) -> str:
-    from cron.jobs import trigger_job
-    return _cron_job_action(args, "cron run <job>", "Triggered", trigger_job)
-
 
 # (path, usage, summary, handler, confirmation prompt) — a non-empty prompt marks it mutating.
 _BUILTIN_COMMANDS = (
@@ -803,17 +748,9 @@ _BUILTIN_COMMANDS = (
      ""),
     (("config", "show"), "config show", "Show current configuration.", _config_show, ""),
     (("config", "path"), "config path", "Print config.yaml path.", _config_path, ""),
-    (("cron", "list"), "cron list [--all]", "List scheduled jobs.", _cron_list, ""),
-    (("cron", "status"), "cron status", "Show cron scheduler status.", _cron_status, ""),
     (("profile",), "profile", "Show active profile status.", _profile_status, ""),
     (("config", "set"), "config set <key> <value>", "Set a configuration value.", _config_set,
      "Update Hermes configuration?"),
-    (("cron", "pause"), "cron pause <job>", "Pause a scheduled job.", _cron_pause,
-     "Pause this cron job?"),
-    (("cron", "resume"), "cron resume <job>", "Resume a paused cron job.", _cron_resume,
-     "Resume this cron job?"),
-    (("cron", "run"), "cron run <job>", "Run a job on the next scheduler tick.", _cron_run,
-     "Trigger this cron job?"),
     (("config", "migrate"), "config migrate", "Update config with new options.", _config_migrate,
      "Update Hermes configuration with missing defaults?"),
     (("sessions", "export"), "sessions export <output> [--source SOURCE] [--session-id ID]",

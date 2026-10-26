@@ -415,14 +415,6 @@ _cli_wake_owner = None
 # One-shot finalization runs before process cleanup (plugins see the boundary while the
 # agent is attached); atexit cleanup must not finalize those sessions again.
 _single_query_finalize_attempted_session_ids: set[str | None] = set()
-# /handoff sessions belong to the gateway: finalizing them here would stamp end_reason on
-# a row the gateway just reopened, making the handoff leg vanish from history.
-# Session IDs that were handed off to the gateway via /handoff. The CLI process exits after a successful
-# handoff, but the gateway now owns the session lifecycle — _run_cleanup must NOT call finalize_session on
-# these, because doing so sets end_reason on a row the gateway just reopened and is actively writing to
-# (#88234). The race made the handoff leg vanish from session history and broke session_search recall for
-# the handed-off session.
-_handed_off_session_ids: set[str | None] = set()
 _active_agent_ref = None  # active AIAgent, for memory-provider shutdown at exit
 _deferred_agent_startup_done = False
 # Set once the TUI app starts (focus reporting + mouse tracking on); gates the on-exit
@@ -1142,7 +1134,7 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
         "model": ("_handle_model_switch", True), "codex-runtime": ("_handle_codex_runtime", True),
         "retry": ("_cmd_retry", True), "prompt": ("_handle_prompt_compose_command", True),
         "undo": ("_cmd_undo", True), "save": ("save_conversation", True), "skills": ("_cmd_skills", True),
-        "platforms": ("_show_gateway_status", False), "status": ("_show_session_status", False),
+        "status": ("_show_session_status", False),
         "context": ("_show_context_breakdown", True), "pi": ("_show_prompt_info", True),
         "style": ("_set_pi_style_mode", True), "redirect": ("_set_pi_redirect", True),
         "egress": ("_cmd_egress", True),
@@ -1580,16 +1572,6 @@ def _build_cli_from_args(model, toolsets, provider, reasoning, api_key, base_url
     return cli
 
 
-def _run_legacy_gateway():
-    """Legacy `cli.py --gateway` entry: arm the startup watchdog (before importing the gateway graph), then run it."""
-    import asyncio
-    with suppress(Exception):
-        from hermes_startup_watchdog import arm_startup_watchdog
-        arm_startup_watchdog()
-    from gateway.run import start_gateway
-    print(_t("cli.gateway.starting"))
-    asyncio.run(start_gateway())
-
 
 def _start_worktree_setup(list_tools, list_toolsets, worktree, w):
     """Start isolated-worktree creation (+ tool prewarm) in the background.
@@ -1665,7 +1647,6 @@ def main(
     compact: bool = False,
     list_tools: bool = False,
     list_toolsets: bool = False,
-    gateway: bool = False,
     resume: str = None,
     worktree: bool = False,
     w: bool = False,
@@ -1720,9 +1701,6 @@ def main(
 
     os.environ["HERMES_INTERACTIVE"] = "1"  # terminal_tool: interactive sudo prompts with timeout
 
-    if gateway:
-        _run_legacy_gateway()
-        return
 
     if not (list_tools or list_toolsets):
         from hermes_cli.process_identity import register_self

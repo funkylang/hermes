@@ -855,7 +855,7 @@ def _command_requires_pipe_stdin(command: str) -> bool:
 
 from tools.terminal_tool_guards import (
     _foreground_background_guidance, _safe_command_preview, _validate_workdir,
-    gateway_lifecycle_block, self_repo_block,
+    self_repo_block,
 )
 from tools.terminal_tool_background import _YIELDED_NOTE, spawn_background_process, yield_to_background_handler
 from tools.terminal_tool_result import finalize_foreground_result
@@ -1317,14 +1317,8 @@ def _pre_exec_block(
 ) -> None:
     """Raise :class:`_Rejected` with the blocked-result JSON when the command must not run.
 
-    Order matters: gateway lifecycle first (protects the running gateway),
-    then the dangerous-workdir check, then the self-repo guard (local only).
+    Order matters: the dangerous-workdir check first, then the self-repo guard (local only).
     """
-    blocked = gateway_lifecycle_block(
-        command=command, env=env, env_type=env_type, cwd=cwd, workdir=workdir, session_key=session_key,
-    )
-    if blocked:
-        raise _Rejected(blocked)
     if workdir:
         workdir_error = _validate_workdir(workdir)
         if workdir_error:
@@ -1419,12 +1413,9 @@ def terminal_tool(
 
         session_key = get_current_session_key(default="") or (task_id or "")
 
-        # The supervised-gateway identity probe ends in a kernel process query
-        # (psutil create_time) that has wedged for the better part of an hour on
-        # macOS; ``env.execute`` is already behind ``run_bounded_sync`` but this
-        # chain ran ahead of it, so the tool call never returned and the cron
-        # slot stayed occupied (#111922). Share the command's own deadline. A
-        # guard that never rendered a verdict fails CLOSED: these checks apply
+        # The guard chain runs subprocesses (git probes, remote cwd resolution) that have
+        # wedged for over an hour on macOS (#111922); share the command's own deadline.
+        # A guard that never rendered a verdict fails CLOSED: these checks apply
         # unconditionally (``force`` cannot bypass them), so the command is
         # refused with a retryable error instead of running unguarded.
         from agent.deadline import run_bounded_sync

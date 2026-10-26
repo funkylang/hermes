@@ -370,8 +370,7 @@ def _process_fingerprint(pid: int) -> Optional[str]:
     survives a reboot could match an unrelated process with the same PID and the same tick value;
     ``gateway.drain_control.current_instantiation_epoch`` (``boot_id`` + PID-1 start) changes on every
     reboot / container recreate, so the composed value never survives one. ``None`` when unreadable."""
-    from gateway.drain_control import current_instantiation_epoch
-    from hermes_cli.runtime_status import get_process_start_time
+    from hermes_cli.runtime_status import current_instantiation_epoch, get_process_start_time
     start = get_process_start_time(int(pid))
     if start is None:
         return None
@@ -2510,7 +2509,7 @@ def _propagate_module_import_root(cmd: list[str], env: dict[str, str]) -> None:
     """
     if cmd[1:3] != ["-m", "hermes_cli.main"]:
         return
-    from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
+    from hermes_cli.worker_env import pin_hermes_tree_on_pythonpath
 
     pin_hermes_tree_on_pythonpath(env, Path(__file__).resolve().parents[1])
 

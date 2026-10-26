@@ -51,8 +51,12 @@ def platform_configured_on(home: Path, name: str) -> bool:
     ``gateway.<name>`` blocks merged in the loader's order (managed overlay and ``${VAR}`` applied),
     so the last explicit ``enabled`` wins. A stored token with no ``enabled`` anywhere counts too.
     Env credentials are the caller's to check. Read-only; works before the platform's plugin loads."""
-    from gateway import config_loader
-    from gateway.config import PlatformConfig
+    try:
+        from gateway import config_loader
+        from gateway.config import PlatformConfig
+    except ImportError:
+        # Minimal product: no gateway package — degrade to a direct read of the same locations.
+        return _platform_block_configured_on_local(home, name)
     gw_data = config_loader.load_legacy_gateway_json(home)
     gw_data = gw_data if isinstance(gw_data, dict) else {}
     try:
@@ -66,6 +70,47 @@ def platform_configured_on(home: Path, name: str) -> bool:
         return False
     platform = PlatformConfig.from_dict(block)
     return platform.enabled or ("enabled" not in block and bool(str(platform.token or "").strip()))
+
+
+def _platform_block_configured_on_local(home: Path, name: str) -> bool:
+    """ImportError fallback for :func:`platform_configured_on` without the gateway package:
+    read the same config locations directly and merge them in the loader's order —
+    legacy ``gateway.json`` first, then config.yaml's ``gateway.platforms`` / ``platforms``
+    / ``gateway.<name>`` blocks (later sections override earlier keys)."""
+    import json as _json
+    merged: dict = {}
+    for source in _iter_local_platform_sections(home, name):
+        merged.update(source)
+    if not merged:
+        return False
+    enabled = merged.get("enabled")
+    if enabled is not None:
+        return bool(enabled)
+    return bool(str(merged.get("token") or "").strip())
+
+
+def _iter_local_platform_sections(home: Path, name: str):
+    """Yield the *name* block from each config location the gateway loader merged, in order."""
+    import json as _json
+    try:
+        gw = _json.loads((home / "gateway.json").read_text(encoding="utf-8-sig"))
+        plats = gw.get("platforms") if isinstance(gw, dict) else None
+        if isinstance(plats, dict) and isinstance(plats.get(name), dict):
+            yield plats[name]
+    except (OSError, ValueError):
+        pass
+    try:
+        from hermes_cli.config import read_user_config_raw
+        cfg = read_user_config_raw(home / "config.yaml") or {}
+    except Exception:
+        return
+    if not isinstance(cfg, dict):
+        return
+    gateway_cfg = cfg.get("gateway")
+    gateway_cfg = gateway_cfg if isinstance(gateway_cfg, dict) else {}
+    for source in (gateway_cfg.get("platforms"), cfg.get("platforms"), gateway_cfg):
+        if isinstance(source, dict) and isinstance(source.get(name), dict):
+            yield source[name]
 
 
 def _toolset_listed(config: dict, names: frozenset[str]) -> bool:

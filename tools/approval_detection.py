@@ -696,9 +696,6 @@ _BASH_SHORT_OPTION_LETTERS = frozenset("ilrsDcabefhkmnptuvxBCEHPTOo")
 _MAX_DETECTION_COMMAND_CHARS, _MAX_SEPARATOR_FREE_COMMAND_CHARS, _MAX_DETECTION_SEGMENTS = 128_000, 4_096, 25_000
 _PARSER_LIMIT_DESCRIPTION = "command parser limit exceeded"
 _MALFORMED_EXEC_DESCRIPTION = "command parser limit or malformed executable payload"
-_GATEWAY_LIFECYCLE_SPLICE_DESCRIPTION = "stop/restart hermes gateway via shell-spliced verb (kills running agents)"
-
-
 def _command_parser_limit_exceeded(command: str) -> bool:
     """Bound all parser work before normalization/tokenization. Separator counting is deliberately
     conservative: quoted separators over-count, but crossing the ceiling fails closed rather than
@@ -1525,26 +1522,6 @@ def _is_verification_artifact_cleanup(command: str) -> bool:
     )
 
 
-def _is_shell_token_spliced_gateway_lifecycle(command: str) -> bool:
-    """Catch gateway-lifecycle verbs spelled with quote splicing.
-    Backslash splicing (``kick\\start``) is undone by normalization, but quote splicing is not:
-    ``_deobfuscate_shell_word_for_detection`` is deliberately scoped to command-position words
-    (widening it would let quoted prose like ``git commit -m "rm -rf /"`` match), and the spliced
-    verb is an ARGUMENT, so ``launchctl kick"start" -k gui/501/ai.hermes.gateway`` auto-approved.
-    Delegates to ``cron.lifecycle_guard`` (shlex-tokenized, anchored on a hermes-gateway
-    identifier). Runs last so an ordinary pattern match keeps its more specific reason; this layer
-    only prompts — the non-bypassable block still lives in ``cron.lifecycle_guard``.
-
-    ``_normalize_command_for_detection`` strips backslash escapes, so ``kick\\start`` already reaches the
-    launchctl pattern above. See #80269.
-    """
-    try:
-        from cron.lifecycle_guard import contains_gateway_lifecycle_command
-    except Exception:
-        return False
-    return contains_gateway_lifecycle_command(command)
-
-
 def detect_dangerous_command(command: str) -> tuple:
     """Check dangerous patterns -> (is_dangerous, pattern_key, description)."""
     if _command_parser_limit_exceeded(command):
@@ -1567,6 +1544,4 @@ def detect_dangerous_command(command: str) -> tuple:
     normalized = _normalize_command_for_detection(command)
     for description, _ in _execution_flag_findings(normalized):
         return (True, description, description)
-    if _is_shell_token_spliced_gateway_lifecycle(command):
-        return (True, _GATEWAY_LIFECYCLE_SPLICE_DESCRIPTION, _GATEWAY_LIFECYCLE_SPLICE_DESCRIPTION)
     return (False, None, None)

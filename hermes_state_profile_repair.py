@@ -37,7 +37,7 @@ def session_key_profile(session_key: Any) -> Optional[str]:
     parts = session_key.split(":")
     if len(parts) < 3 or parts[0] != "agent" or not parts[1]:
         return None
-    from gateway.session import profile_from_session_key_namespace
+    from hermes_state_common import profile_from_session_key_namespace
     return profile_from_session_key_namespace(parts[1])
 
 
@@ -261,11 +261,11 @@ class SessionProfileRepairMixin:
         """``agent:main:…`` → ``agent:<profile>:…`` (+ ``profile_name``) for rows a standalone
         gateway wrote before this store's profile was multiplexed (#113884). Only rows still under
         the legacy namespace change; a ``main``-named profile is written in its marked form."""
-        from gateway.session import _session_key_namespace
+        from hermes_state_common import session_key_namespace
         wanted = list(ids)
         if not wanted:
             return 0
-        new_ns = _session_key_namespace(profile) + ":"
+        new_ns = session_key_namespace(profile) + ":"
 
         def _do(conn) -> int:
             changed = 0

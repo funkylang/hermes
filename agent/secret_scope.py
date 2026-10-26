@@ -399,13 +399,6 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
     except Exception:
         external_secrets = {}
     secrets.update((k, v) for k, v in external_secrets.items() if not _is_global_env(k))
-    # The DEFAULT profile's config.yaml allow_all_users grant lives only in os.environ (bridged by
-    # gateway.config_loader); scoped gate readers under multiplex never fall to os.environ, so seed it
-    # into that profile's own mapping. A secondary never inherits it (#80099 class).
-    from gateway.config_loader import bridged_allow_all_users
-    bridged = bridged_allow_all_users()
-    if bridged is not None and _is_process_home(hermes_home):
-        secrets.setdefault("GATEWAY_ALLOW_ALL_USERS", bridged)
     # Administrator-managed ``.env`` LAST, with override: the launch process applies it that way
     # (``env_loader._apply_managed_env``) so policy beats a user's own value. Under multiplex
     # semantics ``get_secret`` never reads ``os.environ`` on a scope miss, so a scope built from

@@ -181,16 +181,6 @@ def should_run_now(now: Optional[datetime] = None) -> bool:
 
 # --- Automatic state transitions (pure function, no LLM) ---
 
-def _cron_referenced_skills() -> Set[str]:
-    """Skill names referenced by any cron job (incl. paused/disabled). Best-effort: a cron import error or corrupt jobs store yields an empty set, never a crash."""
-    try:
-        from cron.jobs import referenced_skill_names as _refs
-        return _refs()
-    except Exception as e:
-        logger.debug("Curator could not read cron skill references: %s", e, exc_info=True)
-        return set()
-
-
 def _archive_as_curator(_u, name: str) -> bool:
     """Archive via skill_usage with the ledger actor tagged 'curator', so the ledger entry reads as an autonomous transition, not a foreground call."""
     try:
@@ -215,9 +205,6 @@ def apply_automatic_transitions(now: Optional[datetime] = None) -> Dict[str, int
     now = now or datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=get_stale_after_days())
     archive_cutoff = now - timedelta(days=get_archive_after_days())
-    # Cron-referenced skills are in use by definition (usage only bumps when a
-    # job fires, so paused/rare jobs would age them out). Treat as pinned.
-    protected = _cron_referenced_skills()
     counts = {"marked_stale": 0, "archived": 0, "reactivated": 0, "checked": 0, "seeded": 0}
 
     def _set(name: str, state: str, key: str) -> None:
@@ -227,7 +214,7 @@ def apply_automatic_transitions(now: Optional[datetime] = None) -> Dict[str, int
     for row in _u.curated_report():
         counts["checked"] += 1
         name = row["name"]
-        if row.get("pinned") or name in protected:
+        if row.get("pinned"):
             continue
         # First sight with no persisted record: anchor its clock to now and defer.
         if not row.get("_persisted", True):
@@ -326,11 +313,6 @@ CURATOR_REVIEW_PROMPT = (
     "back load-bearing UX (slash-command entry points referenced in docs and "
     "tips) and are filtered out of the candidate list below — never resurrect "
     "one as an archive or absorb target.\n"
-    "3c. DO NOT archive or prune any skill marked `cron=yes` in the candidate "
-    "list. A cron job depends on it and will fail to load it on its next "
-    "run. You MAY still consolidate it into an umbrella — but only because "
-    "the curator rewrites cron job skill references to follow consolidations; "
-    "never simply prune it.\n"
     "4. DO NOT use usage counters as a reason to skip consolidation. The "
     "counters are new and often mostly zero. Judge overlap on CONTENT, "
     "not on use_count. 'use=0' is not evidence a skill is valuable; it's "
@@ -429,8 +411,8 @@ CURATOR_REVIEW_PROMPT = (
     "into (the umbrella must already exist). Deletes without a verified "
     "forwarding target are refused — pruning with no absorption target is "
     "the deterministic staleness pass's job, never this one's. "
-    "`absorbed_into` drives cron-job skill-reference migration — "
-    "guessing from your YAML summary after the fact is fragile.\n"
+    "`absorbed_into` is verified at delete time, so it must name a real, "
+    "existing umbrella — guessing it from your YAML summary after the fact is fragile.\n"
     "  You have NO terminal access in this pass — every filesystem mutation "
     "goes through skill_manage above so it is ledgered and rollback-able "
     "(issue #96962). Reading files works through skill_view (including "
@@ -672,21 +654,6 @@ def _build_rename_summary(*, before_names: Set[str], after_report: List[Dict[str
     return "\n".join(lines)
 
 
-def _rewrite_cron_refs(consolidated: List[Dict[str, Any]], pruned: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Point cron jobs at the umbrella when the curator consolidated a skill they list — otherwise the scheduler fails to
-    load it and the job runs without its instructions. Best-effort: a cron-module issue never breaks the curator."""
-    try:
-        consolidated_map = {e["name"]: e["into"] for e in consolidated if isinstance(e, dict) and e.get("name") and e.get("into")}
-        pruned_names = [e["name"] for e in pruned if isinstance(e, dict) and e.get("name")]
-        if consolidated_map or pruned_names:
-            from cron.jobs import rewrite_skill_refs
-            return rewrite_skill_refs(consolidated=consolidated_map, pruned=pruned_names)
-        return {"rewrites": [], "jobs_updated": 0, "jobs_scanned": 0}
-    except Exception as e:
-        logger.debug("Curator cron skill rewrite failed: %s", e, exc_info=True)
-        return {"rewrites": [], "jobs_updated": 0, "jobs_scanned": 0, "error": str(e)}
-
-
 def _write_file(path: Path, label: str, render: Any) -> None:
     """Best-effort write of *render()* (or the JSON dump of a non-callable payload);
     rendering runs inside the guard so a serialisation error is logged, not raised."""
@@ -718,8 +685,6 @@ def _write_run_report(
     states = ((n, (before_by_name.get(n) or {}).get("state"), (after_by_name.get(n) or {}).get("state")) for n in sorted(diff.after_names & before_names))
     transitions = [{"name": n, "from": b, "to": a} for n, b, a in states if b and a and b != a]
     tc_counts: Dict[str, int] = dict(Counter(tc.get("name", "unknown") for tc in tool_calls))
-    cron_rewrites = _rewrite_cron_refs(diff.consolidated, diff.pruned)
-    jobs_updated = int(cron_rewrites.get("jobs_updated", 0))
     payload = {
         "started_at": started_at.isoformat(), "duration_seconds": round(elapsed_seconds, 2),
         "model": llm_meta.get("model", ""), "provider": llm_meta.get("provider", ""), "auto_transitions": auto_counts,
@@ -727,17 +692,15 @@ def _write_run_report(
             "before": len(before_names), "after": len(diff.after_names), "delta": len(diff.after_names) - len(before_names),
             "archived_this_run": len(diff.removed), "added_this_run": len(diff.added),
             "consolidated_this_run": len(diff.consolidated), "pruned_this_run": len(diff.pruned),
-            "state_transitions": len(transitions), "cron_jobs_rewritten": jobs_updated, "tool_calls_total": sum(tc_counts.values()),
+            "state_transitions": len(transitions), "tool_calls_total": sum(tc_counts.values()),
         },
         "tool_call_counts": tc_counts, "archived": diff.removed, "consolidated": diff.consolidated, "pruned": diff.pruned,
-        "pruned_names": [p["name"] for p in diff.pruned], "added": diff.added, "state_transitions": transitions, "cron_rewrites": cron_rewrites,
+        "pruned_names": [p["name"] for p in diff.pruned], "added": diff.added, "state_transitions": transitions,
         "llm_final": llm_meta.get("final", ""), "llm_summary": llm_meta.get("summary", ""),
         "llm_error": llm_meta.get("error"), "tool_calls": llm_meta.get("tool_calls", []),
     }
     _write_file(run_dir / "run.json", "run.json", payload)
     _write_file(run_dir / "REPORT.md", "REPORT.md", lambda: _render_report_markdown(payload))
-    if jobs_updated > 0:  # only when a job was touched, to keep no-op run dirs uncluttered
-        _write_file(run_dir / "cron_rewrites.json", "cron_rewrites.json", cron_rewrites)
     return run_dir
 
 
@@ -760,15 +723,6 @@ def _pruned_lines(entry: Any) -> List[str]:
     return [f"- `{entry.get('name', '?')}`" + _reason_suffix(entry) if isinstance(entry, dict) else f"- `{entry}`"]
 
 
-def _cron_rewrite_lines(entry: Dict[str, Any]) -> List[str]:
-    job_name = entry.get("job_name") or entry.get("job_id") or "?"
-    head = f"- `{job_name}`: `{', '.join(entry.get('before') or [])}` → `{', '.join(entry.get('after') or []) or '(none)'}`"
-    return ([head] + [f"    - `{old}` → `{new}` (consolidated)" for old, new in (entry.get("mapped") or {}).items()]
-            + [f"    - `{name}` dropped (pruned)" for name in (entry.get("dropped") or [])])
-
-
-# REPORT.md list sections, in order: (payload key, heading, intro, per-entry renderer, cap, overflow hint).
-# Consolidated entries are archived (recoverable by design) but live on inside the umbrella.
 _REPORT_SECTIONS = (
     ("consolidated", "Consolidated into umbrella skills",
      "_These skills were **absorbed into another skill** during this run — their content still lives, just under a different name. "
@@ -781,9 +735,6 @@ _REPORT_SECTIONS = (
     ("added", "New skills this run", "_Usually these are new class-level umbrellas created via `skill_manage action=create`._\n",
      lambda n: [f"- `{n}`"], None, ""),
     ("state_transitions", "State transitions", None, lambda t: [f"- `{t.get('name')}`: {t.get('from')} → {t.get('to')}"], None, ""),
-    ("cron_rewrites", "Cron job skill references rewritten",
-     "_Cron jobs that referenced a consolidated or pruned skill were updated in-place so they keep loading the right instructions "
-     "on their next run. See `cron_rewrites.json` for the full record._\n", _cron_rewrite_lines, 25, "see `cron_rewrites.json`"),
 )
 
 
@@ -808,8 +759,6 @@ def _render_report_markdown(p: Dict[str, Any]) -> str:
     ]
     for key, title, intro, render, show, hint in _REPORT_SECTIONS:
         items = p.get(key) or []
-        if key == "cron_rewrites":  # lets users audit that the auto-rewrite did the right thing
-            items = items.get("rewrites") or []
         if not items:
             continue
         lines += [f"### {title} ({len(items)})\n"] + ([intro] if intro else [])
@@ -851,10 +800,9 @@ def _render_candidate_list() -> str:
     ]
     if not rows:
         return "No agent-created skills to review."
-    cron_referenced = _cron_referenced_skills()
     return "\n".join([f"Agent-created skills ({len(rows)}):\n"] + [
         f"- {r['name']}  provenance={r.get('provenance', 'agent')}  state={r['state']}  "
-        f"pinned={'yes' if r.get('pinned') else 'no'}  cron={'yes' if r['name'] in cron_referenced else 'no'}  "
+        f"pinned={'yes' if r.get('pinned') else 'no'}  "
         f"activity={r.get('activity_count', 0)}  use={r.get('use_count', 0)}  view={r.get('view_count', 0)}  "
         f"patches={r.get('patch_count', 0)}  last_activity={r.get('last_activity_at') or 'never'}"
         for r in rows
