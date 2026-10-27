@@ -3331,7 +3331,7 @@ class _StreamingCall(StreamingWaitMonitor):
                         # complete instead of silently discarding the action.
                         self.result["partial_tool_names"].append(name)
                     # Stream raw argument fragments to the display layer as they arrive.
-                    if args_chunk and getattr(self.agent, "tool_args_stream_callback", None) is not None:
+                    if args_chunk:
                         self.agent._fire_tool_args_stream(
                             tool_calls.name_for_delta(tc_delta), args_chunk)
 
