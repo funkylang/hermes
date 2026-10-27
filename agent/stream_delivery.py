@@ -498,9 +498,9 @@ class StreamDeliveryMixin:
             msg = {"role": "assistant", "content": self.accumulated_text}
 
             # Include reasoning content if we accumulated any during reasoning phase
-            _rz = getattr(self, "reasoning_text", "") or ""
-            if _rz.strip():
-                msg["reasoning_content"] = _rz
+            captured_reasoning = self.reasoning_text
+            if captured_reasoning.strip():
+                msg["reasoning_content"] = captured_reasoning
                 self.reasoning_text = ""
 
             append_message(
@@ -511,6 +511,41 @@ class StreamDeliveryMixin:
 
             # Clear the accumulator — we've delivered it to the wire now
             self.accumulated_text = ""
+        # FSE-REA: reasoning-only stream end. The model returned thinking but no response
+        # tokens, so the funnel never entered RESPONSE phase and the block above never fired.
+        # Without this the transcript gets an empty-content assistant row (EMP-TML/FIN-TAIL)
+        # whose only payload is reasoning_content — invisible to downstream consumers.
+        # Convert the captured reasoning into the row's content on the wire.
+        #
+        # NOTE (test build): this elif cannot yet tell a genuine stream-end from the
+        # mid-stream REASONING→RESPONSE transition flush (handle_stream_event line 337) —
+        # both run while current_line_kind is still REASONING. If the misfire on the
+        # transition shows up in testing, we'll add a lookahead/flag to suppress it there.
+        elif ACTIVE_CLI.current_line_kind == LineKind.REASONING and self.reasoning_text.strip():
+            from agent.message_metadata import append_message
+
+            captured_reasoning = self.reasoning_text
+
+            def preview_text(text: str, n: int = 120) -> str:
+                text = text.replace("\n", "\\n")
+                return text[:n] + ("…" if len(text) > n else "")
+
+            print_text_line(
+                LineKind.DEBUG,
+                f"[FSE-REA] appending reasoning-only row kind="
+                f"{ACTIVE_CLI.current_line_kind.value} "
+                f"reasoning[{len(captured_reasoning)}]="
+                f"{preview_text(captured_reasoning)!r}"
+            )
+
+            append_message(
+                self._messages,
+                {"role": "assistant", "content": captured_reasoning},
+                tag="FSE-REA"
+            )
+
+            # Delivered to the wire — don't double-count it downstream (EMP-TML/FIN-TAIL).
+            self.reasoning_text = ""
 
     def _fire_stream_delta(self, text: str) -> None:
         """Fire all registered stream delta callbacks (display + TTS)."""
