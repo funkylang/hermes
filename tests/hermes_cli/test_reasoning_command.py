@@ -427,37 +427,6 @@ class TestReasoningDeltasFiredFlag(unittest.TestCase):
         self.assertEqual(captured, ["Let me merge the PR."])
 
 
-class TestReasoningShownThisTurnFlag(unittest.TestCase):
-    """Post-response reasoning display should be suppressed when reasoning
-    was already shown during streaming in a tool-calling loop."""
-
-    def _make_cli(self):
-        from cli import HermesCLI
-        cli = HermesCLI.__new__(HermesCLI)
-        cli.show_reasoning = True
-        cli.streaming_enabled = True
-        cli._stream_box_opened = False
-        cli._reasoning_box_opened = False
-        cli._reasoning_stream_started = False
-        cli._reasoning_shown_this_turn = False
-        cli._reasoning_buf = ""
-        cli._stream_buf = ""
-        cli._stream_started = False
-        cli._stream_text_ansi = ""
-        cli._stream_prefilt = ""
-        cli._in_reasoning_block = False
-        cli._reasoning_preview_buf = ""
-        return cli
-
-    @patch("cli._cprint")
-    def test_streaming_reasoning_sets_turn_flag(self, mock_cprint):
-        cli = self._make_cli()
-        self.assertFalse(cli._reasoning_shown_this_turn)
-        cli._stream_reasoning_delta("Thinking about it...")
-        self.assertTrue(cli._reasoning_shown_this_turn)
-
-
-
 
 if __name__ == "__main__":
     unittest.main()

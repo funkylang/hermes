@@ -8,7 +8,6 @@ never imports ``cli`` at module load time (import cycle).
 from __future__ import annotations
 
 import json
-import logging
 import re
 import shutil
 import textwrap
@@ -19,13 +18,6 @@ from pathlib import Path
 from rich.markup import escape as _escape
 
 from agent.i18n import t
-from agent.think_scrubber import THINK_CLOSE_TAGS, THINK_OPEN_TAGS
-
-# Model-generated reasoning tags: suppressed during streaming (they'd display as raw XML;
-# the agent strips them from final_response too) unless show_reasoning routes them to the box.
-_OPEN_TAGS = THINK_OPEN_TAGS
-_CLOSE_TAGS = THINK_CLOSE_TAGS
-_MAX_CLOSE_TAG_LEN = max(len(t) for t in _CLOSE_TAGS)
 
 # Ordered (prefix, catalog key) rows for _slow_command_status — first match wins; the key is
 # resolved through t() at call time so the active language applies.
@@ -51,44 +43,6 @@ def _terminal_columns(default: int = 80) -> int:
         return default
 
 
-def _wrap_box_line(line: str, width: int) -> list[str]:
-    """Word-wrap a box content line to the interior width (no-op when it fits).
-
-    Fits-in-width lines pass through untouched so code indentation and exact spacing are
-    preserved. Over-width lines wrap at word boundaries; the first physical line keeps the
-    original leading indent. Tokens longer than a full physical line are hard-split."""
-    if not line or len(line) <= width:
-        return [line]
-    m = re.match(r"[ \t]+", line)
-    indent = m.group(0) if m else ""
-    out, cur = [], ""
-
-    def emit(word_part: str) -> None:
-        """Place word_part on the current physical line or open a new one."""
-        nonlocal cur
-        # Hard-split pieces that exceed even an empty physical line.
-        while len(word_part) > width - (len(indent) if not out and not cur else 0):
-            room = width - len(cur) - (1 if cur else 0)
-            if room < 4:
-                out.append(cur)
-                cur = ""
-                room = width - (len(indent) if not out else 0)
-            out.append((cur + " " if cur else "") + word_part[:room])
-            cur = ""                          # that content is committed to `out` now
-            word_part = word_part[room:]
-        if not cur:
-            cur = (indent + word_part) if (not out and indent) else word_part
-        elif len(cur) + 1 + len(word_part) <= width:
-            cur += " " + word_part
-        else:
-            out.append(cur)
-            cur = word_part
-
-    for word in line.strip().split():
-        emit(word)
-    if cur:
-        out.append(cur)
-    return [ln.rstrip() for ln in out]
 
 
 class CLIStreamMixin:
@@ -298,285 +252,25 @@ class CLIStreamMixin:
             return
         # Old rendering commented out - new system in stream_delivery.handle_stream_event
 
-    def _process_dim_box_text(self, text: str) -> None:
-        """Buffer dim box text (reasoning/tool args) and print complete lines with word-wrapping."""
-        from cli import _DIM, _RST, _cprint
-        from wcwidth import wcswidth
-
-        box_width = self._scrollback_box_width()
-
-        def print_one_line(text):
-            """Print text that fits in box_width, return the remainder."""
-            within_text = False
-            width = 0
-            last_space_position = 0
-
-            for i, ch in enumerate(text):
-                if ch == ' ':
-                    width += 1
-                    if within_text:
-                        last_space_position = i
-                elif ch == '\t':
-                    width += 8
-                else:
-                    within_text = True
-                    width += wcswidth(ch)
-
-                # Check after adding char - does it exceed box_width?
-                if width > box_width:
-                    if last_space_position:
-                        # Soft break
-                        _cprint(f"{_DIM}{text[:last_space_position]}{_RST}")
-                        return text[last_space_position+1:]
-                    else:
-                        # Hard break
-                        _cprint(f"{_DIM}{text[:i]}{_RST}")
-                        return text[i:]
-
-            # Text fits - print all of it
-            _cprint(f"{_DIM}{text}{_RST}")
-            return ""
-
-        # Initialize _line_buf if it doesn't exist yet
-        if not hasattr(self, "_line_buf"):
-            self._line_buf = ""
-
-        # Extract a line from the buffer for processing.
-        self._line_buf += text
-        if "\n" in self._line_buf:
-            # complete line (newline arrived)
-            line, self._line_buf = self._line_buf.split("\n", 1)
-            if line == "":
-                _cprint("")
-            else:
-                while line:
-                    line = print_one_line(line)
-        else:
-            line = self._line_buf
-            width = wcswidth(line)
-            if width > box_width:
-                # print all but the last partial line
-                while width > box_width:
-                    line = print_one_line(line)
-                    width = wcswidth(line)
-                self._line_buf = line
 
     def _agent_status_print(self, *args, **kwargs) -> None:
         """``agent._print_fn`` for the interactive CLI: agent status lines (subagent completion ``✓ [set n · i/N]``,
-        background-process notices, spinner ``print_above`` text) arrive from other threads at any moment. While
-        a response or reasoning box is being streamed they are HELD and released at the box footer, so a line
-        never lands between two paragraphs of the reply. Outside a box they print immediately."""
+        background-process notices, spinner ``print_above`` text) arrive from other threads at any moment."""
         from cli import _cprint
         text = kwargs.get("sep", " ").join(str(a) for a in args)
-        if getattr(self, "_stream_box_live", False) or getattr(self, "_reasoning_box_opened", False):
-            self._held_status_lines = getattr(self, "_held_status_lines", []) + [text]
-            return
         _cprint(text)
 
-    def _release_held_status_lines(self) -> None:
-        """Print status lines held while a box was open (called right after a box footer)."""
-        from cli import _cprint
-        held, self._held_status_lines = getattr(self, "_held_status_lines", []), []
-        for line in held:
-            _cprint(line)
 
-    def _close_reasoning_box(self) -> None:
-        """Close the live reasoning box if it's open (renders the buffered reasoning tail)."""
-        from cli import _DIM, _RST, _cprint, flush_inline_output_history
-        if not getattr(self, "_reasoning_box_opened", False):
-            return
-        # Print any remaining text in the line buffer (partial line that didn't get printed)
-        # Strip trailing newlines: a steering-forced close right after a token ending in \n\n
-        # otherwise flushes a bare newline here, rendering a blank line inside the box.
-        line_buf = getattr(self, "_line_buf", "").rstrip("\n")
-        if line_buf:
-            _cprint(f"{_DIM}{line_buf}{_RST}")
-            self._line_buf = ""
-        w = self._scrollback_box_width()
-        # Print the box footer
-        _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
-        flush_inline_output_history()  # commit inline fragments as finished lines for replay
-        self._reasoning_box_opened = False
-        if not getattr(self, "_stream_box_live", False):
-            self._release_held_status_lines()
+
+
+
+
 
     def _stream_delta(self, text) -> None:
-        """Line-buffered streaming callback for real-time token rendering.
-
-        DISABLED 2026-10-19: unified streaming via handle_stream_event now renders
-        response content directly; this old path was causing double display.
-        Kept as no-op for callback registration compatibility.
-        
-        ``None`` = intermediate turn boundary (tools about to run): flush boxes and reset state.
+        """Stream consumer marker for the provider loops (``_has_stream_consumers`` gates
+        ``on_text_delta`` wiring). Display itself flows through
+        ``stream_delivery.handle_stream_event`` (the print_* funnel); this method renders nothing.
         """
-        if text is None:
-            # Flush boxes on turn boundaries (still needed for state management)
-            self._flush_stream()
-            self._reset_stream_state()
-            return
-        # Old rendering commented out - new system in stream_delivery.handle_stream_event
-        return  # Early return to prevent double rendering
-
-    def _emit_stream_line(self, printed_line: str, wrap: bool = True) -> None:
-        """Print one response line with the skin's true-color text escape (if any).
-
-        ``wrap=True`` word-wraps over-wide lines to the box interior so they never run
-        past the right border. Table rows pass wrap=False: they are re-aligned as a block
-        by _flush_stream_table_buf and must keep their column geometry."""
-        from cli import _RST, _STREAM_PAD, _cprint
-        _tc = getattr(self, "_stream_text_ansi", "")
-        if not wrap:
-            lines = [printed_line]
-        else:
-            lines = _wrap_box_line(printed_line, self._scrollback_box_width())
-        for ln in lines:
-            _cprint(
-                f"{_STREAM_PAD}{_tc}{ln}{_RST}" if _tc else f"{_STREAM_PAD}{ln}")
-
-    def _flush_stream_table_buf(self) -> None:
-        """Emit the held table block re-aligned as a whole. Cell-level markdown is stripped FIRST
-        so the realigner pads to the final visible width, not the marker-decorated width."""
-        from cli import (
-            _strip_markdown_syntax, _terminal_width_for_streaming, realign_markdown_tables)
-        buf = self._stream_table_buf
-        self._stream_table_buf = []
-        self._in_stream_table = False
-        if not buf:
-            return
-        joined = "\n".join(buf)
-        if self.final_response_markdown == "strip":
-            joined = _strip_markdown_syntax(joined)
-        block = realign_markdown_tables(joined, _terminal_width_for_streaming())
-        for ln in block.split("\n"):
-            self._emit_stream_line(ln, wrap=False)
-
-    def _emit_stream_text(self, text: str) -> None:
-        """Emit filtered text to the streaming display."""
-        from agent.markdown_tables import is_table_divider, looks_like_table_row
-        from cli import (
-            HermesCLI, _ACCENT, _RST, _STREAM_PARTIAL_PREVIEW_LEN, _cprint, _strip_markdown_syntax, datetime)
-        if not text:
-            return
-        # Close a still-open reasoning box on the first content token so the answer streams
-        # token-by-token; _close_reasoning_box renders the reasoning tail first, so ordering holds.
-        self._close_reasoning_box()
-        self._close_tool_args_box()  # arguments fully generated: close any live args box
-
-        # Open the response box header on the very first visible text
-        if not self._stream_box_opened:
-            text = text.lstrip("\n")
-            if not text:
-                return
-            self._stream_box_opened = True
-            self._stream_box_live = True  # header drawn; cleared at the footer
-            try:
-                from hermes_cli.skin_engine import get_active_skin
-                _skin = get_active_skin()
-                label = _skin.get_branding("response_label", "☤ Hermes")
-                _text_hex = _skin.get_color("banner_text", "#FFF8DC")
-            except Exception:
-                label = "☤ Hermes"
-                _text_hex = "#FFF8DC"
-            try:  # true-color escape so streamed text matches the Rich Panel appearance
-                _r, _g, _b = (int(_text_hex[i:i + 2], 16) for i in (1, 3, 5))
-                self._stream_text_ansi = f"\033[38;2;{_r};{_g};{_b}m"
-            except (ValueError, IndexError):
-                self._stream_text_ansi = ""
-            if self.show_timestamps:
-                label = f"{label}{datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
-            w = self._scrollback_box_width()
-            fill = w - 2 - HermesCLI._status_bar_display_width(label)
-            _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
-
-        # Turn-level record of what actually reached the screen; survives _reset_stream_state at
-        # tool-call boundaries so an interrupted reply isn't re-rendered as a Panel (#65666).
-        self._streamed_text_this_turn = getattr(self, "_streamed_text_this_turn", "") + text
-        self._stream_buf += text
-        while "\n" in self._stream_buf:
-            line, self._stream_buf = self._stream_buf.split("\n", 1)
-            # Table rows are held and re-padded as a block once it ends (already-printed rows
-            # can't be re-aligned), so a table appears in one batch when the block closes.
-            if self._in_stream_table:
-                if looks_like_table_row(line) or is_table_divider(line):
-                    self._stream_table_buf.append(line)
-                    continue
-                self._flush_stream_table_buf()
-            elif looks_like_table_row(line):
-                self._stream_table_buf.append(line)
-                self._in_stream_table = True
-                continue
-            if self.final_response_markdown == "strip":
-                line = _strip_markdown_syntax(line)
-            self._emit_stream_line(line)
-
-        # Partial lines are emitted ONLY at real newlines (no hard-wrapping — the terminal
-        # soft-wraps, so highlight-copy yields the original text). For TTFT perception, mirror
-        # the tail of a long unfinished paragraph into the status-bar spinner.
-        if (
-            self._stream_buf
-            and not self._in_stream_table
-            and not self._stream_buf.lstrip().startswith("|")
-            and len(self._stream_buf) >= 80):
-            preview = self._stream_buf[-int(_STREAM_PARTIAL_PREVIEW_LEN):]
-            cut = preview.find(" ")
-            if 0 < cut < len(preview) - 1:
-                preview = preview[cut + 1:]
-            try:
-                self._spinner_text = f"… {preview}"
-                self._invalidate()
-            except Exception:
-                pass
-
-    def _flush_stream(self) -> None:
-        """Emit any remaining partial line from the stream buffer and close the box."""
-        from agent.markdown_tables import is_table_divider, looks_like_table_row
-        from cli import _ACCENT, _RST, _cprint, _strip_markdown_syntax
-        # Still inside a "reasoning block" at end-of-stream = false positive (the model
-        # mentioned a tag in prose and never closed it): recover the buffer as regular text.
-        if getattr(self, "_in_reasoning_block", False) and getattr(self, "_stream_prefilt", ""):
-            self._in_reasoning_block = False
-            self._emit_stream_text(self._stream_prefilt)
-            self._stream_prefilt = ""
-        self._close_reasoning_box()  # in case no content tokens arrived
-        self._close_tool_args_box()  # end-of-stream: close any live args box
-        # A trailing partial table row joins the table buffer so the whole block is re-aligned
-        # together (else the final row prints under-padded).
-        if (
-            self._stream_buf
-            and getattr(self, "_in_stream_table", False)
-            and (looks_like_table_row(self._stream_buf) or is_table_divider(self._stream_buf))):
-            self._stream_table_buf.append(self._stream_buf)
-            self._stream_buf = ""
-        if getattr(self, "_stream_table_buf", None):
-            self._flush_stream_table_buf()
-        if self._stream_buf:
-            line = _strip_markdown_syntax(self._stream_buf) if self.final_response_markdown == "strip" else self._stream_buf
-            self._emit_stream_line(line)
-            self._stream_buf = ""
-        if self._stream_box_opened and getattr(self, "_stream_box_live", False):
-            w = self._scrollback_box_width()
-            _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
-        self._stream_box_live = False
-        self._release_held_status_lines()
-
-    def _reset_stream_state(self) -> None:
-        """Reset streaming state before each agent invocation."""
-        self._stream_buf = ""
-        self._stream_started = False
-        self._stream_box_opened = False
-        self._stream_text_ansi = ""
-        self._stream_prefilt = ""
-        self._in_reasoning_block = False
-        self._stream_last_was_newline = True
-        self._reasoning_box_opened = False
-        self._reasoning_preview_buf = ""
-        self._tool_args_box_opened = False
-        self._tool_args_box_tool = None
-        # A batch cancelled/errored before any tool.started would otherwise mute the next turn's line.
-        self.__dict__.pop("_tool_gen_announced", None)
-        self._stream_table_buf = []
-        self._in_stream_table = False
-        self._stream_box_live = False
 
     def _slow_command_status(self, command: str) -> str:
         """Return a user-facing status message for slower slash commands."""
@@ -678,62 +372,8 @@ class CLIStreamMixin:
         console = ChatConsole() if getattr(self, "_app", None) else self.console
         console.print(*args, **kwargs)
 
-    def _on_tool_gen_start(self, tool_name: str) -> None:
-        """Model began generating tool-call arguments: close open boxes once, then print a status
-        line so a large payload (e.g. 45 KB write_file) doesn't look like a frozen screen.
 
-        Fires once per tool CALL, so a batch of parallel calls to the same tool printed the same
-        line N times (#10478); repeats within one generation batch are coalesced. The set is
-        cleared when a tool actually starts (``tool.started``), i.e. on the next batch."""
-        if getattr(self, '_stream_box_opened', False):
-            self._flush_stream()
-            self._stream_box_opened = False
-        self._close_reasoning_box()
-        self._close_tool_args_box()
-        # Old "preparing" status line REMOVED 2026-10-20: the agent-owns-display box engine
-        # (stream_delivery._fire_tool_args_stream → print_header_line TOOL_CALL) now renders
-        # the per-tool header itself ("🔍 using {tool}"), so printing it here doubled the line.
-        # Kept as no-op for callback registration + the box state management above.
-        return
-        # announced = self.__dict__.setdefault("_tool_gen_announced", set())
-        # if tool_name in announced:
-        #     return
-        # announced.add(tool_name)
-        # from agent.display import bridge_generating_phrase, get_tool_emoji
-        # what = bridge_generating_phrase(tool_name) or tool_name
-        # _cprint(f"  ┊ {t('cli.stream.tool_preparing', emoji=get_tool_emoji(tool_name, default='⚡'), what=what)}")
 
-    def _on_tool_args_stream(self, tool_name: str, text_chunk: str) -> None:
-        """Stream raw tool-call argument fragments into a dim box (reasoning-box style).
-
-        DISABLED 2026-10-19: unified streaming via handle_stream_event now renders
-        tool args directly; this old path was causing double display. Kept as no-op
-        for callback registration compatibility.
-        
-        The JSON being generated is shown as it arrives — meaningful for big payloads
-        (write_file content, long queries), honest noise otherwise. Box opens on the first
-        chunk, re-labels if a different call streams next, closes when the tool actually
-        starts or content/stream boundaries hit. Text rendering is shared with the
-        reasoning box via _process_dim_box_text.
-        """
-        if not text_chunk:
-            return
-        # Old rendering commented out - new system in stream_delivery.handle_stream_event
-
-    def _close_tool_args_box(self) -> None:
-        """Close the live tool-args box if open (renders the buffered argument tail)."""
-        from cli import _DIM, _RST, _cprint
-        if not getattr(self, "_tool_args_box_opened", False):
-            return
-        # Print any remaining text in the line buffer (partial line that didn't get printed)
-        line_buf = getattr(self, "_line_buf", "")
-        if line_buf:
-            _cprint(f"{_DIM}{line_buf}{_RST}")
-            self._line_buf = ""
-        w = self._scrollback_box_width()
-        _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
-        self._tool_args_box_opened = False
-        self._tool_args_box_tool = None
 
     def _on_tool_progress(self, event_type: str, function_name: str = None, preview: str = None, function_args: dict = None, **kwargs):
         """Tool lifecycle events (tool.started / tool.completed / reasoning.* / moa.*).
@@ -772,8 +412,6 @@ class CLIStreamMixin:
         # Feed the pet: tools mean "running"; a failed tool latches the turn to end on a sulk.
         if event_type == "tool.started":
             self._pet_reasoning = False
-            self.__dict__.pop("_tool_gen_announced", None)
-            self._close_tool_args_box()  # args done streaming: tool is running now
         elif event_type == "tool.completed" and kwargs.get("is_error"):
             self._pet_turn_error = True
         elif event_type and event_type.startswith("reasoning"):

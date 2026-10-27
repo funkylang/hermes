@@ -148,13 +148,9 @@ def perform_api_call(
                 _model_request_active.clear()
     if getattr(agent, "_steering_wait_completed", False):
         # Steering wait completed at a newline boundary: handle_stream_event already appended the
-        # wire rows there, so discard this stale partial response, clear the wait markers and
-        # rebuild from the transcript (rows included). The None callback closes the open boxes
-        # so the continuation starts in fresh ones — same channel as tool-round boundaries.
+        # wire rows there and drew the boxes; discard this stale partial response, clear the
+        # wait markers and rebuild from the transcript (rows included).
         logger.info("Steering wait completed - preserving reasoning for next API call")
-        if getattr(agent, "stream_delta_callback", None):
-            agent._call_quietly(agent.stream_delta_callback, None)
-
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
         agent._clear_steering_wait_markers()
         _retry.restart_with_redirected_messages = True

@@ -110,11 +110,6 @@ class CLIChatTurnMixin:
             turn.mute_notification_reply = diagnostic_turn_muted(
                 agent._pending_cli_user_message.get("display_metadata"), "cli", agent._notification_config)
             try:
-                self._reset_stream_state()
-                # Not part of _reset_stream_state: must persist across intermediate turn
-                # boundaries (tool-calling loops), reset once per user turn.
-                self._reasoning_shown_this_turn = False
-                self._streamed_text_this_turn = ""
                 self._chat_setup_turn_audio(turn, message, voice_input)
                 # Per-prompt elapsed timer — frozen when the agent thread finishes.
                 self._prompt_start_time = time.time()
@@ -252,7 +247,6 @@ class CLIChatTurnMixin:
 
     def _chat_setup_turn_audio(self, turn, message, voice_input):
         """Arm the full-duplex listener and the streaming-TTS pipeline for this turn (voice mode only)."""
-        from cli import _ACCENT, _RST, _STREAM_PAD, _cprint, datetime
         if getattr(turn, "mute_notification_reply", False):
             return
         # Continuous voice mode: arm the mic NOW (utterance-submit), not at TTS playback —
@@ -280,22 +274,11 @@ class CLIChatTurnMixin:
             turn.text_queue = queue.Queue()
             turn.stop_event = threading.Event()
 
-            # display_callback only when token streaming is off: with streaming on,
-            # _stream_delta already renders the text and this would print it twice.
-            def display_callback(sentence: str):
-                if not turn.box_opened:
-                    turn.box_opened = True
-                    label = " ☤ Hermes "
-                    if self.show_timestamps:
-                        label = f"{label}{datetime.now().strftime(self.timestamp_format)} "
-                    w = self._scrollback_box_width(getattr(self.console, "width", 80))
-                    fill = w - 2 - self._status_bar_display_width(label)
-                    _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
-                _cprint(f"{_STREAM_PAD}{sentence.rstrip()}")
-
+            # No display_callback: response text renders through the streaming funnel.
+            # If TTS ever needs its own on-screen rendering it goes through the same funnel.
             turn.tts_thread = threading.Thread(
                 target=stream_tts_to_speaker, args=(turn.text_queue, turn.stop_event, self._voice_tts_done),
-                kwargs={"display_callback": None if self.streaming_enabled else display_callback},
+                kwargs={"display_callback": None},
                 daemon=True,
             )
             turn.tts_thread.start()
@@ -495,7 +478,6 @@ class CLIChatTurnMixin:
             cleanup_stale_async_clients()
         except Exception:
             pass
-        self._flush_stream()
         if turn.use_streaming_tts and turn.text_queue is not None:
             turn.text_queue.put(None)  # end-of-text sentinel
             if turn.tts_thread is not None:
@@ -546,7 +528,6 @@ class CLIChatTurnMixin:
         pending_message, _show_interrupt_marker = self._chat_resolve_interrupt(
             turn, agent_thread, interrupt_msg, response)
 
-        self._chat_print_reasoning_box(turn)
         self._chat_print_response_panel(turn, response)
 
         # History suppressed so the marker is never recorded in _OUTPUT_HISTORY
@@ -653,94 +634,37 @@ class CLIChatTurnMixin:
                 pass
         return pending_message, _show_interrupt_marker
 
-    def _chat_print_reasoning_box(self, turn):
-        """Collapsed reasoning box when show_reasoning is on and streaming did not already show it."""
-        from cli import _DIM, _RST, _cprint, datetime
-        # _reasoning_shown_this_turn, not _reasoning_stream_started: the latter resets at
-        # intermediate turn boundaries (tool loops) and re-rendered the box after the answer.
-        if self.show_reasoning and turn.result and not self._reasoning_shown_this_turn:
-            reasoning = turn.result.get("last_reasoning")
-            if reasoning:
-                w = self._scrollback_box_width()
-                r_label = f" Reasoning {datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} " if getattr(self, "show_timestamps", False) else " Reasoning "
-                r_top = f"{_DIM}┌─{r_label}{'─' * max(w - 3 - len(r_label), 0)}┐{_RST}"
-                r_bot = f"{_DIM}└{'─' * (w - 2)}┘{_RST}"
-                # First 10 lines unless the user opted into /reasoning full.
-                lines = reasoning.strip().splitlines()
-                if len(lines) > 10 and not self.reasoning_full:
-                    display_reasoning = "\n".join(lines[:10])
-                    display_reasoning += f"\n{_DIM}  {t('cli.chat.reasoning_more_lines', count=len(lines) - 10)}{_RST}"
-                else:
-                    display_reasoning = reasoning.strip()
-                from hermes_cli.cli_stream_mixin import _wrap_box_line
-                w = self._scrollback_box_width() - 2
-                wrapped = "\n".join(
-                    ln for line in display_reasoning.split("\n") for ln in _wrap_box_line(line, w))
-                _cprint(f"\n{r_top}\n{_DIM}{wrapped}{_RST}\n{r_bot}")
-
     def _chat_print_response_panel(self, turn, response):
-        """Response box (close TTS-drawn box / post-stream transform / Rich Panel), then billing CTA."""
-        from cli import (
-            ChatConsole, _ACCENT, _RST, _cprint, _maybe_remap_for_light_mode, _post_stream_transform_output,
-            _render_final_assistant_content,
-        )
-        if response and not (turn.result and turn.result.get("response_previewed", False)):
-            try:
-                from hermes_cli.skin_engine import get_active_skin
-                _skin = get_active_skin()
-                label = _skin.get_branding("response_label", "☤ Hermes")
-                _resp_color = _maybe_remap_for_light_mode(_skin.get_color("response_border", "#CD7F32"))
-                _resp_text = _maybe_remap_for_light_mode(_skin.get_color("banner_text", "#FFF8DC"))
-            except Exception:
-                label = "☤ Hermes"
-                _resp_color = _maybe_remap_for_light_mode("#CD7F32")
-                _resp_text = _maybe_remap_for_light_mode("#FFF8DC")
+        """Post-turn response hooks: post-stream transform output, then billing CTA.
 
-            is_error_response = turn.result and (turn.result.get("failed") or turn.result.get("partial"))
-            # An interrupted reply that streamed before a tool-call boundary reset the segment
-            # state is already on screen (#65666). Only suppress when the response IS that text:
-            # unstreamed interrupt/status messages and completed replies still get their Panel.
-            _interrupted_streamed = bool(
-                self._last_turn_interrupted and response.strip()
-                and " ".join(response.split()) in " ".join(self._streamed_text_this_turn.split())
-            )
-            already_streamed = (
-                (self._stream_started and self._stream_box_opened) or _interrupted_streamed
-            ) and not is_error_response
-            if turn.use_streaming_tts and turn.box_opened and not is_error_response:
-                # Text already printed sentence-by-sentence; just close the box.
-                _cprint(f"\n{_ACCENT}╰{'─' * (self._scrollback_box_width() - 2)}╯{_RST}")
-            elif already_streamed:
-                # _flush_stream() already closed the streamed box; a post-stream transform
-                # hook shows a suffix for append-only changes, else the full replacement.
-                _post_stream_text = _post_stream_transform_output(response, turn.result)
-                if _post_stream_text.strip():
-                    _cprint(_post_stream_text)
+        The response text itself is rendered by the streaming funnel
+        (stream_delivery.handle_stream_event -> print_* boxes); nothing is re-rendered here."""
+        from cli import ChatConsole, _cprint, _post_stream_transform_output
+        if not response or (turn.result and turn.result.get("response_previewed", False)):
+            return
+
+        # Post-stream transform hook shows extra output for append-only changes.
+        _post_stream_text = _post_stream_transform_output(response, turn.result)
+        if _post_stream_text.strip():
+            _cprint(_post_stream_text)
+
+        # Billing CTA pins the single action (Nous → /topup, others → billing page) so it
+        # stays visible instead of scrolling away inside the response prose.
+        if turn.result and turn.result.get("failure_reason") == "billing":
+            _bb = turn.result.get("billing_block") or {}
+            if _bb.get("is_nous"):
+                _cta_lines = [t("cli.chat.billing_cta_nous")]
             else:
+                _url = _bb.get("billing_url")
+                _cta_lines = [t("cli.chat.billing_cta_provider",
+                                provider=_bb.get("provider_label") or t("cli.chat.your_provider"))
+                              + (f": [bold]{_url}[/]" if _url else ".")]
+            _cta_lines.append(t("cli.chat.billing_cta_switch"))
+            try:
                 ChatConsole().print(Panel(
-                    _render_final_assistant_content(response, mode=self.final_response_markdown),
-                    title=f"[{_resp_color} bold]{label}[/]", title_align="left", border_style=_resp_color,
-                    style=_resp_text, box=rich_box.HORIZONTALS, padding=(1, 0),
-                    width=self._scrollback_box_width(),
+                    "\n".join(_cta_lines), title=f"[#CD7F32 bold]{t('cli.chat.out_of_credits_title')}[/]",
+                    title_align="left", border_style="#CD7F32", box=rich_box.HORIZONTALS,
+                    padding=(1, 4), width=self._scrollback_box_width(),
                 ))
-
-            # Billing CTA pins the single action (Nous → /topup, others → billing page) so it
-            # stays visible instead of scrolling away inside the response prose.
-            if turn.result and turn.result.get("failure_reason") == "billing":
-                _bb = turn.result.get("billing_block") or {}
-                if _bb.get("is_nous"):
-                    _cta_lines = [t("cli.chat.billing_cta_nous")]
-                else:
-                    _url = _bb.get("billing_url")
-                    _cta_lines = [t("cli.chat.billing_cta_provider",
-                                    provider=_bb.get("provider_label") or t("cli.chat.your_provider"))
-                                  + (f": [bold]{_url}[/]" if _url else ".")]
-                _cta_lines.append(t("cli.chat.billing_cta_switch"))
-                try:
-                    ChatConsole().print(Panel(
-                        "\n".join(_cta_lines), title=f"[#CD7F32 bold]{t('cli.chat.out_of_credits_title')}[/]",
-                        title_align="left", border_style="#CD7F32", box=rich_box.HORIZONTALS,
-                        padding=(1, 4), width=self._scrollback_box_width(),
-                    ))
-                except Exception:
-                    pass
+            except Exception:
+                pass
