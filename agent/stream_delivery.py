@@ -544,6 +544,10 @@ class StreamDeliveryMixin:
                 tag="FSE-REA"
             )
 
+            # Signal to the conversation loop that this response has been handled by
+            # the stream funnel — the legacy recovery path should not fire again.
+            self._stream_handled_final_response = True
+
             # Delivered to the wire — don't double-count it downstream (EMP-TML/FIN-TAIL).
             self.reasoning_text = ""
 

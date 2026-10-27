@@ -3174,6 +3174,9 @@ class _StreamingCall(StreamingWaitMonitor):
         
         # Reset streaming state for this attempt
         agent.accumulated_text = ""
+        # Per-attempt latch: a previous stream's FSE-REA handling must not suppress
+        # recovery on a genuinely empty response in this attempt.
+        agent._stream_handled_final_response = False
         # Per-attempt latch: the previous stream's steering-boundary close must not bleed into this one.
         agent.do_close_current_stream = False
         agent._set_streaming_phase(agent.STREAMING_PHASE_INACTIVE)

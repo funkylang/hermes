@@ -129,6 +129,13 @@ def finish_text_response(
 
     # Think-block-only / empty content: recovery path.
     if not agent._has_content_after_think_block(final_response):
+        # Skip recovery when the stream funnel already handled this response (e.g., FSE-REA
+        # for reasoning-only streams). The wire row is already appended; the legacy recovery
+        # would create a duplicate and show a spurious warning.
+        if getattr(agent, "_stream_handled_final_response", False):
+            final_response = None  # Mark as handled, no recovery needed
+            return _verdict("break")
+
         _ev = recover_empty_response(
             agent, assistant_message, response, finish_reason, final_response=final_response,
             messages=messages, api_messages=api_messages, conversation_history=conversation_history,

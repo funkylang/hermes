@@ -638,6 +638,7 @@ _STREAM_STATE: Dict[str, Any] = {
     "accumulated_text": "",  # everything through handle_stream_event (all lanes); steering boundary ships it as the interrupted row's context
     "do_close_current_stream": False,  # set by handle_stream_event at steering boundary; stream loop breaks when True
     "reasoning_text": "",  # reasoning content accumulated during streaming (for steering boundary detection in response phase)
+    "_stream_handled_final_response": False,  # True when FSE-REA has handled a reasoning-only response (skip legacy recovery)
     "_stream_callback": None,  # streaming TTS; set early so _vprint can reference it
     # Stateful scrubbers: <memory-context> / thinking spans split across deltas defeat
     # per-delta regexes (both tags must be in one string).
