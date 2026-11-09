@@ -1619,7 +1619,12 @@ def print_header_line(kind: LineKind, title: Optional[str] = None,
         ACTIVE_CLI.current_line_kind = kind
     info = kind_infos[kind.value]
     ts = _datetime.now().strftime("%H:%M")
-    heading = title if title else info.label
+    if title is None and kind == LineKind.RESPONSE:
+        # Response boxes carry the configured agent name (config.yaml "name").
+        from hermes_cli.config import get_agent_name
+        heading = get_agent_name()
+    else:
+        heading = title if title else info.label
     inner = f" {heading} {ts}"
     if isinstance(duration, (int, float)):
         inner += f" ({duration:.1f}s)"

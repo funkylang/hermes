@@ -31,6 +31,9 @@ def _aux(timeout, *, reasoning_effort=True, **extra):
 
 
 DEFAULT_CONFIG = {
+    # Display name for this agent instance; labels the response box header in the interactive
+    # CLI. Override per profile/deploy (each Superhermes agent runs its own HERMES_HOME).
+    "name": "Hermes",
     "model": "",
     "providers": {},
     "fallback_providers": [],

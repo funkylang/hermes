@@ -2083,6 +2083,18 @@ def load_config_readonly() -> Dict[str, Any]:
     return _load_config_impl(want_deepcopy=False)
 
 
+def get_agent_name() -> str:
+    """Display name of this agent instance (config.yaml ``name``).
+
+    Falls back to "Hermes" when the field is absent, empty, or not a string. Used by the
+    interactive CLI to label the response box header.
+    """
+    name = load_config_readonly().get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return "Hermes"
+
+
 def _ensure_dict(parent: Dict[str, Any], key: str) -> Dict[str, Any]:
     """Return ``parent[key]`` as a dict, replacing a missing or non-dict value with ``{}``."""
     child = parent.get(key)
