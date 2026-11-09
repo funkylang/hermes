@@ -164,6 +164,20 @@ class CLITuiRuntimeMixin:
         # deferred as "worth its own review" and never re-landed (#20271).
         self._drain_interrupt_queue_to_pending_input()
 
+        # Deliver any steering text that survived the turn undelivered. While the agent ran, input typed
+        # by the user accumulates in user_input for mid-turn steering; chat()'s turn-start drain only
+        # displays it (it does not send). Whatever is still here was typed during this turn and steering
+        # never delivered it (no newline boundary, or a tool-call-only stream), so it would otherwise be
+        # shown in an INPUT box at next turn start but never reach the model. Queue it as a real follow-up
+        # turn; user_input is left intact so that turn's chat() display-drain renders its INPUT box, then
+        # clears it. Safe against double-send: idle input lands in user_input AND _pending_input at submit
+        # time and is cleared by the current turn's display drain — so by turn end only true residue
+        # remains, queued exactly once (this code runs once per finished turn).
+        with self.lock:
+            undelivered = self.user_input
+        if undelivered:
+            self._pending_input.put(undelivered)
+
         # /goal continuation (queued user input still preempts), then /loop tick completion,
         # then input_hook (auto-reply if configured).
         for hook, what in (
