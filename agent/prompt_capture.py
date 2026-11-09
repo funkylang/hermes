@@ -3,10 +3,16 @@
 Rides an httpx ``request`` event hook on the agent's client (same pattern as
 the served-model response capture in ``agent/served_model.py``). The hook
 writes whatever the OpenAI SDK serialized — nothing we re-assemble — to a
-configurable path, so /tmp/prompt.txt always holds the body of the LAST
+configurable path, so ~/logs/prompt.txt always holds the body of the LAST
 prompt sent to the server. A human-readable copy (pretty-printed, same data)
-is written alongside as <base>.json (/tmp/prompt.json by default).
+is written alongside as <base>.json (~/.hermes/logs/prompt.json by default).
 Fail-open everywhere; observability never breaks a turn.
+
+The ~/logs default is gated by a ONE-SHOT startup check: if ~/logs does not
+exist at first use, file capture is skipped for this whole process (it is
+never created automatically — multi-agent /tmp collision fix, Michael
+2026-11-09). The in-memory wire state consumed by /pi is filled regardless,
+so /pi keeps working without ~/logs.
 """
 
 from __future__ import annotations
@@ -14,23 +20,46 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, List
+from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _CAPTURE_ENV = "HERMES_PROMPT_CAPTURE"
-_DEFAULT_PATH = "/tmp/prompt.txt"
 _HOOK_MARK = "_hermes_prompt_capture_hook"
 
+# One-shot startup gate: ~/logs must already exist; then logging is on for the
+# whole process, off otherwise. Checked exactly once (Michael, 2026-11-09).
+_logs_dir_checked = False
+_logs_dir_ok = False
 
-def prompt_capture_path() -> str:
-    """Current capture path (env override wins; read live, never cached)."""
-    return os.environ.get(_CAPTURE_ENV) or _DEFAULT_PATH
+
+def _default_logs_dir_available() -> bool:
+    """Check ~/logs exactly once per process; never create it."""
+    global _logs_dir_checked, _logs_dir_ok
+    if not _logs_dir_checked:
+        _logs_dir_checked = True
+        _logs_dir_ok = os.path.isdir(os.path.join(os.path.expanduser("~"), "logs"))
+    return _logs_dir_ok
 
 
-def prompt_capture_json_path() -> str:
+def prompt_capture_path() -> Optional[str]:
+    """Current capture path (env override wins; read live, never cached).
+
+    Defaults to ~/logs/prompt.txt, but only when the one-shot startup check
+    found the directory — otherwise returns None and file capture is skipped
+    for this process. Explicit env overrides are honoured as-is (fail-open on
+    write if the dir is gone).
+    """
+    return os.environ.get(_CAPTURE_ENV) or (
+        os.path.join(os.path.expanduser("~"), "logs", "prompt.txt") if _default_logs_dir_available() else None
+    )
+
+
+def prompt_capture_json_path() -> Optional[str]:
     """Readable-JSON companion of :func:`prompt_capture_path` (.txt -> .json)."""
     path = prompt_capture_path()
+    if path is None:
+        return None
     if path.endswith(".txt"):
         return path[: -len(".txt")] + ".json"
     return path + ".json"
@@ -172,8 +201,9 @@ def install_prompt_capture(client: Any) -> None:
             if isinstance(data, (bytes, bytearray)) and data:
                 raw = bytes(data)
                 capture_path = prompt_capture_path()
-                with open(capture_path, "wb") as f:
-                    f.write(raw)
+                if capture_path is not None:
+                    with open(capture_path, "wb") as f:
+                        f.write(raw)
                 # Store byte length for informative status display.
                 set_last_prompt_chars(len(raw))
                 # The waiting-status callback fires here — at the moment the wire
@@ -189,16 +219,22 @@ def install_prompt_capture(client: Any) -> None:
                     set_message_parts(_collect_message_slices(raw))
                 except Exception:
                     logger.debug("prompt capture message parts skipped", exc_info=True)
-                # Human-readable companion of the same body (.json, indent=2).
+                # Human-readable companion of the same body (.json, indent=2);
+                # the in-memory copy for /pi is filled either way (it never
+                # touches the filesystem).
                 try:
                     parsed = json.loads(raw)
-                    json_path = prompt_capture_json_path()
-                    with open(json_path, "w", encoding="utf-8") as jf:
-                        json.dump(parsed, jf, indent=2, ensure_ascii=False)
-                    # In-memory copy for the /pi display (tools, server params).
-                    set_wire_body(parsed)
                 except Exception:
-                    logger.debug("prompt capture JSON companion skipped", exc_info=True)
+                    logger.debug("prompt capture JSON parse skipped", exc_info=True)
+                else:
+                    set_wire_body(parsed)
+                    json_path = prompt_capture_json_path()
+                    if json_path is not None:
+                        try:
+                            with open(json_path, "w", encoding="utf-8") as jf:
+                                json.dump(parsed, jf, indent=2, ensure_ascii=False)
+                        except Exception:
+                            logger.debug("prompt capture JSON companion skipped", exc_info=True)
         except Exception:
             logger.debug("prompt capture skipped", exc_info=True)
 

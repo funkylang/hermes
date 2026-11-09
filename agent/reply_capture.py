@@ -1,10 +1,14 @@
 """Reply capture for debugging interruptions.
 
-Stores the complete generated output + finish_reason to /tmp/reply_N.txt files
+Stores the complete generated output + finish_reason to ~/logs/reply_N.txt files
 for post-hoc analysis of streaming issues and interruptions.
 
 Configuration:
-- HERMES_REPLY_CAPTURE env var sets the directory (default: /tmp)
+- HERMES_REPLY_CAPTURE env var sets the directory (overrides the default)
+- Default target is ~/logs, gated by a ONE-SHOT startup check: if ~/logs does
+  not exist at first use, reply logging is skipped for this whole process —
+  it is never created automatically (Michael, 2026-11-09: multi-agent /tmp
+  collision fix)
 - Each process gets its own numbered sequence
 - First capture in each process clears stale reply_*.txt from previous sessions
 
@@ -20,28 +24,45 @@ import os
 # Reply capture for debugging interruptions: stores the complete generated output + finish_reason
 _REPLY_COUNTER = 0
 _REPLY_CAPTURE_ENV = "HERMES_REPLY_CAPTURE"
-_REPLY_DEFAULT_DIR = "/tmp"
+
+# One-shot startup gate: ~/logs must already exist; then logging is on for the
+# whole process, off otherwise. Checked exactly once (Michael, 2026-11-09).
+_logs_dir_checked = False
+_logs_dir_ok = False
 
 
-def reply_capture_dir() -> str:
+def _default_logs_dir_available() -> bool:
+    """Check ~/logs exactly once per process; never create it."""
+    global _logs_dir_checked, _logs_dir_ok
+    if not _logs_dir_checked:
+        _logs_dir_checked = True
+        _logs_dir_ok = os.path.isdir(os.path.join(os.path.expanduser("~"), "logs"))
+    return _logs_dir_ok
+
+
+def reply_capture_dir():
     """Directory for reply captures (env override wins; read live, never cached).
 
-    Defaults to /tmp (the live session's log location that downstream replay tooling
-    reads). Parallel test runs must set HERMES_REPLY_CAPTURE to an isolated dir so their
-    first-write cleanup glob cannot delete the live session's reply_*.txt files.
+    Defaults to ~/logs, but only when the one-shot startup check found it —
+    otherwise returns None and logging is skipped for this process. Explicit
+    env overrides are honoured as-is (fail-open on write if the dir is gone).
     """
-    return os.environ.get(_REPLY_CAPTURE_ENV) or _REPLY_DEFAULT_DIR
+    return os.environ.get(_REPLY_CAPTURE_ENV) or (
+        os.path.join(os.path.expanduser("~"), "logs") if _default_logs_dir_available() else None
+    )
 
 
-def next_reply_capture_path() -> str:
+def next_reply_capture_path():
     """Return a numbered path for the next reply capture (increments each call).
 
     On the very first call in this process, cleans up any leftover reply_*.txt files from
-    previous sessions — within the capture dir only. The dir is configurable via
-    HERMES_REPLY_CAPTURE so parallel test runs never touch the live session's logs.
+    previous sessions — within the capture dir only. Returns None when reply
+    logging is disabled for this process (~/logs absent at startup).
     """
     global _REPLY_COUNTER
     base = reply_capture_dir()
+    if base is None:
+        return None
     if _REPLY_COUNTER == 0:
         # First reply of this process — clear stale captures from previous runs (own dir only)
         try:
@@ -56,7 +77,8 @@ def next_reply_capture_path() -> str:
 def write_reply_capture(content: str | None, finish_reason: str,
                         reasoning: str | None = None,
                         tool_calls: list | None = None) -> None:
-    """Write the complete wire response to /tmp/reply_N.txt for debugging."""
+    """Write the complete wire response to reply_N.txt for debugging (skipped
+    silently when ~/logs logging is disabled for this process)."""
     try:
         parts: list[str] = []
         if reasoning:
@@ -90,8 +112,10 @@ def write_reply_capture(content: str | None, finish_reason: str,
             parts.append(f"== TOOL CALLS ==\n{json.dumps(_serialize_tool_calls(tool_calls), indent=2)}")
         parts.append(f"[[finish_reason]] {finish_reason}")
 
-        with open(next_reply_capture_path(), "w", encoding="utf-8") as f:
-            f.write("\n\n".join(parts) + "\n")
+        path = next_reply_capture_path()
+        if path is not None:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n\n".join(parts) + "\n")
     except Exception as _exc_dbg:
         import sys as _sys_dbg2
         print(f"[DEBUG-write_reply_capture] ERROR: {_exc_dbg}", file=_sys_dbg2.stderr, flush=True)
