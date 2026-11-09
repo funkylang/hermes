@@ -167,12 +167,38 @@ class CLIModalMixin:
                 _done()
             return
 
+        # Mirror the Enter handler end-to-end (cli_tui_mixin.py _tui_handle_submit):
+        # genuine text is buffered into user_input at submit time so chat()'s turn-start
+        # display drain paints its INPUT box; a busy "stop" is the emergency brake; control
+        # words never get an INPUT box (Enter excludes them from user_input the same way).
+        from cli import _ACCENT
+        from agent.control_words import (is_standalone_done_control_word,
+                                         is_standalone_stop_control_word)
+        if self._agent_running and is_standalone_stop_control_word(text) \
+                and self.agent is not None:
+            try:
+                if self.agent.halt():
+                    _cprint(f"  {_ACCENT}⏹ Turn stopped (emergency brake){_RST}")
+                    _done()
+                    return
+            except Exception:
+                pass
+        if not is_standalone_stop_control_word(text) \
+                and not is_standalone_done_control_word(text):
+            with self.lock:
+                if self.user_input:
+                    self.user_input += "\n\n" + text  # new paragraph
+                else:
+                    self.user_input = text
         if self._agent_running:
-            # Agent busy → queue for next turn (smart mode always)
-            self._interrupt_queue.put(text)
-            preview = text[:80] + ("..." if len(text) > 80 else "")
-            _cprint(f"  {t('cli.editor.queued_next_turn', preview=preview)}")
+            # Busy genuine text → smart steering (bug 4): handle_stream_event delivers
+            # user_input at the next newline boundary; the turn-end requeue catches what
+            # no boundary delivered. Never _interrupt_queue (that hard-stopped the agent).
+            # A busy "done" is dropped — identical to the Enter path.
+            pass
         else:
+            # Idle → queued as a normal turn; its chat() display-drain renders the INPUT
+            # box from user_input above, then clears it.
             self._pending_input.put(text)
         _done()
 
