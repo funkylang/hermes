@@ -67,7 +67,6 @@ def _skin_color(key: str, fallback: str) -> str:
 
 # === ASCII Art & Branding ===
 
-from hermes_cli import __release_date__ as RELEASE_DATE
 from hermes_cli.version_info import get_version_info
 
 HERMES_AGENT_LOGO = """[bold #FFD700]███████╗██╗   ██╗██████╗ ███████╗██████╗ ██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗[/]
@@ -223,22 +222,11 @@ def format_banner_version_label() -> str:
             return f"{label} · installer"
         return label
 
-    base = f"Hermes Agent v{get_version_info().derived_version} ({RELEASE_DATE})"
-    from hermes_cli.config import load_config
-    from hermes_cli.update_channel import resolve_update_channel
+    # Superhermes identity: the version banner travels with the code (content-based
+    # deploys carry no .git), following the fllama FLLAMA_VERSION convention.
+    from hermes_cli.fork_version import FORK_VERSION
 
-    channel = resolve_update_channel(_quiet(load_config), get_project_root())
-    if channel != "main":
-        head = source_check._git_stdout(["rev-parse", "HEAD"], cwd=get_project_root())
-        return f"{base} · {channel}" + (f" · local {head[:12]}" if head else "")
-    state = get_git_banner_state()
-    if not state:
-        return base
-    upstream, local = state["upstream"], state["local"]
-    ahead = int(state.get("ahead") or 0)
-    if ahead <= 0 or upstream == local:
-        return f"{base} · upstream {upstream}"
-    return f"{base} · upstream {upstream} · local {local} (+{ahead} carried {_plural(ahead, 'commit')})"
+    return f"Superhermes {FORK_VERSION}"
 
 
 # === Non-blocking update check ===

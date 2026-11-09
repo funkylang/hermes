@@ -41,8 +41,3 @@ def test_release_channel_never_compares_main_or_reuses_main_cache(tmp_path, monk
     main.assert_not_called()
     assert status["channel"] == channel
     assert status["targetSha"] == target
-    # The selected release may be an ancestor (a requested canary → stable switch).
-    # That is still a different release, not "already current" or "behind main".
-    label = banner.format_banner_version_label()
-    assert channel in label
-    assert "upstream" not in label
