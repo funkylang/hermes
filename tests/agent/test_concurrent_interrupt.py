@@ -20,6 +20,12 @@ def _make_agent(monkeypatch):
     # Avoid full AIAgent init — just import the class and build a stub
     import run_agent as _ra
 
+    # Batch finalization (steering drain) reads conversation_loop.ACTIVE_CLI — guaranteed
+    # set in production when a CLI is running; provide it so these isolated tests match.
+    import agent.conversation_loop as _cl
+    from types import SimpleNamespace
+    monkeypatch.setattr(_cl, "ACTIVE_CLI", SimpleNamespace(user_input="", lock=threading.Lock()))
+
     class _Stub:
         _interrupt_requested = False
         _interrupt_message = None

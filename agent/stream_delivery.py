@@ -302,8 +302,9 @@ class StreamDeliveryMixin:
 
     def _emit_stream_end(self, *, final_text: str, finished: bool, error: str | None) -> None:
         self._enqueue_stream_hook("on_stream_end", final_text=final_text, finished=finished, error=error)
-        # Flush remaining buffer content so lines without trailing newlines render immediately
-        self.flush_stream_event()
+        # Flush remaining buffer content so lines without trailing newlines render immediately.
+        # stream_end=True: this IS the genuine stream end — the FSE blocks may append wire rows.
+        self.flush_stream_event(stream_end=True)
 
     # ── OUR MAIN STREAMING HOOK POINT ─────────────────────────────────────────────
     # handle_stream_event is the one display funnel all streaming phases pass through:
@@ -328,6 +329,34 @@ class StreamDeliveryMixin:
         from agent.conversation_loop import (print_header_line, print_text_line, wrap_box_lines,
                                              print_text_box)  # lazy: import graph
         from hermes_cli.cli_render import _terminal_columns
+
+        # Generation-start steering check (once per streamed attempt): the moment the model
+        # starts emitting reasoning/response content, drain any user input that arrived while
+        # this request was in flight (tool execution, server prefill). If found, interrupt NOW —
+        # before the generation header draws or a line of off-track reasoning renders — and
+        # re-prompt with the steering already in the transcript. The newline-boundary drain
+        # below still handles input typed once generation is well underway.
+        if (kind in (LineKind.REASONING, LineKind.RESPONSE)
+                and text is not None and text
+                and not getattr(self, "_gen_start_steering_checked", False)):
+            self._gen_start_steering_checked = True
+            with ACTIVE_CLI.lock:
+                drained_input = ACTIVE_CLI.user_input
+                if drained_input:
+                    ACTIVE_CLI.user_input = ""
+            if drained_input:
+                # Show the steering text in an INPUT box, then close the stream and re-prompt.
+                # The first (stray) generation token observed is intentionally not rendered or
+                # accumulated: the model never saw this steering when it generated it.
+                print_text_box(LineKind.INPUT, drained_input)
+                append_message(
+                    self._messages,
+                    {"role": "user", "content": drained_input},
+                    tag="GEN-USR"
+                )
+                self.do_close_current_stream = True
+                self._steering_wait_completed = True
+                return
 
         # Draw header when phase changes
         if kind != ACTIVE_CLI.header_kind:
@@ -456,8 +485,14 @@ class StreamDeliveryMixin:
             # Store remaining text in buffer for next call
             self.stream_buffer = current_buf
 
-    def flush_stream_event(self) -> None:
-        """Flush any remaining incomplete line from the shared stream buffer."""
+    def flush_stream_event(self, stream_end: bool = False) -> None:
+        """Flush any remaining incomplete line from the shared stream buffer.
+
+        ``stream_end=True`` marks a genuine stream end (from _emit_stream_end): only
+        then may the FSE blocks below append assistant wire rows. The mid-stream
+        REASONING→RESPONSE transition flush shares this function for display and
+        must not deliver rows there — it misfired as FSE-REA and consumed
+        reasoning_text before stream end, stripping it from the FSE-AST row."""
         # Guard for test environments or non-CLI contexts where ACTIVE_CLI might not be set
         from agent.conversation_loop import ACTIVE_CLI, LineKind
         if ACTIVE_CLI is None:
@@ -492,7 +527,7 @@ class StreamDeliveryMixin:
         # from the stream funnel now (same pattern as steering via handle_stream_event).
         # Content comes directly from what we streamed: accumulated_text is the response,
         # reasoning_text is any reasoning captured when we left the REASONING phase.
-        if ACTIVE_CLI.current_line_kind == LineKind.RESPONSE and self.accumulated_text.strip():
+        if stream_end and ACTIVE_CLI.current_line_kind == LineKind.RESPONSE and self.accumulated_text.strip():
             from agent.message_metadata import append_message
 
             msg = {"role": "assistant", "content": self.accumulated_text}
@@ -516,12 +551,9 @@ class StreamDeliveryMixin:
         # Without this the transcript gets an empty-content assistant row (EMP-TML/FIN-TAIL)
         # whose only payload is reasoning_content — invisible to downstream consumers.
         # Convert the captured reasoning into the row's content on the wire.
-        #
-        # NOTE (test build): this elif cannot yet tell a genuine stream-end from the
-        # mid-stream REASONING→RESPONSE transition flush (handle_stream_event line 337) —
-        # both run while current_line_kind is still REASONING. If the misfire on the
-        # transition shows up in testing, we'll add a lookahead/flag to suppress it there.
-        elif ACTIVE_CLI.current_line_kind == LineKind.REASONING and self.reasoning_text.strip():
+        # Gated on stream_end: the mid-stream REASONING→RESPONSE transition flush also
+        # runs here while current_line_kind is still REASONING, but must not deliver rows.
+        elif stream_end and ACTIVE_CLI.current_line_kind == LineKind.REASONING and self.reasoning_text.strip():
             from agent.message_metadata import append_message
 
             captured_reasoning = self.reasoning_text

@@ -1598,6 +1598,12 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             flush_stage="cancelled tool result",
             stop_on_flush_failure=False,
         )
+        # Finalize on the pre-flight exit too (steering drain + budget), like the sequential
+        # path does after its mid-batch interrupt skip: input typed during args-streaming
+        # must still reach messages as a user row. Segmented callers pass finalize=False —
+        # their dispatcher owns the single turn-end finalize for all segments.
+        if finalize:
+            _finalize_tool_batch(agent, messages, effective_task_id, num_tools, _tool_budget)
         return
 
     parsed_calls = [_parse_tool_call(agent, tc) for tc in tool_calls]

@@ -168,9 +168,18 @@ class TestInterruptModule:
 class TestPreToolCheck:
     """Verify that _execute_tool_calls skips all tools when interrupted."""
 
-    def test_all_tools_skipped_when_interrupted(self):
+    def test_all_tools_skipped_when_interrupted(self, monkeypatch):
         """Mock an interrupted agent and verify no tools execute."""
+        from types import SimpleNamespace
         from unittest.mock import MagicMock
+
+        # The pre-flight skip path finalizes the batch (steering drain), which reads
+        # conversation_loop.ACTIVE_CLI — guaranteed set in production when a CLI is running.
+        # Provide it here so this isolated test matches that precondition.
+        import agent.conversation_loop as _cl
+        monkeypatch.setattr(
+            _cl, "ACTIVE_CLI", SimpleNamespace(user_input="", lock=threading.Lock())
+        )
 
         # Build a fake assistant_message with 3 tool calls
         tc1 = MagicMock()

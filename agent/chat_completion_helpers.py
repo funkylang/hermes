@@ -3179,6 +3179,8 @@ class _StreamingCall(StreamingWaitMonitor):
         agent._stream_handled_final_response = False
         # Per-attempt latch: the previous stream's steering-boundary close must not bleed into this one.
         agent.do_close_current_stream = False
+        # Per-attempt latch: the generation-start steering check runs once per streamed attempt.
+        agent._gen_start_steering_checked = False
         agent._set_streaming_phase(agent.STREAMING_PHASE_INACTIVE)
         
         from agent import relay_llm
