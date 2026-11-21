@@ -2,10 +2,10 @@
 
 Subcommands:
   list   Show every agent on this host, its tier, run status, last activity.
-  add    Create a new agent (user + launcher + seeded config). [planned]
+  add    Create a new agent: user + launcher + seeded config + shared skills.
 
 Design and rulings: ~/workspace/hermes/concepts/agents-command.txt (Superhermes fork).
-Stdlib only; read-only in v1 for ``list``.
+Stdlib only; ``list`` is read-only, ``add`` requires root.
 """
 
 from __future__ import annotations
@@ -67,13 +67,20 @@ def _read_fork_version(tree: Path) -> str:
     return m.group(1) if m else "(no fork banner)"
 
 
-def _running_pids_by_tree() -> dict[str, list[int]]:
-    """Map tier tree path -> list of PIDs whose cmdline references that tree."""
-    found: dict[str, list[int]] = {}
+def _running_agents() -> set[str]:
+    """Agent names with an actively running hermes process.
+
+    Attribution per python PID (most specific wins):
+      1. HERMES_HOME=/home/<u>/.hermes in /proc/<pid>/environ  (thin launchers)
+      2. a user-specific path in cmdline, e.g. sys.path.insert(0, "/home/<u>/...")
+         from self-contained launchers                          (per-user trees)
+    Shared-tier-only cmdlines (prod/testing) cannot attribute to one agent.
+    """
+    running: set[str] = set()
     try:
         proc_entries = os.listdir("/proc")
     except OSError:
-        return found
+        return running
     for entry in proc_entries:
         if not entry.isdigit():
             continue
@@ -85,9 +92,28 @@ def _running_pids_by_tree() -> dict[str, list[int]]:
         cmd = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
         if "python" not in cmd:
             continue
-        for m in _TIER_PATH_RE.finditer(cmd):
-            found.setdefault(m.group(1).rstrip("/"), []).append(int(entry))
-    return found
+        owner = None
+        try:
+            with open(f"/proc/{entry}/environ", "rb") as f:
+                env = f.read().split(b"\x00")
+            for item in env:
+                if item.startswith(b"HERMES_HOME=/home/"):
+                    parts = item.decode("utf-8", errors="replace").split("/")
+                    if len(parts) >= 3:
+                        owner = parts[2]
+                    break
+        except OSError:
+            pass  # unreadable environ: fall through to cmdline attribution
+        if not owner:
+            for m in re.finditer(r"/home/([\w-]+)/", cmd):
+                user = m.group(1)
+                if user == "agents":
+                    continue
+                owner = user
+                break
+        if owner:
+            running.add(owner)
+    return running
 
 
 def _tier_label(tree: str) -> str:
@@ -146,8 +172,8 @@ def cmd_agents_list(_args=None) -> int:
         if meta["tree"] not in tiers:
             tiers[meta["tree"]] = _read_fork_version(Path(meta["tree"]))
 
-    # 3. Run status per tree.
-    running = _running_pids_by_tree()
+    # 3. Run status per agent (active hermes process, attributed via HERMES_HOME).
+    running = _running_agents()
     now = time.time()
 
     # 4. Print roster.
@@ -167,8 +193,7 @@ def cmd_agents_list(_args=None) -> int:
             meta = agents[name]
             tree = meta["tree"]
             label = tier_labels.get(tree, "?")
-            pids = running.get(tree, [])
-            status = "running" if pids else "idle"
+            status = "running" if name in running else "idle"
             age = ""
             if meta["home"]:
                 db = Path(meta["home"]) / "state.db"
@@ -192,9 +217,229 @@ def cmd_agents_list(_args=None) -> int:
         print("\n  Tiers:")
         for tree in sorted(tiers):
             count = sum(1 for a in agents.values() if a["tree"] == tree)
-            print(f"    {_tier_label(tree):<8} {tree:<45} {tiers[tree]}  [{count} agent(s)]")
+            unit = "agent" if count == 1 else "agents"
+            print(f"    {_tier_label(tree):<8} {tree}  [{count} {unit}]")
+            print(f"             {tiers[tree]}")
 
     return 0
+
+
+# Tier path convention on this host (see concepts/hermes-shared-deployment.txt).
+_TIER_PATHS = {
+    "prod": "/home/agents/hermes-agent",
+    "testing": "/home/agents/hermes-agent-testing",
+}
+_SHARED_SKILLS = Path("/home/agents/skills")
+
+_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _launcher_script(name: str, tree: str) -> str:
+    return (
+        "#!/bin/sh\n"
+        f"export HERMES_HOME=/home/{name}/.hermes\n"
+        f'exec {tree}/hermes "$@"\n'
+    )
+
+
+def _set_config_name(config_path: Path, display_name: str) -> bool:
+    """Set the top-level `name:` field; True if written or already correct."""
+    text = config_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith("name:"):
+            if line.rstrip("\n") == f"name: {display_name}":
+                return True
+            lines[i] = f"name: {display_name}\n"
+            config_path.write_text("".join(lines), encoding="utf-8")
+            return True
+    if text and not text.endswith("\n"):
+        lines.append("\n")
+    lines.append(f"name: {display_name}\n")
+    config_path.write_text("".join(lines), encoding="utf-8")
+    return True
+
+
+def _verify_agent(name: str) -> tuple[bool, str]:
+    """Run `hermes --version` as the new user via their launcher. (ok, detail)."""
+    import pwd
+
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        return (False, "user does not exist")
+
+    def drop_privs():
+        os.setgid(pw.pw_gid)
+        os.initgroups(name, pw.pw_gid)
+        os.setuid(pw.pw_uid)
+
+    env = {
+        "HOME": pw.pw_dir,
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+    }
+    try:
+        proc = subprocess.run(
+            [f"/home/{name}/.local/bin/hermes", "--version"],
+            preexec_fn=drop_privs, cwd=pw.pw_dir, env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return (False, f"launcher failed to execute: {exc}")
+    out = proc.stdout.strip() or proc.stderr.strip()
+    if proc.returncode != 0:
+        return (False, f"exit {proc.returncode}: {out[:200]}")
+    first_line = out.splitlines()[0] if out else "(no output)"
+    return (True, first_line)
+
+
+def cmd_agents_add(args) -> int:
+    name = args.name
+    tier = args.tier
+
+    if not _NAME_RE.match(name):
+        print(f"Invalid agent name '{name}' — use lowercase letters, digits, "
+              f"hyphens; must start with a letter.", file=sys.stderr)
+        return 1
+
+    if os.geteuid() != 0:
+        print("hermes agents add requires root: run `sudo hermes agents add " + name + "`.",
+              file=sys.stderr)
+        return 1
+
+    tree = _TIER_PATHS[tier]
+    if not Path(tree, "hermes").exists():
+        print(f"Tier '{tier}' not found on this host: {tree}", file=sys.stderr)
+        return 1
+
+    display_name = name.capitalize()
+    actions = []
+
+    # 1. Unix user (idempotent).
+    import pwd as _pwd
+    try:
+        _pwd.getpwnam(name)
+        actions.append(f"user '{name}' already exists — kept")
+    except KeyError:
+        proc = subprocess.run(
+            ["useradd", "-m", "-g", "agents", "-c", display_name, name],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            print(f"useradd failed: {proc.stderr.strip()}", file=sys.stderr)
+            return 1
+        actions.append(f"created user '{name}' (group agents, home /home/{name})")
+
+    # 2. Launcher.
+    launcher_dir = Path(f"/home/{name}/.local/bin")
+    launcher = launcher_dir / "hermes"
+    content = _launcher_script(name, tree)
+    if launcher.exists():
+        old = launcher.read_text(encoding="utf-8", errors="replace")
+        if old == content:
+            actions.append(f"launcher already correct — kept")
+        else:
+            launcher.write_text(content, encoding="utf-8")
+            actions.append(f"launcher updated (tier: {tier})")
+    else:
+        launcher_dir.mkdir(parents=True, exist_ok=True)
+        launcher.write_text(content, encoding="utf-8")
+        launcher.chmod(0o755)
+        actions.append(f"created launcher {launcher}")
+
+    # 3. Config from template agent.
+    hermes_home = Path(f"/home/{name}/.hermes")
+    config_path = hermes_home / "config.yaml"
+    if config_path.exists():
+        actions.append("config.yaml already exists — kept")
+    else:
+        src = _resolve_template(name, tier, args.from_agent)
+        if src is None:
+            print(f"No usable config.yaml template found (tier '{tier}'). "
+                  f"Pass --from <agent> explicitly.", file=sys.stderr)
+            return 1
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        try:
+            config_path.write_text(src[1], encoding="utf-8")
+        except OSError as exc:
+            print(f"Failed to write config: {exc}", file=sys.stderr)
+            return 1
+        _set_config_name(config_path, display_name)
+        actions.append(f"config.yaml created from '{src[0]}' "
+                       f"(name: {display_name})")
+
+    # 4. Shared skills symlink (skip over a pre-existing dir, e.g. legacy copies).
+    skills_link = hermes_home / "skills"
+    if not skills_link.exists() and not skills_link.is_symlink():
+        if _SHARED_SKILLS.is_dir():
+            skills_link.symlink_to(_SHARED_SKILLS)
+            actions.append(f"symlinked skills → {_SHARED_SKILLS}")
+        else:
+            actions.append(f"NOTE: shared skills dir {_SHARED_SKILLS} not found — skipped")
+
+    # 5. Tree link inside HERMES_HOME (matches athena's proven layout).
+    tree_link = hermes_home / "hermes-agent"
+    if not tree_link.exists() and not tree_link.is_symlink():
+        tree_link.symlink_to(tree)
+        actions.append(f"symlinked hermes-agent → {tree}")
+
+    print(f"Agent '{name}' ({tier} tier):")
+    for a in actions:
+        print(f"  - {a}")
+
+    # 6. Verification: run their launcher as them.
+    ok, detail = _verify_agent(name)
+    if ok:
+        print(f"  VERIFIED out-of-the-box: hermes --version → {detail}")
+    else:
+        print(f"  VERIFICATION FAILED: {detail}", file=sys.stderr)
+        print("The agent may need manual inspection before use.", file=sys.stderr)
+
+    print("\n  Next steps:")
+    print("  - Terminal window appears on next desktop restart (automatic).")
+    print("  - Optional theme: copy ~/.themes/Mint-X-Classic and set the")
+    print("    org.mate.interface gtk-theme key in their desktop session.")
+    return 0 if ok else 1
+
+
+def _resolve_template(skip_name: str, tier: str, explicit: str | None):
+    """Find (agent_name, config_text) to seed from. None if unusable."""
+    home_root = Path("/home")
+    candidates = []
+    for entry in sorted(home_root.iterdir()):
+        if not entry.is_dir() or entry.name == skip_name:
+            continue
+        launcher = entry / ".local" / "bin" / "hermes"
+        cfg = entry / ".hermes" / "config.yaml"
+        if not (launcher.exists() and cfg.exists()):
+            continue
+        tree, _home = _read_launcher_meta(launcher)
+        if explicit:
+            if entry.name != explicit:
+                continue
+        else:
+            expected = _TIER_PATHS[tier].rstrip("/")
+            if (tree or "").rstrip("/") != expected:
+                continue
+        try:
+            text = cfg.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        candidates.append((entry.name, tree, text))
+
+    if explicit:
+        match = [c for c in candidates if c[0] == explicit]
+        if not match:
+            print(f"--from '{explicit}' has no readable launcher + config.yaml.",
+                  file=sys.stderr)
+            return None
+        name, _tree, text = match[0]
+        return (name, text)
+
+    for cand in candidates:  # already alphabetical; first on the tier wins
+        return (cand[0], cand[2])
+    return None
 
 
 def build_agents_parser(subparsers) -> None:
@@ -203,7 +448,17 @@ def build_agents_parser(subparsers) -> None:
         "agents", help="Manage the multi-agent roster on this host (list/add)")
     agents_subparsers = agents_parser.add_subparsers(dest="agents_action")
 
-    agents_subparsers.add_parser("list", help="List agents, tiers, run status, last activity")
-    # `add` lands in v1 (see concept doc); parser stub withheld until implemented.
+    list_p = agents_subparsers.add_parser("list", help="List agents, tiers, run status, last activity")
+    list_p.set_defaults(func=cmd_agents_list)
 
-    agents_parser.set_defaults(func=cmd_agents_list)
+    add_p = agents_subparsers.add_parser(
+        "add", help="Create a new agent (user + launcher + config + skills). Requires root.")
+    add_p.add_argument("name", help="Agent name (lowercase: letters, digits, hyphens)")
+    add_p.add_argument(
+        "--tier", choices=sorted(_TIER_PATHS), default="prod",
+        help="Tier to run on (default: prod)")
+    add_p.add_argument(
+        "--from", dest="from_agent", metavar="AGENT",
+        help="Template agent whose config.yaml to copy "
+             "(default: first agent on the target tier)")
+    add_p.set_defaults(func=cmd_agents_add)
