@@ -6,4 +6,4 @@
 # printed in the startup banner and `hermes --version` so a deployed tree — which has
 # no .git, being content-based — can identify the exact build it runs.
 
-FORK_VERSION = "2026-11-10 01:23:30 FSE stream-end gate restores reasoning_content"
+FORK_VERSION = "2026-11-21 10:06:02 Add hermes agents list subcommand"
