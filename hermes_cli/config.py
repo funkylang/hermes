@@ -2084,12 +2084,19 @@ def load_config_readonly() -> Dict[str, Any]:
 
 
 def get_agent_name() -> str:
-    """Display name of this agent instance (config.yaml ``name``).
+    """Display name of this agent instance (config.yaml ``agent.name``).
 
-    Falls back to "Hermes" when the field is absent, empty, or not a string. Used by the
-    interactive CLI to label the response box header.
+    Reads ``agent.name`` first; falls back to the legacy top-level ``name``
+    while configs transition. Returns "Hermes" when neither is a non-empty
+    string. Used by the interactive CLI to label the response box header.
     """
-    name = load_config_readonly().get("name")
+    config = load_config_readonly()
+    agent_cfg = config.get("agent")
+    if isinstance(agent_cfg, dict):
+        name = agent_cfg.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    name = config.get("name")
     if isinstance(name, str) and name.strip():
         return name.strip()
     return "Hermes"

@@ -1,15 +1,18 @@
-"""``hermes agents`` — multi-agent host management (tier + launcher roster).
+#!/usr/bin/env python3
+"""hermes-agents — multi-agent host management, installed system-wide.
 
 Subcommands:
-  list   Show every agent on this host, its tier, run status, last activity.
-  add    Create a new agent: user + launcher + seeded config + shared skills.
+  hermes-agents list   Roster of agents, tiers, run status, last activity.
+  hermes-agents add    Create a new agent out-of-the-box. Requires root (sudo).
 
 Design and rulings: ~/workspace/hermes/concepts/agents-command.txt (Superhermes fork).
-Stdlib only; ``list`` is read-only, ``add`` requires root.
+This script is the CANONICAL implementation; `hermes agents ...` delegates to it.
+Stdlib only — must run on any host python3, without a hermes installation.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import subprocess
@@ -24,6 +27,15 @@ _TIER_PATH_RE = re.compile(r"(/[\w./-]*hermes-agent(?:-\w+)?)/?")
 
 # FORK_VERSION is defined in the fork's hermes_cli/fork_version.py as a plain string.
 _FORK_VERSION_DEF_RE = re.compile(r"^FORK_VERSION\s*=\s*[\"'](.+?)[\"']", re.MULTILINE)
+
+# Tier path convention on this host (see concepts/hermes-shared-deployment.txt).
+_TIER_PATHS = {
+    "prod": "/home/agents/hermes-agent",
+    "testing": "/home/agents/hermes-agent-testing",
+}
+_SHARED_SKILLS = Path("/home/agents/skills")
+
+_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
 def _read_launcher_meta(launcher_path: Path):
@@ -44,7 +56,7 @@ def _read_launcher_meta(launcher_path: Path):
         return (None, None)
     tree = tree_m.group(1).rstrip("/")
 
-    # HERMES_HOME= assignments (sh style) or "os.environ[...HERMES_HOME...]" context
+    # HERMES_HOME= assignments (sh style) or "os.environ[...HERMES_HOME...]\" context
     home_m = re.search(r"HERMES_HOME\s*=\s*[\"']?(/home/[\w-]+/\.hermes)[\"'\s]", text)
     if home_m:
         return (tree, home_m.group(1))
@@ -70,19 +82,26 @@ def _read_fork_version(tree: Path) -> str:
 def _running_agents() -> set[str]:
     """Agent names with an actively running hermes process.
 
-    Attribution per python PID (most specific wins):
-      1. HERMES_HOME=/home/<u>/.hermes in /proc/<pid>/environ  (thin launchers)
-      2. a user-specific path in cmdline, e.g. sys.path.insert(0, "/home/<u>/...")
-         from self-contained launchers                          (per-user trees)
-    Shared-tier-only cmdlines (prod/testing) cannot attribute to one agent.
+    "running" means the agent actually runs hermes — not logged in, not merely
+    sharing a tier with someone else who does. Attribution per PID:
+      0. never our own process (no self-illusion when listing via hermes)
+      1. process must be hermes itself: cmdline carries hermes_cli /
+         hermes_bootstrap markers or HERMES_HOME in environ
+      2. owner from HERMES_HOME=/home/<u>/.hermes in /proc/<pid>/environ
+         (thin launchers; needs same-user or root)
+      3. owner from os.stat(/proc/<pid>).st_uid -> passwd (works without root;
+         only meaningful for #1 processes)
     """
+    import pwd
+
     running: set[str] = set()
+    self_pid = str(os.getpid())
     try:
         proc_entries = os.listdir("/proc")
     except OSError:
         return running
     for entry in proc_entries:
-        if not entry.isdigit():
+        if not entry.isdigit() or entry == self_pid:
             continue
         try:
             with open(f"/proc/{entry}/cmdline", "rb") as f:
@@ -93,24 +112,27 @@ def _running_agents() -> set[str]:
         if "python" not in cmd:
             continue
         owner = None
+        is_hermes = ("hermes_cli" in cmd) or ("hermes_bootstrap" in cmd)
         try:
             with open(f"/proc/{entry}/environ", "rb") as f:
                 env = f.read().split(b"\x00")
             for item in env:
                 if item.startswith(b"HERMES_HOME=/home/"):
+                    is_hermes = True
                     parts = item.decode("utf-8", errors="replace").split("/")
                     if len(parts) >= 3:
                         owner = parts[2]
                     break
         except OSError:
-            pass  # unreadable environ: fall through to cmdline attribution
+            pass  # unreadable environ (other user, no root): uid fallback below
+        if not is_hermes:
+            continue  # must actually be running hermes, not any python process
         if not owner:
-            for m in re.finditer(r"/home/([\w-]+)/", cmd):
-                user = m.group(1)
-                if user == "agents":
-                    continue
-                owner = user
-                break
+            try:
+                st = os.stat(f"/proc/{entry}")
+                owner = pwd.getpwuid(st.st_uid).pw_name
+            except (OSError, KeyError):
+                continue
         if owner:
             running.add(owner)
     return running
@@ -147,7 +169,8 @@ def _relative_age(seconds: float) -> str:
 def cmd_agents_list(_args=None) -> int:
     home_root = Path("/home")
     if not home_root.is_dir():
-        print("hermes agents list: no /home on this host — nothing to report.", file=sys.stderr)
+        print("hermes-agents list: no /home on this host — nothing to report.",
+              file=sys.stderr)
         return 1
 
     # 1. Collect agents from launchers.
@@ -172,7 +195,7 @@ def cmd_agents_list(_args=None) -> int:
         if meta["tree"] not in tiers:
             tiers[meta["tree"]] = _read_fork_version(Path(meta["tree"]))
 
-    # 3. Run status per agent (active hermes process, attributed via HERMES_HOME).
+    # 3. Run status per agent (active hermes process, attributed per PID).
     running = _running_agents()
     now = time.time()
 
@@ -211,7 +234,8 @@ def cmd_agents_list(_args=None) -> int:
     if unreadable:
         print(f"\n  Unreadable launchers (run as root): {', '.join(unreadable)}")
     if unreadable_homes:
-        print(f"\n  Last-activity hidden (home unreadable; run with sudo): {', '.join(sorted(set(unreadable_homes)))}")
+        print(f"\n  Last-activity hidden (home unreadable; run with sudo): "
+              f"{', '.join(sorted(set(unreadable_homes)))}")
 
     if tiers:
         print("\n  Tiers:")
@@ -224,16 +248,6 @@ def cmd_agents_list(_args=None) -> int:
     return 0
 
 
-# Tier path convention on this host (see concepts/hermes-shared-deployment.txt).
-_TIER_PATHS = {
-    "prod": "/home/agents/hermes-agent",
-    "testing": "/home/agents/hermes-agent-testing",
-}
-_SHARED_SKILLS = Path("/home/agents/skills")
-
-_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-
-
 def _launcher_script(name: str, tree: str) -> str:
     return (
         "#!/bin/sh\n"
@@ -243,19 +257,42 @@ def _launcher_script(name: str, tree: str) -> str:
 
 
 def _set_config_name(config_path: Path, display_name: str) -> bool:
-    """Set the top-level `name:` field; True if written or already correct."""
+    """Set the agent identity fields (transition: BOTH locations).
+
+    Writes top-level `name:` (legacy trees) and `agent.name:` (new canonical
+    location) so the display name works regardless of which code version runs.
+    Returns True when both are written or already correct.
+    """
     text = config_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
+
+    # Top-level `name:`
     for i, line in enumerate(lines):
         if line.startswith("name:"):
-            if line.rstrip("\n") == f"name: {display_name}":
-                return True
-            lines[i] = f"name: {display_name}\n"
-            config_path.write_text("".join(lines), encoding="utf-8")
-            return True
-    if text and not text.endswith("\n"):
-        lines.append("\n")
-    lines.append(f"name: {display_name}\n")
+            if line.rstrip("\n") != f"name: {display_name}":
+                lines[i] = f"name: {display_name}\n"
+            break
+    else:
+        if text and not text.endswith("\n"):
+            lines.append("\n")
+        lines.append(f"name: {display_name}\n")
+
+    # agent.name under the `agent:` block (only when the block exists)
+    agent_idx = next((i for i, l in enumerate(lines) if l.rstrip() == "agent:"), None)
+    if agent_idx is not None:
+        j = agent_idx + 1
+        found = False
+        while j < len(lines):
+            l = lines[j]
+            if not l.startswith("  ") and l.strip():  # left the agent block
+                break
+            if l.startswith("  name:") or l.startswith("\tname:"):
+                lines[j] = f"  name: {display_name}\n"
+                found = True
+            j += 1
+        if not found:
+            lines.insert(agent_idx + 1, f"  name: {display_name}\n")
+
     config_path.write_text("".join(lines), encoding="utf-8")
     return True
 
@@ -303,8 +340,13 @@ def cmd_agents_add(args) -> int:
               f"hyphens; must start with a letter.", file=sys.stderr)
         return 1
 
-    if os.geteuid() != 0:
-        print("hermes agents add requires root: run `sudo hermes agents add " + name + "`.",
+    try:
+        if os.geteuid() != 0:
+            print("hermes-agents add requires root: run `sudo hermes-agents add "
+                  + name + "`.", file=sys.stderr)
+            return 1
+    except AttributeError:
+        print("Cannot verify privileges on this platform; refusing to continue.",
               file=sys.stderr)
         return 1
 
@@ -316,7 +358,8 @@ def cmd_agents_add(args) -> int:
     display_name = name.capitalize()
     actions = []
 
-    # 1. Unix user (idempotent).
+    # 1. Unix user (idempotent). Intentionally NOT a sudoer — agents need root
+    #    only for install/deployment work, which the managing operator decides.
     import pwd as _pwd
     try:
         _pwd.getpwnam(name)
@@ -329,7 +372,8 @@ def cmd_agents_add(args) -> int:
         if proc.returncode != 0:
             print(f"useradd failed: {proc.stderr.strip()}", file=sys.stderr)
             return 1
-        actions.append(f"created user '{name}' (group agents, home /home/{name})")
+        actions.append(f"created user '{name}' (group agents, home /home/{name}; "
+                       f"not a sudoer)")
 
     # 2. Launcher.
     launcher_dir = Path(f"/home/{name}/.local/bin")
@@ -338,7 +382,7 @@ def cmd_agents_add(args) -> int:
     if launcher.exists():
         old = launcher.read_text(encoding="utf-8", errors="replace")
         if old == content:
-            actions.append(f"launcher already correct — kept")
+            actions.append("launcher already correct — kept")
         else:
             launcher.write_text(content, encoding="utf-8")
             actions.append(f"launcher updated (tier: {tier})")
@@ -442,23 +486,85 @@ def _resolve_template(skip_name: str, tier: str, explicit: str | None):
     return None
 
 
-def build_agents_parser(subparsers) -> None:
-    """Attach the ``agents`` subcommand to ``subparsers``."""
-    agents_parser = subparsers.add_parser(
-        "agents", help="Manage the multi-agent roster on this host (list/add)")
-    agents_subparsers = agents_parser.add_subparsers(dest="agents_action")
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="hermes-agents",
+        description=(
+            "Multi-agent host management — the agent roster on this machine:\n"
+            "who is here, which tier they run, whether hermes is actively running,\n"
+            "and last activity. `hermes agents <command>` delegates to this tool."),
+        epilog="""subcommands:
 
-    list_p = agents_subparsers.add_parser("list", help="List agents, tiers, run status, last activity")
-    list_p.set_defaults(func=cmd_agents_list)
+  list
+      Show every agent on this host: tier, active hermes processes, and when
+      each was last active. Also prints the tiers themselves with their build
+      banners. No privileges needed; run with sudo for full visibility of
+      other agents' process state.
+      Options: none.
 
-    add_p = agents_subparsers.add_parser(
-        "add", help="Create a new agent (user + launcher + config + skills). Requires root.")
-    add_p.add_argument("name", help="Agent name (lowercase: letters, digits, hyphens)")
-    add_p.add_argument(
+  add NAME [--tier {prod,testing}] [--from AGENT]
+      Create a new agent out-of-the-box. Requires root (sudo).
+      Idempotent: re-running keeps existing pieces and reports what was done.
+        NAME                 agent name: lowercase letters, digits, hyphens;
+                             must start with a letter.
+        --tier               which tier the agent runs on:
+                               prod       /home/agents/hermes-agent (default)
+                               testing    /home/agents/hermes-agent-testing
+        --from AGENT         template agent whose config.yaml is copied as
+                             starting point; default: first agent (alphabetical)
+                             on the target tier.
+      Creates: user in group 'agents' (intentionally NOT a sudoer), launcher,
+      seeded config.yaml with the name field set, shared skills symlink —
+      then verifies by running `hermes --version` as the new user.
+
+examples:
+
+  hermes-agents list
+      The agent roster, no privileges needed.
+
+  sudo hermes-agents add cronus
+      New agent 'cronus' on the production tier, config seeded from an
+      existing prod peer.
+
+  sudo hermes-agents add probe --tier testing --from sisyphus
+      A testing-tier agent cloned from sisyphus's configuration.
+
+notes:
+
+  - 'running' means the agent has an active hermes process — not merely a
+    login session on this machine.
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="action", metavar="{list,add}")
+
+    p_list = sub.add_parser(
+        "list", help="List agents, tiers, run status, last activity (no privileges needed)",
+        description="Show every agent on this host: tier, active hermes processes, "
+                    "and when they were last active.")
+    p_list.set_defaults(func=cmd_agents_list)
+
+    p_add = sub.add_parser(
+        "add", help="Create a new agent out-of-the-box (requires root)",
+        description="Create user + launcher + seeded config + shared skills for a new "
+                    "agent, then verify it runs. Idempotent: re-running keeps existing "
+                    "pieces and reports what was done.")
+    p_add.add_argument("name", help="Agent name (lowercase: letters, digits, hyphens)")
+    p_add.add_argument(
         "--tier", choices=sorted(_TIER_PATHS), default="prod",
         help="Tier to run on (default: prod)")
-    add_p.add_argument(
+    p_add.add_argument(
         "--from", dest="from_agent", metavar="AGENT",
         help="Template agent whose config.yaml to copy "
              "(default: first agent on the target tier)")
-    add_p.set_defaults(func=cmd_agents_add)
+    p_add.set_defaults(func=cmd_agents_add)
+
+    args = parser.parse_args(argv)
+    if getattr(args, "func", None) is None:
+        # No subcommand given: show the full help instead of a bare usage error.
+        parser.print_help()
+        return 0
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
