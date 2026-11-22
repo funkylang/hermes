@@ -4,9 +4,10 @@
 Subcommands:
   hermes-agents list   Roster of agents, tiers, run status, last activity.
   hermes-agents add    Create a new agent out-of-the-box. Requires root (sudo).
+  hermes-agents start  Launch an agent's hermes in the CURRENT terminal.
 
 Design and rulings: ~/workspace/hermes/concepts/agents-command.txt (Superhermes fork).
-This script is the CANONICAL implementation; `hermes agents ...` delegates to it.
+This script is the CANONICAL implementation, installed as /usr/local/bin/hermes-agents.
 Stdlib only — must run on any host python3, without a hermes installation.
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -331,6 +333,108 @@ def _verify_agent(name: str) -> tuple[bool, str]:
     return (True, first_line)
 
 
+def _resolve_agent(name: str) -> tuple[str | None, str]:
+    """Resolve an agent identifier to an OS username.
+
+    Accepts the OS username directly (if it has a launcher), or the display
+    name configured in an agent's config.yaml (top-level `name:` or
+    `agent.name:`). Returns (username, reason); username is None on failure.
+    """
+    import pwd
+
+    # Fast path: direct username with an existing launcher.
+    if Path(f"/home/{name}/.local/bin/hermes").exists():
+        try:
+            pwd.getpwnam(name)
+            return (name, "")
+        except KeyError:
+            pass
+
+    # Slow path: display-name match through each agent's config.yaml.
+    want = name.strip().lower()
+    home_root = Path("/home")
+    if not home_root.is_dir():
+        return (None, "no /home on this host")
+    for entry in sorted(home_root.iterdir()):
+        cfg = entry / ".hermes" / "config.yaml"
+        if not cfg.exists():
+            continue
+        try:
+            text = cfg.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = (re.match(r"^name:\s*(.+?)\s*$", line)
+                 or re.match(r"^\s+name:\s*(.+?)\s*$", line))
+            if not m:
+                continue
+            val = m.group(1).strip().strip("\"'")
+            if val.lower() == want:
+                return (entry.name, "")
+    return (None, f"no agent '{name}' (no matching user launcher or config name)")
+
+
+def cmd_agents_start(args) -> int:
+    name = args.name
+
+    user, why = _resolve_agent(name)
+    if not user:
+        print(f"start: {why}", file=sys.stderr)
+        return 1
+
+    launcher = Path(f"/home/{user}/.local/bin/hermes")
+    if not launcher.exists():
+        print(f"start: no launcher for '{user}' at {launcher}", file=sys.stderr)
+        return 1
+
+    # Handing THIS terminal over to the agent requires a real interactive
+    # session on both ends — no pipes, no background jobs.
+    if not (os.isatty(sys.stdin.fileno()) and os.isatty(sys.stdout.fileno())):
+        print("start: run this from an interactive terminal (e.g. your SSH "
+              "session); no TTY is attached here.", file=sys.stderr)
+        return 1
+
+    try:
+        euid = os.geteuid()
+    except AttributeError:
+        print("Cannot verify privileges on this platform; refusing to continue.",
+              file=sys.stderr)
+        return 1
+
+    if euid != 0:
+        # Self-escalate in place: sudo prompts for the password on THIS
+        # terminal, then continues with root. Operators type
+        # `hermes-agents start X` without sudo.
+        exe = None
+        for candidate in (os.path.realpath(sys.argv[0]),
+                          "/usr/local/bin/hermes-agents"):
+            if candidate and os.path.exists(candidate):
+                exe = candidate
+                break
+        if exe is None:
+            print("start: not running as root, and cannot locate the "
+                  "hermes-agents binary to re-exec via sudo.", file=sys.stderr)
+            return 1
+        sys.stderr.write(f"start: elevating (sudo {exe} start {name})\n")
+        os.execv("/usr/bin/sudo", ["sudo", exe, "start", name])
+        # execv only returns on failure.
+
+    # Refuse to create a duplicate live session.
+    if user in _running_agents():
+        print(f"'{user}' is already running hermes — not starting a duplicate.")
+        return 1
+
+    print(f"Starting hermes as '{user}' in this terminal...")
+    print("You are now in that agent's session; when hermes exits, "
+          "your own shell resumes.")
+    # Hand the controlling terminal over: exec replaces this process with the
+    # agent's hermes under a login environment — equivalent to a manual
+    # `sudo su - <user>` followed by running the agent's launcher.
+    os.execv("/usr/bin/su",
+             ["su", "-", "-c", shlex.quote(str(launcher)), user])
+    return 1  # unreachable; execv replaces the process
+
+
 def cmd_agents_add(args) -> int:
     name = args.name
     tier = args.tier
@@ -517,6 +621,14 @@ def main(argv=None) -> int:
       seeded config.yaml with the name field set, shared skills symlink —
       then verifies by running `hermes --version` as the new user.
 
+  start NAME
+      Launch an agent's hermes in the CURRENT terminal. Typed from your SSH
+      session, that terminal becomes the agent's interactive hermes session;
+      when hermes exits, your own shell resumes. Accepts the OS username or
+      the configured display name. Refuses to start a second live session
+      for an agent already running. Escalates via sudo if needed (the
+      password prompt appears in this terminal).
+
 examples:
 
   hermes-agents list
@@ -529,13 +641,17 @@ examples:
   sudo hermes-agents add probe --tier testing --from sisyphus
       A testing-tier agent cloned from sisyphus's configuration.
 
+  hermes-agents start cronus
+      Bring 'cronus's hermes up in this terminal — one command instead of
+      `sudo su - cronus` plus running its launcher by hand.
+
 notes:
 
   - 'running' means the agent has an active hermes process — not merely a
     login session on this machine.
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = parser.add_subparsers(dest="action", metavar="{list,add}")
+    sub = parser.add_subparsers(dest="action", metavar="{list,add,start}")
 
     p_list = sub.add_parser(
         "list", help="List agents, tiers, run status, last activity (no privileges needed)",
@@ -557,6 +673,14 @@ notes:
         help="Template agent whose config.yaml to copy "
              "(default: first agent on the target tier)")
     p_add.set_defaults(func=cmd_agents_add)
+
+    p_start = sub.add_parser(
+        "start", help="Launch an agent's hermes in the current terminal",
+        description="Hands this terminal over to the agent's hermes session "
+                    "(sudo self-escalates; password prompt here). Refuses to "
+                    "duplicate a session that is already running.")
+    p_start.add_argument("name", help="Agent username or configured display name")
+    p_start.set_defaults(func=cmd_agents_start)
 
     args = parser.parse_args(argv)
     if getattr(args, "func", None) is None:
