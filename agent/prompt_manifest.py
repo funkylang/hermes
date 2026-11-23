@@ -545,8 +545,21 @@ class PromptManifest:
                 live_tail_clean = self._clean_tail_entry(live_tail) if isinstance(live_tail, dict) else None
 
                 # The parts shown determine the total bytes.
+                #
+                # The system prompt is represented by its logical component
+                # breakdown (rec.system_components -> lines 1..N). On the wire it
+                # ALSO arrives as messages[0] with role="system" (captured in
+                # msg_nodes); counting that slice too would count the same text
+                # twice, inflating bytes_total by the whole system prompt. So the
+                # role="system" slice is excluded from msg_bytes — the component
+                # breakdown is the single source of truth for it. (Providers that
+                # send the system prompt as a separate parameter instead of a
+                # message have no role="system" slice to skip; their system
+                # content rides on the component breakdown here as well.)
                 sys_bytes = sum(self._component_bytes(c) for c in rec.system_components)
-                msg_bytes = sum(self._message_bytes(node) for node in msg_nodes)
+                msg_bytes = sum(
+                    self._message_bytes(node) for node in msg_nodes
+                    if self._message_role_and_parsed(node.raw_text)[0] != "system")
                 tools_bytes = (sum(self._wire_bytes(t) for t in wtools)
                                + (self._wire_bytes(wenv) if wenv else 0))
                 tail_bytes = (self._msg_body_bytes(live_tail_clean) if live_tail_clean else 0)

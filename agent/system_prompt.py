@@ -2,10 +2,10 @@
 
 Built once per session and reused across turns (only context compression
 triggers a rebuild) so the upstream prefix cache stays warm.  Three tiers are
-joined with ``\\n\\n``: ``stable`` (identity, guidance, env hints, coding brief,
-platform hints), ``context`` (workspace snapshot, caller ``system_message``,
-context files) and ``volatile`` (skills index, memory, USER.md, external memory
-provider, timestamp line).  See ``references/system-prompt-invariant.md``.
+joined with ``\\n\\n``: ``stable`` (shared rules, shared soul, identity, guidance,
+env hints, coding brief, platform hints), ``context`` (workspace snapshot, caller
+``system_message``, context files) and ``volatile`` (skills index, memory, USER.md,
+external memory provider, timestamp line).  See ``references/system-prompt-invariant.md``.
 """
 
 from __future__ import annotations
@@ -32,6 +32,8 @@ from agent.prompt_provenance import (
     HARDCODED_CONSTANTS,
     context_file_labels_for_block,
     memories_file_block,
+    rules_block,
+    shared_soul_block,
     skills_index_sources,
 )
 from agent.runtime_cwd import resolve_agent_cwd, resolve_context_cwd
@@ -558,10 +560,10 @@ def _memory_blocks(agent: Any) -> List[Tuple[str, str]]:
     provenance label in lockstep — the label is derived from what actually got
     appended, never from a parallel re-check."""
     blocks: List[Tuple[str, str]] = []
-    # Hand-edited standing files first (RULES -> HISTORY -> MEMORY/USER order),
-    # so stable index content precedes the churning scratch pad.
-    for filename, title in (("RULES.md", "RULES (general standing rules)"),
-                            ("HISTORY.md", "HISTORY (project index)")):
+    # Hand-edited standing files (HISTORY -> MEMORY/USER order), so stable index
+    # content precedes the churning scratch pad. RULES moved out of memories:
+    # shared rules now lead the prompt from <HERMES_HOME>/rules (see rules_block).
+    for filename, title in (("HISTORY.md", "HISTORY (project index)"),):
         block = _memories_file_block(agent, filename, title)
         if block:
             blocks.append(block)
@@ -818,10 +820,12 @@ def _part_kind_for_label(label: str) -> str:
             or "memories/USER.md" in label or label == "~/.hermes/SOUL.md"
             or label in ("SOUL.md", "MEMORY.md", "USER.md")
             or label.startswith("skill ") or "SKILL.md" in label
-            or label.endswith((".md", ".MD"))):
+            or label.endswith((".md", ".MD", "/soul"))):
         return "file"
-    # Runtime-assembled from several sources (context-file bundle, skills index).
-    if label in ("project context files", "skills index") or label.startswith("_ctx_block_"):
+    # Runtime-assembled from several sources (context-file bundle, skills index,
+    # the shared rules dir read file-by-file).
+    if label in ("project context files", "skills index") or label.startswith("_ctx_block_") \
+            or label.endswith("/rules"):
         return "summary"
     return "generated"
 
@@ -860,6 +864,21 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ``stable_sources`` holds LABELS only — lockstep with ``stable_parts`` by index.
     stable_parts: List[Optional[str]] = []
     stable_sources: List[str] = []
+    # Shared standing rules and the shared soul lead the prompt (positions 0-1):
+    # user-owned, byte-stable per deployment, identical across agents via the
+    # shared directories — the longest-reusable prefix on the server.
+    _shared_rules = rules_block()
+    if _shared_rules:
+        stable_parts.append(_shared_rules[0])
+        stable_sources.append(_shared_rules[1])
+    _shared_soul = shared_soul_block()
+    if _shared_soul:
+        stable_parts.append(_shared_soul[0])
+        stable_sources.append(_shared_soul[1])
+    # Per-agent identity is COMPUTED here (it drives the context-files skip_soul
+    # flag) but APPENDED into the volatile tier right after the shared skills
+    # index — it is the first per-agent divergence point on the wire, so all
+    # shared content (rules, soul, constants, skills index) must precede it.
     _identity_texts, _soul_loaded = _identity_parts(agent, _ctx_len)
     if _soul_loaded:
         # Real file path (same home resolution the loader uses), displayed as
@@ -868,9 +887,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         _identity_label = display_path(str(_home / "SOUL.md"))
     else:
         _identity_label = "default identity"
-    for t in _identity_texts:
-        stable_parts.append(t)
-        stable_sources.append(_identity_label)
 
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
@@ -964,6 +980,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # assembly below (placeholder pattern, same as context-file blocks).
         volatile_parts.append(skills_prompt)
         volatile_sources.append("_skills_index")
+    # Per-agent identity closes the SHARED band: rules + soul + guidance
+    # constants + the skills index all precede it and are byte-identical across
+    # agents on this server, so one KV prefix is reused up to this point; only
+    # from here does each agent diverge. (Upstream held identity at prompt head —
+    # moved deliberately for cross-agent prefix sharing.)
+    for t in _identity_texts:
+        volatile_parts.append(t)
+        volatile_sources.append(_identity_label)
     for text, label in _memory_blocks(agent):
         volatile_parts.append(text)
         volatile_sources.append(label)

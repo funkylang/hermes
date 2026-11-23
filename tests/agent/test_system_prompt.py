@@ -539,7 +539,6 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         "unless the user explicitly directs you to."
     )
     expected = "\n\n".join((
-        "IDENTITY",
         "HELP",
         "STEER",
         "CODING_STABLE",
@@ -547,6 +546,12 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         "CONTEXT_FILES",
         "WORKSPACE",
         "Operator instructions (from config):\nOPERATOR",
+        # Fork change (cross-agent prefix sharing): identity no longer leads the
+        # prompt. It now sits in the volatile tier, immediately after the shared
+        # skills index (absent here) — i.e. after all shared guidance and the
+        # caller/context/workspace blocks, so a shared llama-server can reuse one
+        # KV prefix across agents up to this point.
+        "IDENTITY",
         expected_profile,
         "Conversation started: Friday, January 02, 2026",
     ))
@@ -569,7 +574,9 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
 
     assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
+    # Static prefix = stable tier only. Identity moved out of it (fork: cross-agent
+    # prefix sharing), so the stable tier is just the guidance + coding brief here.
+    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:3])
 
 
 class TestTelegramRichMessagesHint:

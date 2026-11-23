@@ -9,16 +9,81 @@ On error, fall back to empty/None so the prompt still assembles.
 
 from __future__ import annotations
 
+import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Import from our own modules (safe—no circular dependency)
 from agent.path_display import display_path
 
+logger = logging.getLogger(__name__)
+
 
 def _utf8_bytes(text: str) -> int:
     """UTF-8 byte length of *text* — what /pi counts for every prompt part."""
     return len(text.encode("utf-8"))
+
+
+def rules_block() -> Optional[Tuple[str, str]]:
+    """The shared standing-rules directory as one ``(block, label)`` pair.
+
+    Every agent's ``<HERMES_HOME>/rules`` is a symlink to the user-owned shared
+    directory (``/home/agents/rules``): one source of truth for all agents.
+    Files are injected in filename order — numbered prefixes encode the order;
+    adding a file lands it in every agent's next session with no code change.
+
+    Absent or empty yields None, so prompt bytes are untouched until rules
+    exist (same contract as ``memories_file_block``). The label is the resolved
+    real path — it names the shared origin for /pi.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        rules_dir = Path(get_hermes_home()) / "rules"
+        if not rules_dir.is_dir():
+            return None
+        parts: List[str] = []
+        for path in sorted(rules_dir.iterdir()):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8-sig").strip()
+            except OSError as exc:
+                logger.warning("rules file unreadable, skipped: %s (%s)", path, exc)
+                continue
+            if content:
+                parts.append(content)
+        if not parts:
+            return None
+        sep = "═" * 46
+        block = f"{sep}\nRULES (shared standing rules)\n{sep}\n" + "\n\n".join(parts)
+        return (block, display_path(str(rules_dir.resolve())))
+    except Exception:
+        logger.debug("shared rules block skipped", exc_info=True)
+        return None
+
+
+def shared_soul_block() -> Optional[Tuple[str, str]]:
+    """The shared Superhermes soul — one identity statement for the agent family.
+
+    ``<HERMES_HOME>/soul`` is a symlink to the user-owned shared file
+    (``/home/agents/soul``). Its text is injected after the rules block and
+    before all per-agent content, byte-identical for every agent — part of
+    the longest shared prefix on the server.
+
+    Absent or empty yields None — nothing appended, prompt bytes untouched.
+    The label carries the resolved real path for /pi provenance.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        soul_path = Path(get_hermes_home()) / "soul"
+        if not soul_path.is_file():
+            return None
+        content = soul_path.read_text(encoding="utf-8-sig").strip()
+        return (content, display_path(str(soul_path.resolve()))) if content else None
+    except Exception:
+        logger.debug("shared soul block skipped", exc_info=True)
+        return None
 
 
 # Per-skill provenance for the rendered skills index (regex-based splitting)
@@ -98,7 +163,7 @@ HARDCODED_CONSTANTS = {
 
 
 def memories_file_block(agent: Any, filename: str, title: str) -> Optional[Tuple[str, str]]:
-    """A hand-edited memories/ context file (RULES.md, HISTORY.md), injected
+    """A hand-edited memories/ context file (HISTORY.md), injected
     before MEMORY.md.
 
     No store/entry model and no API: the file itself is the source of truth
