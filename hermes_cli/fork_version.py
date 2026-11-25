@@ -6,4 +6,4 @@
 # printed in the startup banner and `hermes --version` so a deployed tree — which has
 # no .git, being content-based — can identify the exact build it runs.
 
-FORK_VERSION = "2026-11-23 22:22:17 Shared prefix first, identity after skills index"
+FORK_VERSION = "2026-11-25 21:03:44 Fix /reset +N None-strip crash, one-shot counts"

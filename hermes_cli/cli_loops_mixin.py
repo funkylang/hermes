@@ -18,6 +18,42 @@ def _fresh_start() -> str:
     return f"  {t('cli.session.fresh_start')}\n"
 
 
+def _parse_reset_context_counts(raw: str) -> tuple[int, int, str]:
+    """Parse optional head/tail count syntax from /new or /reset args.
+
+    Syntax: ``+<tail>``, ``<head>+<tail>``, ``<N>`` (bare = tail), or no counts
+    (default 0+16). Returns (head_count, tail_count, remaining_text).
+
+    Examples:
+        "/reset" → (0, 16, "")
+        "/reset +3" → (0, 3, "")
+        "/reset 2+5" → (2, 5, "")
+        "/reset 0+0" → (0, 0, "")
+        "/reset 5" → (0, 5, "")  # bare number = tail (design doc Q1)
+        "/reset my-topic" → (0, 16, "my-topic")  # no counts, keeps title
+    """
+    text = raw.strip()
+    if not text:
+        return 0, 16, ""  # default
+
+    import re
+
+    # Pattern for explicit count syntax: [head]+tail[ remainder]
+    match = re.match(r'^(\d+)?\+(\d+)(?:\s+(.*))?$', text)
+    if match:
+        head_str, tail_str, remaining = match.groups()
+        head_count = int(head_str) if head_str else 0
+        tail_count = int(tail_str)
+        return head_count, tail_count, (remaining or "").strip()
+
+    # Bare number (no +) — treat as tail only (design doc Q1).
+    if re.match(r'^\d+$', text):
+        return 0, int(text), ""
+
+    # No count syntax found — use defaults and keep entire text as title.
+    return 0, 16, text
+
+
 def _preview(payload: str) -> str:
     return f"{payload[:80]}{'...' if len(payload) > 80 else ''}"
 
@@ -189,10 +225,20 @@ class CLILoopsMixin:
                 _cprint(f"  {t('cli.title.queued', title=new_title)}")
 
     def _cmd_new(self, cmd_original: str):
-        # Strip inline-skip tokens (now/--yes/-y) before deriving the title so
+        # Strip inline-skip tokens (now/--yes/-y) before deriving args so
         # "/new now My Session" yields title="My Session". See _split_destructive_skip.
         _new_args, _ = self._split_destructive_skip(cmd_original)
-        title = _new_args.strip() or None
+        
+        # Parse optional head/tail context counts if present (+N or N+M syntax).
+        head_count, tail_count, remaining_text = _parse_reset_context_counts(_new_args)
+        title = remaining_text.strip() or None
+        
+        # Store the requested counts on the agent so turn_context can use them
+        # when injecting previous session context.
+        if self.agent:
+            self.agent._reset_context_head_count = head_count
+            self.agent._reset_context_tail_count = tail_count
+        
         if self._confirm_destructive_slash(
             "new",
             "This starts a fresh session.\n"

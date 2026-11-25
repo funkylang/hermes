@@ -14,7 +14,8 @@ def get_previous_session_context(
     session_db: Any,
     current_session_id: str,
     min_messages_required: int = 10,
-    max_messages_to_return: int = 16,
+    head_count: int = 0,
+    tail_count: int = 16,
 ) -> List[Dict[str, Any]]:
     """Get context messages from the most recent previous session.
 
@@ -23,10 +24,10 @@ def get_previous_session_context(
     counter — that stored field counts tool noise and can drift, which once
     made a session with only 4 real messages pass the eligibility filter.
 
-    Content: when a selected session has at most ``max_messages_to_return``
-    substantive messages, all of them are returned; otherwise the first half
-    plus the last half (e.g. 8 + 8 for 16), so both where the session started
-    and how it ended carry over.
+    Content: returns up to ``head_count`` messages from the start (oldest)
+    plus up to ``tail_count`` messages from the end (newest) of the selected
+    session. If the session has fewer substantive messages than requested,
+    only the available ones are returned (no overlap possible).
 
     Uses the SessionDB public API only (list_sessions_rich /
     substantive_message_count / get_messages).
@@ -35,12 +36,17 @@ def get_previous_session_context(
         session_db: The SessionDB instance (can be None)
         current_session_id: Current session ID to exclude
         min_messages_required: Minimum substantive message count for eligibility
-        max_messages_to_return: Cap on returned messages (splits half/half when exceeded)
+        head_count: Number of START (oldest) messages to carry over
+        tail_count: Number of END (newest) messages to carry over
 
     Returns:
         List of message dicts with role and content, in chronological order (oldest first).
     """
     if not session_db or not current_session_id:
+        return []
+
+    # Explicit zero for both counts = truly clean reset (no injection at all).
+    if head_count == 0 and tail_count == 0:
         return []
 
     try:
@@ -70,8 +76,12 @@ def get_previous_session_context(
             if substantive < min_messages_required:
                 continue
 
+            # Scale down to what exists so head+tail never overlap.
+            tail_used = min(tail_count, substantive)
+            head_used = min(head_count, max(0, substantive - tail_used))
+
             context_messages = _collect_context_messages(
-                session_db, prev_session_id, substantive, max_messages_to_return
+                session_db, prev_session_id, substantive, head_used, tail_used
             )
             if not context_messages:
                 continue
@@ -81,14 +91,15 @@ def get_previous_session_context(
                 prev_session_id[:8], len(context_messages),
             )
             # INFO box line (CLI only, lazy import): this is the one site that
-            # knows both the selected session and the message count.
+            # knows both the selected session and the message counts.
             try:
                 from agent.conversation_loop import ACTIVE_CLI, LineKind, print_text_line
 
                 if ACTIVE_CLI is not None:
                     print_text_line(
                         LineKind.INFO,
-                        f"Added {len(context_messages)} messages from session {prev_session_id}.",
+                        f"Added {head_used}+{tail_used} messages "
+                        f"(start+end) from session {prev_session_id}.",
                     )
             except Exception as exc:  # noqa: BLE001 — display must never break a turn
                 logger.debug("Previous-session INFO line failed: %s", exc)
@@ -113,23 +124,31 @@ def _collect_context_messages(
     session_db: Any,
     prev_session_id: str,
     substantive: int,
-    max_messages_to_return: int,
+    head_count: int,
+    tail_count: int,
 ) -> List[Dict[str, Any]]:
     """Collect context messages from one selected session, oldest first.
 
-    All substantive messages when they fit in the cap; otherwise the first
-    ``cap // 2`` from the start plus the last ``cap // 2`` from the end (no
-    overlap possible: half + half <= cap < substantive).
+    Returns up to ``head_count`` messages from the start (oldest) plus up to
+    ``tail_count`` messages from the end (newest). If the session has fewer
+    substantive messages than requested, only the available ones are returned.
+    
+    No overlap is possible because we request specific counts from each end,
+    and if head+tail exceeds the total substantive count, we scale down to avoid duplication.
     """
-    if substantive <= max_messages_to_return:
-        head = _scan_substantive(session_db, prev_session_id, max_messages_to_return,
-                                 latest=False)
-        return head
+    # Get the head (oldest) messages if requested
+    if head_count > 0:
+        head = _scan_substantive(session_db, prev_session_id, head_count, latest=False)
+    else:
+        head = []
 
-    half = max_messages_to_return // 2
-    head = _scan_substantive(session_db, prev_session_id, half, latest=False)
-    # Newest-first scan: reverse so oldest-of-the-tail comes first.
-    tail = _scan_substantive(session_db, prev_session_id, half, latest=True)[::-1]
+    # Get the tail (newest) messages if requested
+    if tail_count > 0:
+        # Newest-first scan: reverse so oldest-of-the-tail comes first.
+        tail = _scan_substantive(session_db, prev_session_id, tail_count, latest=True)[::-1]
+    else:
+        tail = []
+
     return head + tail
 
 

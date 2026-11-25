@@ -1352,11 +1352,21 @@ def build_api_messages(
         try:
             from agent.session_context_loader import get_previous_session_context
             session_db = getattr(agent, '_session_db', None)
+            
+            # Read the reset context counts requested via /reset +N or /reset N+M.
+            # One-shot: reset to defaults after consumption so a later plain /reset
+            # gets the standard 0+16 instead of the previous explicit request.
+            head_count = getattr(agent, '_reset_context_head_count', 0)
+            tail_count = getattr(agent, '_reset_context_tail_count', 16)
+            agent._reset_context_head_count = 0
+            agent._reset_context_tail_count = 16
+            
             prev_ctx = get_previous_session_context(
                 session_db=session_db,
                 current_session_id=agent.session_id or '',
                 min_messages_required=10,
-                max_messages_to_return=16,
+                head_count=head_count,
+                tail_count=tail_count,
             )
             agent._previous_session_context = prev_ctx  # Cache (empty list is also valid)
         except Exception as exc:
