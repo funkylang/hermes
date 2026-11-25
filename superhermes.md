@@ -2,7 +2,7 @@
 
 Observability, control words, steering/agent-control, and memory improvements built on top of the Hermes Agent core. These features work across all interfaces: CLI, TUI, messaging platforms, and API.
 
-> **Last updated 2026-10-23.** Verify current state with `git log --oneline -1`.
+> **Last updated 2026-11-25.** Verify current state with `git log --oneline -1`.
 
 ---
 
@@ -300,3 +300,54 @@ Debug events log to `/tmp/hermes_debug.log` (configurable via `HERMES_DEBUG_LOG_
 **Temporary**: This instrumentation is TEMPORARY — it's currently enabled to help debug the steering race condition (see improve/todo.txt "STEERING CRASH RACE"). Will be removed once that issue is resolved.
 
 ---
+
+## Multi-Agent Infrastructure (2026-11-25)
+
+Tools for running multiple independent Hermes agents on a single host, each with their own user account, HERMES_HOME, and terminal session.
+
+### hermes-agents Binary
+
+Standalone tool for managing the agent roster. Installed at `/usr/local/bin/hermes-agents`; source in `tools/hermes_agents.py`.
+
+**Subcommands:**
+
+| Command | Purpose |
+|---------|---------|
+| `hermes-agents list` | Show all agents, tiers, running status, last activity (no root needed) |
+| `hermes-agents add NAME [--tier TIER]` | Create new agent from templates (requires sudo) |
+| `hermes-agents start NAME [OPTIONS]` | Launch agent's hermes in the CURRENT terminal (options pass through) |
+
+**Design:**
+- Each agent runs as its own Unix user (e.g., `cronos`, `euclid`)
+- Agents run under tier trees: prod (`/home/agents/hermes-agent`) or stable (`/home/agents/hermes-agent-stable`)
+- Launchers are thin sh wrappers at `/home/<user>/.local/bin/hermes` that set `HERMES_HOME` and exec the tier's hermes
+- `start` hands over the controlling terminal (equivalent to `sudo su - <user>` + running their launcher); on exit, your shell resumes
+- `add` creates: unix user, launcher, config.yaml from template, .bashrc from template, skills symlink, tree link — then verifies with `hermes --version`
+
+### Agent Templates
+
+Shared templates in `/home/agents/templates/`:
+
+| File | Purpose |
+|------|---------|
+| `config.yaml` | Base Hermes configuration with placeholders |
+| `.bashrc` | Shell environment (locale, PATH, aliases, history settings) |
+
+**Placeholders substituted by `hermes-agents add`:**
+- `TEMPLATE_AGENT_NAME` → agent display name (e.g., "Cronos")
+- `TEMPLATE_AGENT_USERNAME` → Unix username (e.g., "cronos")
+
+The add command uses templates when they exist, falling back to copying from an existing same-tier agent's config.yaml.
+
+### Session Startup Scripts
+
+Scripts for launching multiple agents/terminals at once:
+
+| Script | Purpose |
+|--------|---------|
+| `start-all-agents` | Create tmux session "agents" with a window per prod/stable tier agent; each window runs `hermes-agents start <user>` |
+| `start-all-projects` | Create tmux session "projects" with windows for workspace projects (funky_beta, hermes, llama.cpp) |
+
+Source: `tools/start_all_agents.py`, `tools/start_all_projects.py`. Both run `sudo -v` upfront to cache credentials once instead of prompting per window.
+
+**Idempotency:** Existing tmux sessions and windows are preserved; missing entries are added; all windows reindexed alphabetically at the end. Unrecognized windows are never destroyed. Agents already running elsewhere are skipped entirely.
