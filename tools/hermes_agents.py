@@ -4,7 +4,8 @@
 Subcommands:
   hermes-agents list   Roster of agents, tiers, run status, last activity.
   hermes-agents add    Create a new agent out-of-the-box. Requires root (sudo).
-  hermes-agents start  Launch an agent's hermes in the CURRENT terminal.
+  hermes-agents start  Launch an agent's hermes in the CURRENT terminal;
+                       arguments after NAME pass through to hermes as-is.
 
 Design and rulings: ~/workspace/hermes/concepts/agents-command.txt (Superhermes fork).
 This script is the CANONICAL implementation, installed as /usr/local/bin/hermes-agents.
@@ -376,6 +377,7 @@ def _resolve_agent(name: str) -> tuple[str | None, str]:
 
 def cmd_agents_start(args) -> int:
     name = args.name
+    options = list(getattr(args, "options", None) or [])
 
     user, why = _resolve_agent(name)
     if not user:
@@ -415,8 +417,10 @@ def cmd_agents_start(args) -> int:
             print("start: not running as root, and cannot locate the "
                   "hermes-agents binary to re-exec via sudo.", file=sys.stderr)
             return 1
-        sys.stderr.write(f"start: elevating (sudo {exe} start {name})\n")
-        os.execv("/usr/bin/sudo", ["sudo", exe, "start", name])
+        sys.stderr.write(f"start: elevating (sudo {exe} start {name}"
+                         + (" " + " ".join(options) if options else "") + ")\n")
+        os.execv("/usr/bin/sudo",
+                 ["sudo", exe, "start", name] + options)
         # execv only returns on failure.
 
     # Refuse to create a duplicate live session.
@@ -430,8 +434,13 @@ def cmd_agents_start(args) -> int:
     # Hand the controlling terminal over: exec replaces this process with the
     # agent's hermes under a login environment — equivalent to a manual
     # `sudo su - <user>` followed by running the agent's launcher.
-    os.execv("/usr/bin/su",
-             ["su", "-", "-c", shlex.quote(str(launcher)), user])
+    # The launcher path is shell-safe; each option is shlex-quoted individually
+    # (NEVER quote the assembled command string — that makes it one literal
+    # word). Launchers exec their tier hermes with "$@".
+    cmd = str(launcher)
+    if options:
+        cmd += " " + " ".join(shlex.quote(o) for o in options)
+    os.execv("/usr/bin/su", ["su", "-", "-c", cmd, user])
     return 1  # unreachable; execv replaces the process
 
 
@@ -621,11 +630,12 @@ def main(argv=None) -> int:
       seeded config.yaml with the name field set, shared skills symlink —
       then verifies by running `hermes --version` as the new user.
 
-  start NAME
+  start NAME [OPTIONS...]
       Launch an agent's hermes in the CURRENT terminal. Typed from your SSH
       session, that terminal becomes the agent's interactive hermes session;
       when hermes exits, your own shell resumes. Accepts the OS username or
-      the configured display name. Refuses to start a second live session
+      the configured display name. Everything after NAME is passed through
+      to hermes as-is (e.g. --debug). Refuses to start a second live session
       for an agent already running. Escalates via sudo if needed (the
       password prompt appears in this terminal).
 
@@ -680,6 +690,9 @@ notes:
                     "(sudo self-escalates; password prompt here). Refuses to "
                     "duplicate a session that is already running.")
     p_start.add_argument("name", help="Agent username or configured display name")
+    p_start.add_argument(
+        "options", nargs=argparse.REMAINDER, default=[],
+        help="Passed through to hermes as-is (e.g. --debug)")
     p_start.set_defaults(func=cmd_agents_start)
 
     args = parser.parse_args(argv)
