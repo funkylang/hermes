@@ -616,8 +616,8 @@ def _guidance_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
     out: List[Tuple[str, str]] = []
     if agent.valid_tool_names:
         for flag, text, label in (
-            ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE, "task completion guidance"),
-            ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE, "parallel tool call guidance"),
+            ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE, "/home/agents/prompts/behavior/task_completion.md"),
+            ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE, "/home/agents/prompts/behavior/parallel_tool_call.md"),
         ):
             if getattr(agent, flag, True):
                 out.append((text, label))
@@ -626,18 +626,18 @@ def _guidance_blocks(agent: Any) -> List[Tuple[Optional[str], str]]:
     if not agent.valid_tool_names:
         return out
     # Steering only lands inside tool results, so only reachable with tools.
-    out.append((STEER_CHANNEL_NOTE, "steering channel note"))
+    out.append((STEER_CHANNEL_NOTE, "behavior/steering_channel.md"))
     # agent.tool_use_enforcement / agent.execution_guidance: "auto" (default)
     # matches the hardcoded model lists; true/false force; a list gives custom
     # model-name substrings.  Execution guidance is an independent gate so
     # DeepSeek/Kimi/Qwen-class models get it even with enforcement off.
     if _model_gate(agent._tool_use_enforcement, agent.model, TOOL_USE_ENFORCEMENT_MODELS):
-        out.append((TOOL_USE_ENFORCEMENT_GUIDANCE, "tool-use enforcement guidance"))
+        out.append((TOOL_USE_ENFORCEMENT_GUIDANCE, "/home/agents/prompts/behavior/tool_use_enforcement.md"))
         if any(g in (agent.model or "").lower() for g in ("gemini", "gemma")):
             out.append((GOOGLE_MODEL_OPERATIONAL_GUIDANCE, "google model operational guidance"))
     if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
-        out.append((execution_guidance_text(agent.valid_tool_names), "execution discipline guidance"))
+        out.append((execution_guidance_text(agent.valid_tool_names), "behavior/execution_discipline.md"))
     # delegate_task background delivery is intentionally between turns. Put this after the generic persistence
     # blocks so their "keep working" rule cannot turn the required yield into no-op/polling activity.
     if "delegate_task" in agent.valid_tool_names:
@@ -886,14 +886,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         _home = _agent_home(agent) or get_hermes_home()
         _identity_label = display_path(str(_home / "SOUL.md"))
     else:
-        _identity_label = "default identity"
+        _identity_label = "/home/agents/prompts/identity/default_identity.md"
 
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
     _help_guidance_slot = len(stable_parts)
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS)
-    stable_sources.append("hermes-agent help guidance")
+    stable_sources.append("/home/agents/prompts/identity/help_guidance_with_skills.md")
     # Guidance blocks: one code path supplies texts and labels in lockstep.
     for text, label in _guidance_blocks(agent):
         stable_parts.append(text)

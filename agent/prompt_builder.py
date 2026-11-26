@@ -19,6 +19,7 @@ from hermes_constants import (
     get_hermes_home, get_scratch_dir, get_skills_dir, is_wsl, reset_hermes_home_override, set_hermes_home_override,
 )
 from agent.model_metadata import CHARS_PER_TOKEN
+from agent.prompt_files import get_identity_prompt, get_behavior_prompt
 from agent.prompt_manifest import utf8_bytes
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
@@ -157,7 +158,9 @@ def _strip_yaml_frontmatter(content: str) -> str:
     return (content[end + 4:].lstrip("\n") or content) if end != -1 else content
 
 
-DEFAULT_AGENT_IDENTITY = (
+# Default agent identity - loaded from /home/agents/prompts/identity/default_identity.md
+# Falls back to hardcoded version if file doesn't exist
+DEFAULT_AGENT_IDENTITY_FALLBACK = (
     # A behavior spec (sizing rule, named prohibitions, earned-depth escape hatch), not a trait list — trait
     # lists change nothing. Maintainer rule: models UNDER-explore by default; never re-add an exploration-thrift line.
     "You are Hermes Agent, built by Nous Research. Be direct: match the length of your reply to the weight of the ask "
@@ -167,8 +170,10 @@ DEFAULT_AGENT_IDENTITY = (
     "Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said "
     "it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default."
 )
+DEFAULT_AGENT_IDENTITY = get_identity_prompt("default_identity", DEFAULT_AGENT_IDENTITY_FALLBACK)
 
-HERMES_AGENT_HELP_GUIDANCE = (
+# Help guidance with skills - loaded from /home/agents/prompts/identity/help_guidance_with_skills.md
+HERMES_AGENT_HELP_GUIDANCE_WITH_SKILLS_FALLBACK = (
     # Injected only when skill_view exists AND the hermes-agent skill is installed (system_prompt.py slot
     # resolution). No "when the two differ" clause: docs-are-authoritative already carries the precedence.
     "You run on Hermes Agent (by Nous Research). When the user needs help with Hermes itself — configuring, "
@@ -178,15 +183,17 @@ HERMES_AGENT_HELP_GUIDANCE = (
     "skill has the actual commands and proven workflows — load it with skill_view(name='hermes-agent') "
     "before configuring, modifying, or troubleshooting Hermes so you don't guess or invent workarounds."
 )
+HERMES_AGENT_HELP_GUIDANCE = get_identity_prompt("help_guidance_with_skills", HERMES_AGENT_HELP_GUIDANCE_WITH_SKILLS_FALLBACK)
 
-# Variant for sessions without the skills toolset (e.g. Blank Slate): naming skill_view() there would dangle.
-HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS = (
+# Help guidance without skills - loaded from /home/agents/prompts/identity/help_guidance_without_skills.md
+HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS_FALLBACK = (
     "You run on Hermes Agent (by Nous Research). When the user needs help with Hermes itself — configuring, "
     "setting up, using, extending, or troubleshooting it — or when you need to understand your own features, "
     "tools, or capabilities, the documentation at https://hermes-agent.nousresearch.com/docs is the "
     "authoritative reference and always holds the latest, most up-to-date information. Point the user there "
     "(or read it yourself if you have a way to fetch web content)."
 )
+HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS = get_identity_prompt("help_guidance_without_skills", HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS_FALLBACK)
 
 
 # Keep the every-session memory scope even when task knowledge cannot be saved as a skill.
@@ -345,7 +352,7 @@ KANBAN_GUIDANCE = (
     "own run; board tasks are for cross-agent handoffs that outlive one API loop."
 )
 
-TOOL_USE_ENFORCEMENT_GUIDANCE = (
+TOOL_USE_ENFORCEMENT_GUIDANCE = get_behavior_prompt("tool_use_enforcement", 
     "# Tool-use enforcement\n"
     "You MUST use your tools to take action — do not describe what you would do or plan to do without actually doing "
     "it. When you say you will perform an action (e.g. 'I will run the tests', 'Let me check the file', 'I will create "
@@ -380,7 +387,7 @@ EXECUTION_GUIDANCE_MODELS = (
 
 # Universal "finish the job" guidance (ALL models): don't stop after a stub, never
 # fabricate output when the real path is blocked. Ships in every cached prompt — keep tight.
-TASK_COMPLETION_GUIDANCE = (
+TASK_COMPLETION_GUIDANCE = get_behavior_prompt("task_completion", 
     "# Finishing the job\n"
     "When the user asks you to build, run, or verify something, the deliverable is a working artifact backed by real "
     "tool output — not a description of one. Do not stop after writing a stub, a plan, or a single command. Keep "
@@ -417,7 +424,7 @@ ASYNC_HANDOFF_GUIDANCE = (
 # is paid once at install and amortised across all sessions via prefix caching. Keep it tight. Ported from
 # cline/cline#11514 ("encourage parallel tool calls"), adapted from Cline's TypeScript tool-surface guidance
 # to hermes-agent's Python prompt-assembly architecture.
-PARALLEL_TOOL_CALL_GUIDANCE = (
+PARALLEL_TOOL_CALL_GUIDANCE = get_behavior_prompt("parallel_tool_call", 
     "# Parallel tool calls\n"
     "When you need several pieces of information that don't depend on each other, request them together in a "
     "single response instead of one tool call per turn. Independent reads, searches, web fetches, and "
@@ -439,7 +446,7 @@ PARALLEL_TOOL_CALL_GUIDANCE = (
 # DeepSeek/Kimi doing financial math in prose, skipping read-back verification after external writes,
 # "repairing" malformed identifiers, and claiming completeness despite count mismatches — exactly the
 # failure modes this block targets.
-OPENAI_MODEL_EXECUTION_GUIDANCE = (
+OPENAI_MODEL_EXECUTION_GUIDANCE_FALLBACK = (
     "# Execution discipline\n"
     "<tool_persistence>\n"
     "- Use tools whenever they improve correctness, completeness, or grounding.\n"
@@ -504,6 +511,8 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "- If you must proceed with incomplete information, label assumptions explicitly.\n"
     "</missing_context>"
 )
+
+OPENAI_MODEL_EXECUTION_GUIDANCE = get_behavior_prompt("execution_discipline", OPENAI_MODEL_EXECUTION_GUIDANCE_FALLBACK)
 
 
 # Each <mandatory_tool_use>/<act_dont_ask> line above named against the tool(s) it tells the model to reach

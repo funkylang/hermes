@@ -168,6 +168,35 @@ def _relative_age(seconds: float) -> str:
     return time.strftime(_LIKE_TIME_FORMAT, time.localtime(time.time() - seconds))
 
 
+
+def _escalate_sudo(command_args):
+    """Re-exec via sudo if not root. Sets confirmation flag to prevent re-prompt."""
+    try:
+        euid = os.geteuid()
+    except AttributeError:
+        print("Cannot verify privileges.", file=sys.stderr)
+        return False
+    
+    if euid == 0:
+        return True
+    
+    exe = None
+    for candidate in (os.path.realpath(sys.argv[0]), "/usr/local/bin/hermes-agents"):
+        if candidate and os.path.exists(candidate):
+            exe = candidate
+            break
+    
+    if exe is None:
+        print("Cannot locate hermes-agents binary.", file=sys.stderr)
+        return False
+    
+    sys.stderr.write(f"elevating (sudo {exe} {' '.join(command_args)})\n")
+    env = os.environ.copy()
+    env["HERMES_AGENTS_CONFIRMED"] = "1"
+    os.execve("/usr/bin/sudo", ["sudo", exe] + command_args, env)
+    return False
+
+
 def cmd_agents_list(_args=None) -> int:
     home_root = Path("/home")
     if not home_root.is_dir():
@@ -343,12 +372,14 @@ def _resolve_agent(name: str) -> tuple[str | None, str]:
     import pwd
 
     # Fast path: direct username with an existing launcher.
-    if Path(f"/home/{name}/.local/bin/hermes").exists():
-        try:
-            pwd.getpwnam(name)
-            return (name, "")
-        except KeyError:
-            pass
+    # Try both the given name and lowercase (useradd creates lowercase dirs).
+    for candidate in (name, name.lower()):
+        if Path(f"/home/{candidate}/.local/bin/hermes").exists():
+            try:
+                pwd.getpwnam(candidate)
+                return (candidate, "")
+            except KeyError:
+                pass
 
     # Slow path: display-name match through each agent's config.yaml.
     want = name.strip().lower()
@@ -357,9 +388,9 @@ def _resolve_agent(name: str) -> tuple[str | None, str]:
         return (None, "no /home on this host")
     for entry in sorted(home_root.iterdir()):
         cfg = entry / ".hermes" / "config.yaml"
-        if not cfg.exists():
-            continue
         try:
+            if not cfg.exists():
+                continue
             text = cfg.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
@@ -436,30 +467,30 @@ def cmd_agents_start(args) -> int:
 
 
 def cmd_agents_add(args) -> int:
-    name = args.name
-    tier = args.tier
+    # Accept mixed case - normalize to lowercase for username
+    username = args.name.lower()
+    display_name = args.name  # Preserve original casing for config.yaml
 
-    if not _NAME_RE.match(name):
-        print(f"Invalid agent name '{name}' — use lowercase letters, digits, "
+    if not _NAME_RE.match(username):
+        print(f"Invalid agent name '{username}' — use lowercase letters, digits, "
               f"hyphens; must start with a letter.", file=sys.stderr)
         return 1
 
-    try:
-        if os.geteuid() != 0:
-            print("hermes-agents add requires root: run `sudo hermes-agents add "
-                  + name + "`.", file=sys.stderr)
-            return 1
-    except AttributeError:
-        print("Cannot verify privileges on this platform; refusing to continue.",
-              file=sys.stderr)
+    name = username
+
+    # Pass args.name (original case) so the agent's display name survives the
+    # sudo round-trip; the second run re-derives the lowercase username itself.
+    if not _escalate_sudo(["add", args.name, "--tier", args.tier]):
+        # execv will not return on success; we failed to escalate
+        print("hermes-agents add requires root privileges.", file=sys.stderr)
         return 1
 
-    tree = _TIER_PATHS[tier]
+    tree = _TIER_PATHS[args.tier]
     if not Path(tree, "hermes").exists():
-        print(f"Tier '{tier}' not found on this host: {tree}", file=sys.stderr)
+        print(f"Tier '{args.tier}' not found on this host: {tree}", file=sys.stderr)
         return 1
 
-    display_name = name.capitalize()
+    # display_name already set from args.name above - preserve original casing
     actions = []
 
     # 1. Unix user (idempotent). Intentionally NOT a sudoer — agents need root
@@ -489,7 +520,7 @@ def cmd_agents_add(args) -> int:
             actions.append("launcher already correct — kept")
         else:
             launcher.write_text(content, encoding="utf-8")
-            actions.append(f"launcher updated (tier: {tier})")
+            actions.append(f"launcher updated (tier: {args.tier})")
     else:
         launcher_dir.mkdir(parents=True, exist_ok=True)
         launcher.write_text(content, encoding="utf-8")
@@ -521,7 +552,7 @@ def cmd_agents_add(args) -> int:
                 return 1
         else:
             # Fall back to copying from existing agent
-            src = _resolve_template(name, tier, args.from_agent)
+            src = _resolve_template(name, args.tier, args.from_agent)
             if src is None:
                 print(f"No usable config.yaml found (no template and no agent source). "
                       f"Pass --from <agent> explicitly or create /home/agents/templates/config.yaml.", 
@@ -535,6 +566,30 @@ def cmd_agents_add(args) -> int:
             _set_config_name(config_path, display_name)
             actions.append(f"config.yaml created from '{src[0]}' "
                            f"(name: {display_name})")
+
+    # 3.5 SOUL.md (agent identity) - REQUIRED for correct agent name/identity.
+    soul_path = hermes_home / "SOUL.md"
+    if soul_path.exists():
+        actions.append("SOUL.md already exists — kept")
+    else:
+        template_dir = Path("/home/agents/templates")
+        template_soul = template_dir / "SOUL.md"
+        if template_soul.exists():
+            try:
+                soul_text = template_soul.read_text(encoding="utf-8")
+                # Substitute placeholders with agent's identity
+                soul_text = soul_text.replace("TEMPLATE_AGENT_NAME", display_name)
+                soul_text = soul_text.replace("TEMPLATE_AGENT_USERNAME", name)
+                soul_path.write_text(soul_text, encoding="utf-8")
+                actions.append(f"SOUL.md created from template (identity: {display_name})")
+            except OSError as exc:
+                print(f"Failed to read SOUL.md template or write file: {exc}", file=sys.stderr)
+                return 1
+        else:
+            # No template - use a minimal default identity
+            soul_text = f"You are {display_name} Superhermes.\n\nYour username is {name}. You are part of the Superhermes family of agents.\n"
+            soul_path.write_text(soul_text, encoding="utf-8")
+            actions.append(f"SOUL.md created with default identity ({display_name})")
 
     # 4. Shared skills symlink (skip over a pre-existing dir, e.g. legacy copies).
     skills_link = hermes_home / "skills"
@@ -566,11 +621,24 @@ def cmd_agents_add(args) -> int:
             except OSError as exc:
                 print(f"Warning: Failed to create .bashrc: {exc}", file=sys.stderr)
 
-    print(f"Agent '{name}' ({tier} tier):")
+    # 6. Fix ownership: ensure all created files belong to the agent (not root)
+    # The agent needs write access to .hermes and launcher dirs
+    for path in [launcher_dir, hermes_home]:
+        if path.exists():
+            proc = subprocess.run(
+                ["chown", "-R", f"{name}:agents", str(path)],
+                capture_output=True, text=True
+            )
+            if proc.returncode != 0:
+                print(f"Warning: Could not chown {path}: {proc.stderr.strip()}", 
+                      file=sys.stderr)
+
+    # 7. Print summary
+    print(f"Agent '{name}' ({args.tier} tier):")
     for a in actions:
         print(f"  - {a}")
-
-    # 6. Verification: run their launcher as them.
+    
+    # 8. Verification: run their launcher as them.
     ok, detail = _verify_agent(name)
     if ok:
         print(f"  VERIFIED out-of-the-box: hermes --version → {detail}")
@@ -622,6 +690,96 @@ def _resolve_template(skip_name: str, tier: str, explicit: str | None):
     for cand in candidates:  # already alphabetical; first on the tier wins
         return (cand[0], cand[2])
     return None
+
+def cmd_agents_delete(args) -> int:
+    """Delete an agent and all associated files."""
+    # Accept mixed case - normalize to lowercase for username (same as add)
+    name = args.name.lower()
+
+    if not _NAME_RE.match(name):
+        print(f"Invalid agent name '{name}' — use lowercase letters, digits, "
+              f"hyphens; must start with a letter.", file=sys.stderr)
+        return 1
+
+    # Confirm deletion - user must type "yes" (skip if already confirmed via escalation or running as root)
+    # When we escalate to sudo and come back as root, skip the prompt - user already confirmed
+    try:
+        is_root = os.geteuid() == 0
+    except AttributeError:
+        is_root = False
+    
+    # Check if user exists FIRST (before asking for confirmation)
+    import pwd
+    user_exists = True
+    try:
+        pwd.getpwnam(name)
+    except KeyError:
+        user_exists = False
+        print(f"User '{name}' does not exist, nothing to delete.")
+        return 0
+    
+    if not is_root:
+        print(f"You are about to delete agent '{name}'.")
+        print("This will remove:")
+        print(f"  - The user account '{name}'")
+        print(f"  - Their home directory /home/{name}")
+        print()
+        answer = input("Type 'yes' to confirm: ")
+        if answer.strip() != "yes":
+            print("Deletion cancelled.")
+            return 0
+    
+    # Now escalate and continue as root (if not already root)
+    if not _escalate_sudo(["delete", name]):
+        # execv will not return on success; we failed to escalate
+        print("hermes-agents delete requires root privileges.", file=sys.stderr)
+        return 1
+
+    # Kill any running processes owned by this user
+    try:
+        subprocess.run(["pkill", "-u", name], capture_output=True)
+        print(f"Killed any running processes for '{name}'.")
+    except FileNotFoundError:
+        pass
+
+    # Remove the user account and home directory
+    proc = subprocess.run(
+        ["userdel", "-r", name],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        print(f"userdel failed: {proc.stderr.strip()}", file=sys.stderr)
+        # Try without removing home directory
+        proc2 = subprocess.run(
+            ["userdel", name],
+            capture_output=True, text=True,
+        )
+        if proc2.returncode != 0:
+            print(f"userdel failed: {proc2.stderr.strip()}", file=sys.stderr)
+            return 1
+
+    # Clean up any remaining launcher files
+    launcher = Path(f"/home/{name}/.local/bin/hermes")
+    if launcher.exists():
+        try:
+            launcher.unlink()
+            print(f"Removed launcher at {launcher}")
+        except OSError:
+            pass
+
+    # Clean up any remaining home directory contents
+    home_dir = Path(f"/home/{name}")
+    if home_dir.exists():
+        import shutil
+        try:
+            shutil.rmtree(home_dir)
+            print(f"Removed home directory {home_dir}")
+        except OSError as exc:
+            print(f"Warning: could not fully remove {home_dir}: {exc}", file=sys.stderr)
+
+    print(f"Agent '{name}' deleted successfully.")
+    return 0
+
 
 
 def main(argv=None) -> int:
@@ -679,13 +837,24 @@ examples:
       Bring 'cronus's hermes up in this terminal — one command instead of
       `sudo su - cronus` plus running its launcher by hand.
 
+  delete NAME
+      Remove an agent and all their associated files (user account, home directory).
+      Requires root (sudo). Prompts for confirmation before proceeding.
+        NAME                 agent name to delete (lowercase: letters, digits, hyphens)
+
+examples:
+
+  sudo hermes-agents delete fortuna
+      Permanently remove agent 'fortuna' and all their files.
+
 notes:
 
   - 'running' means the agent has an active hermes process — not merely a
     login session on this machine.
+  - 'delete' is destructive: it removes the user account AND home directory.
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = parser.add_subparsers(dest="action", metavar="{list,add,start}")
+    sub = parser.add_subparsers(dest="action", metavar="{list,add,delete,start}")
 
     p_list = sub.add_parser(
         "list", help="List agents, tiers, run status, last activity (no privileges needed)",
@@ -707,6 +876,13 @@ notes:
         help="Template agent whose config.yaml to copy "
              "(default: first agent on the target tier)")
     p_add.set_defaults(func=cmd_agents_add)
+
+    p_delete = sub.add_parser(
+        "delete", help="Remove an agent and their files (requires root)",
+        description="Permanently delete an agent: removes their user account, home directory, "
+                    "and all associated files. Prompts for confirmation before proceeding.")
+    p_delete.add_argument("name", help="Agent username to delete (lowercase: letters, digits, hyphens)")
+    p_delete.set_defaults(func=cmd_agents_delete)
 
     p_start = sub.add_parser(
         "start", help="Launch an agent's hermes in the current terminal",
