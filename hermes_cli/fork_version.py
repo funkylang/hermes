@@ -6,4 +6,4 @@
 # printed in the startup banner and `hermes --version` so a deployed tree — which has
 # no .git, being content-based — can identify the exact build it runs.
 
-FORK_VERSION = "2026-11-25 21:03:44 Fix /reset +N None-strip crash, one-shot counts"
+FORK_VERSION = "2026-11-26 19:02:00 Per-agent prompt_cache_key for llama-server routing"

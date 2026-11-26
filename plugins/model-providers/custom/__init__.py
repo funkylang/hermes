@@ -1,6 +1,9 @@
 """Custom / Ollama (local) provider profile: any endpoint registered as
 provider="custom" (Ollama, vLLM, llama.cpp, GLM-5.2 on ARK, …)."""
 
+import hashlib
+import logging
+import os
 from typing import Any
 from urllib.parse import urlparse
 
@@ -8,6 +11,46 @@ from agent.reasoning_effort import OPENAI_COMPAT_WIRE_EFFORTS, clamp_effort
 from providers import register_provider
 from providers.base import ProviderProfile
 from utils import base_url_host_matches
+
+logger = logging.getLogger(__name__)
+
+
+def _agent_identity_cache_key() -> str | None:
+    """Stable per-agent identity key for llama-server prompt-cache routing.
+
+    Sent as ``prompt_cache_key`` so a forked llama-server can tell which logical
+    agent a prompt belongs to even when agents share long system prefixes, and can
+    detect client resets (same key + rebuilt short prompt = replacement). Opt-in:
+    ``model.prompt_cache_key: agent-identity`` in config.yaml — unknown top-level
+    body fields 400 on strict OpenAI-compatible endpoints, so off by default.
+
+    Key format: ``ag_<16 hex>`` = "ag_" + sha256(material)[:16], where material is
+    "agent-name:<name>" for a named profile (survives home migrations) and
+    "home:<abspath>" otherwise. Constant per agent for its lifetime — it must not
+    rotate with /new or compression (that is what this key replaces).
+    """
+    try:
+        from hermes_cli.config import load_config_readonly  # lazy: providers/ must not import hermes_cli at module load
+
+        config = load_config_readonly()
+        mode = str((config.get("model") or {}).get("prompt_cache_key") or "").strip().lower()
+    except Exception:
+        logger.debug("agent-identity prompt-cache key resolution failed", exc_info=True)
+        return None
+    if mode != "agent-identity":
+        return None
+    name = ""
+    agent_cfg = config.get("agent")
+    if isinstance(agent_cfg, dict) and isinstance(agent_cfg.get("name"), str):
+        name = agent_cfg["name"].strip()
+    if not name and isinstance(config.get("name"), str):
+        name = config["name"].strip()  # legacy top-level field, same transition as get_agent_name()
+    if name:
+        material = f"agent-name:{name}"
+    else:
+        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        material = f"home:{os.path.abspath(home)}"
+    return "ag_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def _looks_like_ollama_endpoint(base_url: str | None) -> bool:
@@ -60,6 +103,13 @@ class CustomProfile(ProviderProfile):
         top_level: dict[str, Any] = {}
         if ollama_num_ctx:
             extra_body["options"] = {"num_ctx": ollama_num_ctx}
+        # llama-server fork: stable per-agent identity key for prompt-cache slot
+        # routing (reset detection + shared-prefix disambiguation). Caller-supplied
+        # keys are authoritative in the transport, so this wins over the generic
+        # content-addressed derivation. Opt-in only — see _agent_identity_cache_key.
+        cache_key = _agent_identity_cache_key()
+        if cache_key:
+            extra_body["prompt_cache_key"] = cache_key
         # disabled -> top-level reasoning_effort="none" (Ollama's /v1 ignores
         # extra_body.think) plus think=False only on Ollama URLs; enabled+effort ->
         # top-level reasoning_effort clamped to the OpenAI-compat wire (GLM/ARK,
