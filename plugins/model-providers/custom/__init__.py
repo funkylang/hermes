@@ -94,7 +94,11 @@ class CustomProfile(ProviderProfile):
         # (reset detection + shared-prefix disambiguation). Caller-supplied keys are
         # authoritative in the transport, so this wins over the generic content-addressed
         # derivation. Opt-in only — see _prompt_cache_key.
-        cache_key = _prompt_cache_key()
+        # NEVER on auxiliary requests: they are short one-shots with different system
+        # prompts; carrying the key would read as "same agent + dramatically shorter
+        # prompt" = client reset to the fork's server-side routing, and aux traffic is
+        # deliberately kept out of the agent's cached state.
+        cache_key = _prompt_cache_key() if not ctx.get("is_auxiliary") else None
         if cache_key:
             extra_body["prompt_cache_key"] = cache_key
         # disabled -> top-level reasoning_effort="none" (Ollama's /v1 ignores

@@ -6668,7 +6668,7 @@ def _project_provider_profile(
             body = profile.build_extra_body(model=model, base_url=effective_base, reasoning_config=reasoning_config) or {}
             reasoning_extra, top_level = profile.build_api_kwargs_extras(
                 reasoning_config=reasoning_config, supports_reasoning=reasoning_config is not None,
-                model=model, base_url=effective_base,
+                model=model, base_url=effective_base, is_auxiliary=True,
             )
             reasoning_extra = reasoning_extra or {}
             top_level = top_level or {}
