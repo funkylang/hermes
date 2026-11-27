@@ -24,6 +24,9 @@ def _parse_reset_context_counts(raw: str) -> tuple[int, int, str]:
     Syntax: ``+<tail>``, ``<head>+<tail>``, ``<N>`` (bare = tail), or no counts
     (default 0+16). Returns (head_count, tail_count, remaining_text).
 
+    Maximum reasonable count is 10,000 messages (prevents accidental huge numbers
+    from crashing session startup); counts above this are treated as title text.
+
     Examples:
         "/reset" → (0, 16, "")
         "/reset +3" → (0, 3, "")
@@ -32,6 +35,8 @@ def _parse_reset_context_counts(raw: str) -> tuple[int, int, str]:
         "/reset 5" → (0, 5, "")  # bare number = tail (design doc Q1)
         "/reset my-topic" → (0, 16, "my-topic")  # no counts, keeps title
     """
+    MAX_COUNT = 10_000  # safety limit for context injection
+    
     text = raw.strip()
     if not text:
         return 0, 16, ""  # default
@@ -42,17 +47,29 @@ def _parse_reset_context_counts(raw: str) -> tuple[int, int, str]:
     match = re.match(r'^(\d+)?\+(\d+)(?:\s+(.*))?$', text)
     if match:
         head_str, tail_str, remaining = match.groups()
-        head_count = int(head_str) if head_str else 0
-        tail_count = int(tail_str)
-        return head_count, tail_count, (remaining or "").strip()
-
+        try:
+            head_count = int(head_str) if head_str else 0
+            tail_count = int(tail_str)
+            # Reject unreasonably large counts
+            if head_count > MAX_COUNT or tail_count > MAX_COUNT:
+                return 0, 16, text  # treat as title instead
+            return head_count, tail_count, (remaining or "").strip()
+        except ValueError:
+            return 0, 16, text  # shouldn't happen with regex, but safe fallback
+    
     # Bare number (no +) — treat as tail only (design doc Q1).
     if re.match(r'^\d+$', text):
-        return 0, int(text), ""
+        try:
+            count = int(text)
+            # Reject unreasonably large counts
+            if count > MAX_COUNT:
+                return 0, 16, text  # treat as title instead
+            return 0, count, ""
+        except ValueError:
+            pass  # fallback to treating as title
 
     # No count syntax found — use defaults and keep entire text as title.
     return 0, 16, text
-
 
 def _preview(payload: str) -> str:
     return f"{payload[:80]}{'...' if len(payload) > 80 else ''}"
