@@ -328,6 +328,62 @@ def _set_config_name(config_path: Path, display_name: str) -> bool:
     return True
 
 
+def _ensure_prompt_cache_key(config_path: Path) -> str | None:
+    """Give a freshly created agent its own ``model.prompt_cache_key``.
+
+    The forked llama-server routes prompt-cache slots per agent on this field:
+    keyed slot selection between agents sharing long system prefixes, reset
+    detection (same key + rebuilt short prompt = replacement), and eviction
+    protection of active agents' KV state. The value is a random UUID v4 —
+    unique across agents on every machine (name- or home-derived hashes would
+    collide for same-named agents or cloned VMs) and stable for the agent's
+    lifetime as long as this config persists.
+
+    Called ONLY when add() creates the config; on the copy-from-agent path it
+    replaces the template source's key so the new agent never inherits another
+    agent's identity. Existing configs are kept untouched (idempotency).
+    Returns the written UUID, or None if the value could not be set.
+    """
+    import uuid as _uuid
+
+    key = str(_uuid.uuid4())
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"Warning: cannot set prompt_cache_key in {config_path}: {exc}", file=sys.stderr)
+        return None
+
+    lines = text.splitlines(keepends=True)
+
+    # Replace an existing key line (the copied source agent's, or a placeholder).
+    for i, line in enumerate(lines):
+        if re.match(r"^\s+prompt_cache_key:", line):
+            indent = line[:len(line) - len(line.lstrip())]
+            lines[i] = f"{indent}prompt_cache_key: {key}\n"
+            break
+    else:  # No key line: append inside the model: block (or create it).
+        model_idx = next((i for i, l in enumerate(lines) if l.rstrip() == "model:"), None)
+        if model_idx is not None:
+            j = model_idx + 1
+            while j < len(lines):
+                if not lines[j].startswith("  ") and lines[j].strip():
+                    break  # left the model block
+                j += 1
+            lines.insert(j, f"  prompt_cache_key: {key}\n")
+        else:
+            if text and not text.endswith("\n"):
+                lines.append("\n")
+            lines.append("model:\n")
+            lines.append(f"  prompt_cache_key: {key}\n")
+
+    try:
+        config_path.write_text("".join(lines), encoding="utf-8")
+    except OSError as exc:
+        print(f"Warning: cannot write prompt_cache_key to {config_path}: {exc}", file=sys.stderr)
+        return None
+    return key
+
+
 def _verify_agent(name: str) -> tuple[bool, str]:
     """Run `hermes --version` as the new user via their launcher. (ok, detail)."""
     import pwd
@@ -566,6 +622,13 @@ def cmd_agents_add(args) -> int:
             _set_config_name(config_path, display_name)
             actions.append(f"config.yaml created from '{src[0]}' "
                            f"(name: {display_name})")
+
+        # 3.2 Per-agent prompt-cache key (UUID v4): the fork llama-server routes
+        #     prompt-cache slots on it — a fresh agent must never inherit the
+        #     template source's identity, if any.
+        key = _ensure_prompt_cache_key(config_path)
+        if key:
+            actions.append(f"prompt_cache_key generated (UUID: {key})")
 
     # 3.5 SOUL.md (agent identity) - REQUIRED for correct agent name/identity.
     soul_path = hermes_home / "SOUL.md"
@@ -810,8 +873,9 @@ def main(argv=None) -> int:
                              starting point; default: first agent (alphabetical)
                              on the target tier.
       Creates: user in group 'agents' (intentionally NOT a sudoer), launcher,
-      seeded config.yaml with the name field set, shared skills symlink —
-      then verifies by running `hermes --version` as the new user.
+      seeded config.yaml with the name field set and a unique per-agent
+      prompt_cache_key UUID (llama-server prompt-cache slot routing), shared
+      skills symlink — then verifies by running `hermes --version` as the new user.
 
   start NAME
       Launch an agent's hermes in the CURRENT terminal. Typed from your SSH
