@@ -36,6 +36,8 @@ _TIER_PATHS = {
     "testing": "/home/agents/hermes-agent-testing",
 }
 _SHARED_SKILLS = Path("/home/agents/skills")
+_SHARED_WORKSPACE = Path("/home/agents/workspace")
+_SHARED_SCRIPTS = Path("/home/agents/scripts")
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
