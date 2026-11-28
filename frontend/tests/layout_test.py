@@ -119,6 +119,8 @@ def main():
             term.scroll_down(1)
             draw_input_area(term, height, width)  # redraw input area after scroll
 
+    # Clean up terminal state before exiting (remove scroll regions, reset colours)
+    term.cleanup()
     print("\nDone.", file=sys.stderr)
 
 
