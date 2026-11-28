@@ -160,17 +160,6 @@ def _tier_label(tree: str) -> str:
     return "(dev)"
 
 
-def _relative_age(seconds: float) -> str:
-    if seconds < 60:
-        return "just now"
-    if seconds < 3600:
-        return f"{int(seconds // 60)}m ago"
-    if seconds < 86400:
-        return f"{int(seconds // 3600)}h ago"
-    return time.strftime(_LIKE_TIME_FORMAT, time.localtime(time.time() - seconds))
-
-
-
 def _escalate_sudo(command_args):
     """Re-exec via sudo if not root. Sets confirmation flag to prevent re-prompt."""
     try:
@@ -230,7 +219,6 @@ def cmd_agents_list(_args=None) -> int:
 
     # 3. Run status per agent (active hermes process, attributed per PID).
     running = _running_agents()
-    now = time.time()
 
     # 4. Print roster.
     try:
@@ -254,7 +242,7 @@ def cmd_agents_list(_args=None) -> int:
             if meta["home"]:
                 db = Path(meta["home"]) / "state.db"
                 try:
-                    age = _relative_age(now - db.stat().st_mtime)
+                    age = time.strftime(_LIKE_TIME_FORMAT, time.localtime(db.stat().st_mtime))
                 except PermissionError:
                     age = "-"
                     unreadable_homes.append(name)
@@ -262,7 +250,12 @@ def cmd_agents_list(_args=None) -> int:
                     age = "-"
             else:
                 age = "-"
-            print(f"  {name:<{name_w}}  {label:<{tier_w}}  {status:<8}  {age}")
+            key = (
+                _read_prompt_cache_key(Path(meta["home"]) / "config.yaml")
+                if meta["home"] else None
+            )
+            print(f"  {name:<{name_w}}  {label:<{tier_w}}  {status:<8}  "
+                  f"{age:<16}  {key or '-':<36}")
 
     if unreadable:
         print(f"\n  Unreadable launchers (run as root): {', '.join(unreadable)}")
@@ -384,6 +377,30 @@ def _ensure_prompt_cache_key(config_path: Path) -> str | None:
         print(f"Warning: cannot write prompt_cache_key to {config_path}: {exc}", file=sys.stderr)
         return None
     return key
+
+
+def _read_prompt_cache_key(config_path: Path) -> str | None:
+    """Return the agent's ``model.prompt_cache_key`` (its prompt-cache UUID).
+
+    Line-scanned to match the placement written by _ensure_prompt_cache_key —
+    no yaml dependency. Returns None when the file is unreadable or has no key.
+    """
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    in_model = False
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not line[:1].isspace():
+            in_model = line.rstrip() == "model:"
+            continue
+        if in_model:
+            m = re.match(r"^\s+prompt_cache_key:\s*(\S+)\s*$", line)
+            if m:
+                return m.group(1)
+    return None
 
 
 def _verify_agent(name: str) -> tuple[bool, str]:
